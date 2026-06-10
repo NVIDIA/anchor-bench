@@ -1,0 +1,49 @@
+services:
+  anchor-bench:
+    image: ${ANCHOR_BENCH_IMAGE:-anchor-bench:kitless}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: ${ANCHOR_BENCH_DOCKER_TARGET:-kitless}
+      args:
+        PYTHON_VERSION: "3.12"
+        NEWTON_PACKAGE: newton
+        NEWTON_VERSION: 1.2.0
+        ISAACSIM_VERSION: 6.0.0.0
+        ISAACLAB_REPO: https://github.com/isaac-sim/IsaacLab.git
+        ISAACLAB_BRANCH: develop
+        ISAACLAB_REF: 482d21c936b863e323f0a135c8e8e8e8a9c166b2
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      ACCEPT_EULA: Y
+      OMNI_KIT_ACCEPT_EULA: YES
+      ANCHOR_BENCH_DATA_DIR: ${ANCHOR_BENCH_DATA_DIR:-}
+      ANCHOR_BENCH_ASSET_DIR: ${ANCHOR_BENCH_ASSET_DIR:-/workspace/anchor-bench/assets/robots}
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace/anchor-bench
+      - type: bind
+        source: ./assets
+        target: /workspace/anchor-bench/assets
+      - type: bind
+        source: ./outputs
+        target: /workspace/anchor-bench/outputs
+      - type: volume
+        source: anchor-bench-pip-cache
+        target: /home/anchor/.cache/pip
+    working_dir: /workspace/anchor-bench
+    network_mode: host
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  anchor-bench-pip-cache:

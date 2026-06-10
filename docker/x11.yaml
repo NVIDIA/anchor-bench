@@ -1,0 +1,18 @@
+services:
+  anchor-bench:
+    environment:
+      DISPLAY: ${DISPLAY}
+      TERM: ${TERM:-xterm-256color}
+      QT_X11_NO_MITSHM: "1"
+      XAUTHORITY: ${__ANCHOR_BENCH_TMP_XAUTH}
+    volumes:
+      - type: bind
+        source: ${__ANCHOR_BENCH_TMP_DIR}
+        target: ${__ANCHOR_BENCH_TMP_DIR}
+      - type: bind
+        source: /tmp/.X11-unix
+        target: /tmp/.X11-unix
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
