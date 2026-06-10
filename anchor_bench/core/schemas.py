@@ -7,11 +7,13 @@ from typing import Any
 
 
 CONTROLLERS = {"pd", "pid", "mlp", "lstm", "gru", "fmu", "torque_passthrough"}
+GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
 CLAMPS = {"effort", "velocity", "dc_motor", "position", "none"}
 EXPERIMENT_ACTUATOR_TYPES = CONTROLLERS | {"implicit"}
 EXPERIMENT_BENCHMARK_PARAMS = {"initial", "fitted"}
 
 _CONTROLLER_KNOWN_KEYS = {"type", "parameters", "source", "network_file"}
+_RESIDUAL_KNOWN_KEYS = {"type", "network_file", "stats_file", "input_columns", "output_column", "source", "parameters"}
 _DELAY_KNOWN_KEYS = {"duration_ms"}
 _CLAMP_KNOWN_KEYS = {"type", "parameters"}
 _ACTUATOR_SPEC_KNOWN_KEYS = {
@@ -25,6 +27,29 @@ def _require(mapping: dict[str, Any], key: str, context: str) -> Any:
     if key not in mapping:
         raise ValueError(f"{context} missing required key '{key}'")
     return mapping[key]
+
+
+def _parse_column_list(value: Any, context: str) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        columns = [item.strip() for item in value.split(",")]
+    elif isinstance(value, (list, tuple)):
+        columns = [str(item).strip() for item in value]
+    else:
+        raise ValueError(f"{context} must be a string or list of strings")
+    columns = [column for column in columns if column]
+    if not columns:
+        raise ValueError(f"{context} must contain at least one column")
+    return columns
+
+
+def _validate_gru_columns(columns: Any, context: str) -> list[str]:
+    parsed = _parse_column_list(columns, context)
+    unsupported = sorted(set(parsed) - GRU_INPUT_COLUMNS)
+    if unsupported:
+        raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -42,11 +67,51 @@ class ControllerSpec:
         ctype = _require(data, "type", context)
         if ctype not in CONTROLLERS:
             raise ValueError(f"{context} has unsupported controller '{ctype}'")
+        if ctype == "gru" and not data.get("network_file"):
+            raise ValueError(f"{context}.type 'gru' requires network_file")
+        parameters = dict(data.get("parameters", {}))
+        if ctype == "gru" and "input_columns" in parameters:
+            parameters["input_columns"] = _validate_gru_columns(parameters["input_columns"], f"{context}.parameters.input_columns")
         return cls(
             type=ctype,
-            parameters=dict(data.get("parameters", {})),
+            parameters=parameters,
             source=data.get("source"),
             network_file=data.get("network_file"),
+        )
+
+
+@dataclass(frozen=True)
+class ResidualSpec:
+    type: str
+    network_file: str
+    stats_file: str | None = None
+    input_columns: list[str] = field(default_factory=lambda: ["position", "position_error", "velocity"])
+    output_column: str = "torque_residual"
+    source: str | None = None
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], context: str) -> "ResidualSpec":
+        unknown = sorted(set(data) - _RESIDUAL_KNOWN_KEYS)
+        if unknown:
+            raise ValueError(f"{context} has unknown keys: {', '.join(unknown)}")
+        rtype = _require(data, "type", context)
+        if rtype != "gru":
+            raise ValueError(f"{context}.type {rtype!r} must be 'gru'")
+        network_file = _require(data, "network_file", context)
+        columns = _validate_gru_columns(
+            data.get("input_columns", ["position", "position_error", "velocity"]),
+            f"{context}.input_columns",
+        )
+        output_column = str(data.get("output_column", "torque_residual"))
+        return cls(
+            type=str(rtype),
+            network_file=str(network_file),
+            stats_file=data.get("stats_file"),
+            input_columns=columns,
+            output_column=output_column,
+            source=data.get("source"),
+            parameters=dict(data.get("parameters", {})),
         )
 
 
@@ -88,7 +153,7 @@ class ActuatorSpec:
     delay: DelaySpec = field(default_factory=DelaySpec)
     clamps: list[ClampingSpec] = field(default_factory=list)
     physical_parameters: dict[str, Any] = field(default_factory=dict)
-    residual: dict[str, Any] | None = None
+    residual: ResidualSpec | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], context: str) -> "ActuatorSpec":
@@ -107,7 +172,7 @@ class ActuatorSpec:
                 for idx, item in enumerate(data.get("clamps", []))
             ],
             physical_parameters=dict(data.get("physical_parameters", {})),
-            residual=data.get("residual"),
+            residual=ResidualSpec.from_dict(data["residual"], f"{context}.residual") if data.get("residual") else None,
         )
 
 
@@ -265,7 +330,7 @@ class SysIdBoundsFile:
         )
 
 
-_RUN_KNOWN_KEYS = {"simulation", "benchmark", "analysis", "sysid"}
+_RUN_KNOWN_KEYS = {"simulation", "benchmark", "analysis", "sysid", "training"}
 _RUN_SIMULATION_KEYS = {
     "physics_freq", "control_freq", "render_freq", "integrator",
     "solver_iterations", "line_search_iterations", "ls_iterations",
@@ -279,6 +344,12 @@ _RUN_SYSID_KEYS = {
     "output_dir", "real_data_dir", "joints", "num_envs", "buffer_time", "cmaes",
 }
 _RUN_SYSID_FLAT_CMAES_KEYS = ("sigma", "epsilon", "max_iter")
+_TRAINING_MODELS = {"gru", "hybrid_residual"}
+_RUN_TRAINING_KEYS = {
+    "model", "real_data_dir", "output_dir", "joint_type", "skip_optuna",
+    "trials", "trial_epochs", "final_epochs", "n_streams", "noise_std", "seed",
+    "input_columns", "target_column",
+}
 
 
 def _optional_mapping_section(
@@ -298,12 +369,43 @@ def _optional_mapping_section(
     return dict(value)
 
 
+def _validate_training_section(training: dict[str, Any], source: str) -> dict[str, Any]:
+    if not training:
+        return training
+    resolved = dict(training)
+    model = str(resolved.get("model", "gru"))
+    if model not in _TRAINING_MODELS:
+        raise ValueError(f"{source}.training.model {model!r} must be one of {sorted(_TRAINING_MODELS)}")
+    resolved["model"] = model
+    if "skip_optuna" in resolved and not isinstance(resolved["skip_optuna"], bool):
+        raise ValueError(f"{source}.training.skip_optuna must be a boolean")
+    for key in ("trials", "trial_epochs", "final_epochs", "n_streams"):
+        if key in resolved:
+            value = int(resolved[key])
+            if value < 1:
+                raise ValueError(f"{source}.training.{key} must be >= 1")
+            resolved[key] = value
+    if "noise_std" in resolved:
+        noise_std = float(resolved["noise_std"])
+        if noise_std < 0.0:
+            raise ValueError(f"{source}.training.noise_std must be >= 0")
+        resolved["noise_std"] = noise_std
+    if "seed" in resolved:
+        resolved["seed"] = int(resolved["seed"])
+    if "input_columns" in resolved:
+        resolved["input_columns"] = _validate_gru_columns(resolved["input_columns"], f"{source}.training.input_columns")
+    if "target_column" in resolved:
+        resolved["target_column"] = str(resolved["target_column"])
+    return resolved
+
+
 @dataclass(frozen=True)
 class RobotRunFile:
     simulation: dict[str, Any] = field(default_factory=dict)
     benchmark: dict[str, Any] = field(default_factory=dict)
     analysis: dict[str, Any] = field(default_factory=dict)
     sysid: dict[str, Any] = field(default_factory=dict)
+    training: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], source: str | Path) -> "RobotRunFile":
@@ -318,6 +420,8 @@ class RobotRunFile:
         benchmark = _optional_mapping_section(data, "benchmark", text_context, _RUN_BENCHMARK_KEYS)
         analysis = _optional_mapping_section(data, "analysis", text_context, _RUN_ANALYSIS_KEYS)
         sysid = _optional_mapping_section(data, "sysid", text_context, _RUN_SYSID_KEYS | set(_RUN_SYSID_FLAT_CMAES_KEYS))
+        training = _optional_mapping_section(data, "training", text_context, _RUN_TRAINING_KEYS)
+        training = _validate_training_section(training, text_context)
 
         for key in _RUN_SYSID_FLAT_CMAES_KEYS:
             if key in sysid:
@@ -331,11 +435,11 @@ class RobotRunFile:
                 "epsilon": cmaes.epsilon,
             }
 
-        return cls(simulation=simulation, benchmark=benchmark, analysis=analysis, sysid=sysid)
+        return cls(simulation=simulation, benchmark=benchmark, analysis=analysis, sysid=sysid, training=training)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        for key in ("simulation", "benchmark", "analysis", "sysid"):
+        for key in ("simulation", "benchmark", "analysis", "sysid", "training"):
             value = getattr(self, key)
             if value:
                 result[key] = dict(value)
@@ -497,6 +601,25 @@ class SysIdRunConfig:
     num_envs: int | None = None
     max_iter: int | None = None
     max_trajectory_len: int | None = None
+    seed: int | None = None
+
+
+@dataclass(frozen=True)
+class TrainActuatorRunConfig:
+    robot: str
+    model: str | None = None
+    data: str | None = None
+    output: str | None = None
+    joint_type: str | None = None
+    input_columns: list[str] | None = None
+    target_column: str | None = None
+    dry_run: bool = True
+    skip_optuna: bool | None = None
+    trials: int | None = None
+    trial_epochs: int | None = None
+    final_epochs: int | None = None
+    n_streams: int | None = None
+    noise_std: float | None = None
     seed: int | None = None
 
 

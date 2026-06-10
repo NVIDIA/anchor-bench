@@ -19,10 +19,12 @@ from anchor_bench.core.schemas import (
     DelaySpec,
     ExperimentActuatorModel,
     ExperimentFile,
+    ResidualSpec,
     RobotRunFile,
     RobotSpec,
     SysIdBoundsFile,
     SysIdRunConfig,
+    TrainActuatorRunConfig,
 )
 from anchor_bench.core.versions import ExternalVersions, load_external_versions
 
@@ -38,12 +40,14 @@ __all__ = [
     "DelaySpec",
     "ExperimentActuatorModel",
     "ExperimentFile",
+    "ResidualSpec",
     "ExternalVersions",
     "RobotRunFile",
     "RobotSpec",
     "SimulationTiming",
     "SysIdBoundsFile",
     "SysIdRunConfig",
+    "TrainActuatorRunConfig",
     "defaulted_value",
     "load_external_versions",
     "resolve_repo_path",
