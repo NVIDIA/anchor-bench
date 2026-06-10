@@ -80,5 +80,6 @@ Use `--model gru` for full-torque GRU prediction from
 `[position, position_error, velocity]`. Use `--model hybrid_residual`
 when the native PD/friction actuator remains active and the GRU should
 learn residual torque. Training writes the raw checkpoint, stats JSON,
-and Isaac Lab-style TorchScript network under
-`outputs/training/<robot>/...`.
+and a TorchScript GRU network under `outputs/training/<robot>/...`. The
+TorchScript archive exposes a `.gru` module for the local compatibility runtime
+shim; Newton-native GRU loading is not available in the pinned Newton snapshot.
