@@ -1,41 +1,112 @@
-
 # Anchor Bench
 
-Anchor Bench is a focused SysID and sim-to-real benchmark package for robot
+Anchor Bench is a focused system identification (SysID) and sim-to-real benchmark package for robot
 actuator models on Isaac Sim 6.0, Newton 1.2, and Isaac Lab `develop`.
 
-The repo provides robot configs, data loaders,
-SysID command builders, Newton benchmark command builders, analysis helpers,
-and agent/MCP tooling around the actuator-identification workflow.
+The repo provides robot configs, data loaders, SysID command builders, Newton
+benchmark command builders, and analysis helpers around the actuator-identification workflow.
 
 ## Compatibility
 
 - Isaac Sim: `6.0.0.0`
 - Newton: `1.2.0`
-- Isaac Lab: `develop` at `9989d276ad825221b10f5a60de92762fd63a0faf`
+- Isaac Lab: `develop` at `482d21c936b863e323f0a135c8e8e8e8a9c166b2`
 - Python: `3.12`
 
-## Quick Start
+## Installation
+
+Use the full Docker image for SysID and benchmark playback with Isaac Sim, Isaac Lab, and Newton.
 
 ```bash
-bash setup.sh --kitless
-bash setup.sh --check
-anchor-bench robots list
-anchor-bench sysid --robot so101 --data examples/data/so101_sage --output /tmp/anchor-bench-sysid --dry-run
-anchor-bench benchmark --robot so101 --motion examples/data/so101_sage --dry-run
-anchor-bench analyze --robot so101 --result-folder examples/results/so101 --dry-run
+./setup.sh --full
+./setup.sh --check
+./setup.sh --shell
 ```
 
-Use `bash setup.sh --full` when the local machine should install Isaac Sim
-`6.0.0.0` as well.
+| Command | Purpose |
+| --- | --- |
+| `./setup.sh --shell` | Open the persistent full container; the environment is checked automatically |
+| `./docker/run-gui.sh` | Run a single GUI container |
+| `./docker/run-headless.sh` | Run a single headless container |
+| `anchor-bench --help` | Show top-level CLI commands inside the container |
 
-## Native Actuator Schema
+Container wrappers run as your host UID/GID so generated outputs stay writable.
+For local Isaac Lab development with `third_party/IsaacLab`, see
+[CLI commands](docs/cli.md).
 
-Robot actuator configs use Newton 1.2-style composable components:
+## Quick Start: SO-101
 
-- `controller`: `pd`, `pid`, `mlp`, `lstm`, `gru`, `fmu`, or `torque_passthrough`
-- `delay`: optional command delay
-- `clamps`: optional effort, velocity, DC motor, or position clamps
-- `physical_parameters`: armature, dynamic friction, viscous friction, and related fitted values
+SO-101 includes `assets/robots/so101/files/so101.usd` for quick checks. Set
+`ANCHOR_BENCH_ASSET_DIR` only when you want to override it with your own USD
+assets.
 
+```bash
+# Open container
+./setup.sh --shell
 
+# SysID
+anchor-bench sysid \
+  --robot so101 \
+  --headless --num-envs 2 --max-iter 1 --max-trajectory-len 200
+
+# Benchmark
+anchor-bench benchmark \
+  --robot so101 \
+  --actuator-model implicit \
+  --seed 42 \
+  --actuator-params inputs/actuator_params/so101/fitted_seed42.yaml \
+  --headless
+
+# Analyze
+anchor-bench analyze --robot so101
+```
+
+Robot `run.yaml` supplies the default SysID dataset/output, benchmark
+motion/output, simulation timing, and analysis output/filter settings. CLI
+arguments override those defaults when you need a one-off run.
+
+## Common Commands
+
+```bash
+anchor-bench robots list
+anchor-bench robots describe so101
+
+# Full experiments (multiple configs)
+anchor-bench experiment benchmark configs/experiments/so101_custom_figure8_with_camera.yaml
+anchor-bench experiment analyze configs/experiments/so101_custom_figure8_with_camera.yaml
+```
+
+See [CLI commands](docs/cli.md) for the full command reference.
+
+## Repo Layout
+
+```text
+anchor_bench/   Python package: CLI, loaders, runners, runtime helpers
+configs/        Declarative robot and experiment configuration
+assets/         Robot USD/MJCF/mesh assets and manifests
+inputs/         Measured datasets and curated frozen actuator params
+outputs/        Generated SysID, benchmark, and analysis artifacts
+third_party/    Ignored local artifacts and optional vendor checkouts
+```
+
+See [repo structure](docs/repo-structure.md) for the detailed rules.
+
+## Docs
+
+- [CLI commands](docs/cli.md): full `anchor-bench` command reference.
+- [Repo structure](docs/repo-structure.md): what belongs in `configs/`, `assets/`, `inputs/`, `outputs`, and `third_party/`.
+- [Artifacts](docs/artifacts.md): large files, SO-101 USD handling, and generated output locations.
+- [Robot plugins](docs/robot-plugin.md): files required to add a new robot.
+- [Newton 1.2 migration](docs/migration-newton-1.2.md): actuator schema migration notes.
+
+## Acknowledgements
+
+Anchor Bench uses SAGE-compatible trajectory and analysis conventions for
+sim-to-real benchmark data, including `control.csv`, `state_motor.csv`,
+`joint_list.txt`, and `metadata.yaml` files. See
+[SAGE](https://github.com/isaac-sim2real/sage) for the upstream sim-to-real
+benchmarking work.
+
+The SysID optimizer follows a PACE Sim2Real-style CMA-ES workflow, with parallel
+candidate evaluation and normalized parameter bounds. See
+[PACE Sim2Real](https://github.com/leggedrobotics/pace-sim2real) from ETH Zurich.
