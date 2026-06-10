@@ -1,0 +1,23 @@
+
+schema_version: 2
+backend: newton
+actuators:
+  - name: h1_arms
+    joints: [left_shoulder_pitch, left_shoulder_roll, left_shoulder_yaw, left_elbow, right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+    controller:
+      type: pd
+      source: "Migrated H1 implicit actuator parameters; neural residuals are separate component entries."
+      parameters:
+        stiffness: 60.0
+        damping: 2.0
+    delay:
+      duration_ms: 0.0
+    clamps:
+      - type: effort
+        parameters: {effort_limit: 300.0}
+      - type: velocity
+        parameters: {velocity_limit: 30.0}
+    physical_parameters:
+      armature: 0.02
+      dry_friction: 0.8
+      viscous_friction: 1.5

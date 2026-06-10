@@ -19,11 +19,15 @@ dev = ["pytest>=8.0", "ruff>=0.5"]
 full = [
   "isaacsim==6.0.0.0",
   "newton==1.2.0",
+  "mujoco>=3.5.0",
+  "mujoco-warp>=3.5.0",
   "cmaes",
   "optuna",
+  "scipy",
   "pandas",
   "pyarrow",
   "tqdm",
+  "matplotlib",
 ]
 
 [project.scripts]

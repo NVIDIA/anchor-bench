@@ -1,0 +1,8 @@
+left_shoulder_pitch
+left_shoulder_roll
+left_shoulder_yaw
+left_elbow
+right_shoulder_pitch
+right_shoulder_roll
+right_shoulder_yaw
+right_elbow

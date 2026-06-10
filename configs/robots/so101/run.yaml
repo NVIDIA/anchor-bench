@@ -1,0 +1,30 @@
+
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+benchmark:
+  dataset: example
+  fix_root: true
+  buffer_time: 2.0
+  real_init_pose_sync: true
+  motion_files: inputs/datasets/so101/custom_figure8_with_camera
+  motion_name: custom_figure8_with_camera
+  output_folder: outputs/sim2real_benchmark
+analysis:
+  output_dir: outputs/sim2real_analysis
+  sample_dt: 0.005
+  motion_names: "*"
+sysid:
+  output_dir: outputs/sysid/so101/full
+  real_data_dir: inputs/datasets/so101/custom_figure8_with_camera
+  joints: full
+  num_envs: 64
+  buffer_time: 2.0
+  cmaes:
+    sigma: 0.5
+    max_iterations: 100
+    epsilon: 0.001

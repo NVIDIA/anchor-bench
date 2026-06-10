@@ -1,0 +1,7 @@
+schema_version: 2
+mirror: false
+joint_types: [elbow]
+parameters:
+  armature: {lower: 0.0, upper: 0.05}
+  dry_friction: {lower: 0.0, upper: 2.0}
+  viscous_friction: {lower: 0.0, upper: 3.0}

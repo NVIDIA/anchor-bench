@@ -1,0 +1,16 @@
+
+schema_version: 2
+backend: newton
+actuators:
+  - name: ur10e_arm
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint, wrist_3_joint]
+    controller:
+      type: pd
+      parameters: {stiffness: 120.0, damping: 8.0}
+    delay: {duration_ms: 0.0}
+    clamps:
+      - type: effort
+        parameters: {effort_limit: 150.0}
+      - type: velocity
+        parameters: {velocity_limit: 3.15}
+    physical_parameters: {armature: 0.01, dry_friction: 0.1, viscous_friction: 0.1}
