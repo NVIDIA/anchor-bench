@@ -7,7 +7,7 @@ from pathlib import Path
 
 from anchor_bench.analysis.runner import resolve_analysis_run_config, run_analysis
 from anchor_bench.benchmark.newton_runner import resolve_benchmark_run_config, run_benchmark
-from anchor_bench.core.schemas import BenchmarkRunConfig, SysIdRunConfig
+from anchor_bench.core.schemas import BenchmarkRunConfig, SysIdRunConfig, TrainActuatorRunConfig
 from anchor_bench.data.sage import validate_sage_dir
 from anchor_bench.experiments.runner import (
     ExperimentConfigError,
@@ -17,6 +17,7 @@ from anchor_bench.experiments.runner import (
 from anchor_bench.runtime.environment import RuntimeUnavailableError
 from anchor_bench.robots.registry import get_robot, list_robots, validate_robot
 from anchor_bench.sysid.runner import resolve_sysid_run_config, run_sysid
+from anchor_bench.training.runner import resolve_train_actuator_run_config, run_train_actuator
 
 
 def _print_plan(plan) -> int:
@@ -51,6 +52,23 @@ def main(argv: list[str] | None = None) -> int:
     sysid.add_argument("--max-trajectory-len", type=int)
     sysid.add_argument("--seed", type=int)
     sysid.add_argument("--dry-run", action="store_true")
+
+    train_actuator = sub.add_parser("train-actuator")
+    train_actuator.add_argument("--robot", required=True)
+    train_actuator.add_argument("--model", choices=("gru", "hybrid_residual"))
+    train_actuator.add_argument("--data")
+    train_actuator.add_argument("--joint-type")
+    train_actuator.add_argument("--output")
+    train_actuator.add_argument("--input-columns")
+    train_actuator.add_argument("--target-column")
+    train_actuator.add_argument("--skip-optuna", action="store_true", default=None)
+    train_actuator.add_argument("--trials", type=int)
+    train_actuator.add_argument("--trial-epochs", type=int)
+    train_actuator.add_argument("--final-epochs", type=int)
+    train_actuator.add_argument("--n-streams", type=int)
+    train_actuator.add_argument("--noise-std", type=float)
+    train_actuator.add_argument("--seed", type=int)
+    train_actuator.add_argument("--dry-run", action="store_true")
 
     benchmark = sub.add_parser("benchmark")
     benchmark.add_argument("--robot", required=True)
@@ -115,6 +133,29 @@ def main(argv: list[str] | None = None) -> int:
             if not args.dry_run:
                 _require_existing_path("--data", resolved.data, kind="directory")
             return _print_plan(run_sysid(config))
+
+        if args.command == "train-actuator":
+            config = TrainActuatorRunConfig(
+                robot=args.robot,
+                model=args.model,
+                data=args.data,
+                output=args.output,
+                joint_type=args.joint_type,
+                input_columns=args.input_columns,
+                target_column=args.target_column,
+                dry_run=args.dry_run,
+                skip_optuna=args.skip_optuna,
+                trials=args.trials,
+                trial_epochs=args.trial_epochs,
+                final_epochs=args.final_epochs,
+                n_streams=args.n_streams,
+                noise_std=args.noise_std,
+                seed=args.seed,
+            )
+            resolved = resolve_train_actuator_run_config(config)
+            if not args.dry_run:
+                _require_existing_path("--data", resolved.data, kind="directory")
+            return _print_plan(run_train_actuator(config))
         if args.command == "benchmark":
             config = BenchmarkRunConfig(
                 robot=args.robot,
@@ -170,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                         raise
             print(json.dumps({"workflow": "convert", "robot": args.robot, "format": args.format, "dry_run": args.dry_run}, indent=2))
             return 0
-    except (RuntimeUnavailableError, ExperimentConfigError, ValueError, FileNotFoundError) as exc:
+    except (RuntimeUnavailableError, ExperimentConfigError, ValueError, FileNotFoundError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 1

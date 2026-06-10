@@ -1,0 +1,6 @@
+name: g1
+description: Unitree G1 asset manifest. Training-only workflows do not require the USD.
+expected_assets:
+  - g1.usd
+source_notes:
+  - Keep G1 robot assets, generated neural weights, raw datasets, and plots outside git.

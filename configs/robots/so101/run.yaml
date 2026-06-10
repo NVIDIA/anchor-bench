@@ -28,3 +28,18 @@ sysid:
     sigma: 0.5
     max_iterations: 100
     epsilon: 0.001
+
+training:
+  model: gru
+  real_data_dir: inputs/datasets/so101/custom_figure8_with_camera
+  output_dir: outputs/training/so101
+  joint_type: full
+  input_columns: [position, position_error, velocity]
+  target_column: torque
+  skip_optuna: true
+  trials: 20
+  trial_epochs: 5
+  final_epochs: 50
+  n_streams: 4
+  noise_std: 0.0
+  seed: 42

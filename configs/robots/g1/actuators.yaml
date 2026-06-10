@@ -1,0 +1,45 @@
+# G1 right-arm SysID-optimal PD/friction
+schema_version: 2
+backend: newton
+actuators:
+  - name: g1_right_arm
+    joints: [right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+    controller:
+      type: pd
+      source: "G1 right arm SysID-optimal PD/friction from g1-hybrid-residual."
+      parameters:
+        stiffness:
+          right_shoulder_pitch: 30.0
+          right_shoulder_roll: 33.57
+          right_shoulder_yaw: 62.61
+          right_elbow: 27.47
+        damping:
+          right_shoulder_pitch: 0.71
+          right_shoulder_roll: 0.41
+          right_shoulder_yaw: 0.692
+          right_elbow: 0.572
+    delay:
+      duration_ms: 0.0
+    clamps:
+      - type: effort
+        parameters:
+          effort_limit: 25.0
+      - type: velocity
+        parameters:
+          velocity_limit: 30.0
+    physical_parameters:
+      armature:
+        right_shoulder_pitch: 0.00109
+        right_shoulder_roll: 0.00101
+        right_shoulder_yaw: 0.00574
+        right_elbow: 0.00119
+      dry_friction:
+        right_shoulder_pitch: 0.462
+        right_shoulder_roll: 0.783
+        right_shoulder_yaw: 0.521
+        right_elbow: 0.270
+      viscous_friction:
+        right_shoulder_pitch: 0.037
+        right_shoulder_roll: 0.482
+        right_shoulder_yaw: 1.125
+        right_elbow: 0.079
