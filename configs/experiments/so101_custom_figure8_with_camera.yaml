@@ -1,0 +1,34 @@
+schema_version: 1
+robot: so101
+
+outputs:
+  benchmark: outputs/sim2real_benchmark
+  analysis: outputs/sim2real_analysis
+
+seeds: [42]
+
+benchmark:
+  num_envs: 1
+  headless: true
+
+datasets:
+  example:
+    real_root: inputs/datasets/so101
+    motions: [custom_figure8_with_camera]
+
+actuator_models:
+  implicit:
+    type: implicit
+    initial_params: configs/robots/so101/actuators.yaml
+    fitted_params: inputs/actuator_params/so101/fitted_seed42.yaml
+    benchmark_params: fitted
+
+analysis:
+  seeds: [42]
+  datasets: [example]
+  motions: "*"
+  actuator_models: "*"
+  plots:
+    joints: true
+    end_effector: true
+    require_end_effector: false
