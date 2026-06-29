@@ -1,0 +1,55 @@
+name: Docker build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: docker-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  kitless:
+    name: Build kitless image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build anchor-bench:kitless
+        run: ./setup.sh --kitless
+
+      - name: Verify kitless image
+        run: docker image inspect anchor-bench:kitless
+
+  full:
+    name: Build full image
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h
+
+      - name: Build anchor-bench:full
+        run: ./setup.sh --full
+
+      - name: Verify full image
+        run: docker image inspect anchor-bench:full
