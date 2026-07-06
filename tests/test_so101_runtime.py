@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -340,25 +342,64 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertEqual("cli", resolved.config_sources["max_trajectory_len"])
         self.assertEqual(3, resolved.max_iter)
 
-    def test_non_dry_run_without_runtime_or_asset_exits_with_actionable_error(self):
+    def test_sysid_cli_surfaces_runtime_unavailable_on_non_dry_run(self):
+        from anchor_bench.cli.main import main
+        from anchor_bench.runtime.environment import RuntimeUnavailableError
+
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp) / "custom_figure8_with_camera"
             data_dir.mkdir()
-            result = run_cli(
-                "sysid",
-                "--robot",
-                "so101",
-                "--data",
-                str(data_dir),
-                "--output",
-                "outputs/sysid/so101/smoke",
-                check=False,
-            )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue(
-            "anchor-bench:full" in result.stderr or "Missing asset 'so101.usd'" in result.stderr,
-            result.stderr,
-        )
+            stderr = io.StringIO()
+            with patch(
+                "anchor_bench.runtime.environment.require_full_runtime",
+                side_effect=RuntimeUnavailableError(
+                    "sysid requires the full Anchor Bench Docker runtime, but these modules are missing: "
+                    "isaaclab, isaaclab_newton, newton. Build it with `bash setup.sh --full`, then run inside "
+                    "`anchor-bench:full` with GPU/runtime mounts."
+                ),
+            ):
+                with redirect_stderr(stderr):
+                    rc = main(
+                        [
+                            "sysid",
+                            "--robot",
+                            "so101",
+                            "--data",
+                            str(data_dir),
+                            "--output",
+                            "outputs/sysid/so101/smoke",
+                        ]
+                    )
+
+        self.assertEqual(rc, 2)
+        self.assertIn("anchor-bench:full", stderr.getvalue())
+
+    def test_sysid_cli_surfaces_missing_asset_on_non_dry_run(self):
+        from anchor_bench.cli.main import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "custom_figure8_with_camera"
+            data_dir.mkdir()
+            empty_assets = Path(tmp) / "assets"
+            empty_assets.mkdir()
+            stderr = io.StringIO()
+            with patch("anchor_bench.runtime.environment.require_full_runtime"):
+                with patch("anchor_bench.runtime.assets._candidate_roots", return_value=[empty_assets]):
+                    with redirect_stderr(stderr):
+                        rc = main(
+                            [
+                                "sysid",
+                                "--robot",
+                                "so101",
+                                "--data",
+                                str(data_dir),
+                                "--output",
+                                "outputs/sysid/so101/smoke",
+                            ]
+                        )
+
+        self.assertEqual(rc, 2)
+        self.assertIn("Missing asset 'so101.usd'", stderr.getvalue())
 
     def test_so101_runtime_helpers_use_configured_joint_names(self):
         from anchor_bench.runtime.so101_scene import _matrix_from_param_map, so101_joint_names
