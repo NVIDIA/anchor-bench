@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -201,22 +202,71 @@ def _param_for_joint(value: Any, joint_type: str, default: float = 0.0) -> float
     return float(value)
 
 
-def _residual_physics_for_joint(robot: str, joint_type: str) -> ResidualPhysics:
+def _actuator_for_joint(robot: str, joint_type: str):
     bundle = get_robot(robot)
     spec = load_actuator_file(bundle.paths.actuators)
     matching = [actuator for actuator in spec.actuators if joint_type in actuator.joints or actuator.name == joint_type]
+    if not matching and joint_type == "full" and len(spec.actuators) == 1:
+        matching = spec.actuators
     if not matching:
         raise ValueError(f"no actuator entry in {bundle.paths.actuators} covers joint_type {joint_type!r}")
-    actuator = matching[0]
+    return matching[0]
+
+
+def _param_for_actuator(
+    value: Any,
+    *,
+    joint_type: str,
+    actuator,
+    parameter_name: str,
+    default: float = 0.0,
+) -> float:
+    if not isinstance(value, dict) or joint_type in value:
+        return _param_for_joint(value, joint_type, default)
+
+    covered_values = [float(value[joint]) for joint in actuator.joints if joint in value]
+    if not covered_values:
+        return default
+    first = covered_values[0]
+    if not all(math.isclose(item, first) for item in covered_values[1:]):
+        raise ValueError(
+            f"GRU metadata requires one shared {parameter_name} for actuator "
+            f"{actuator.name!r}, but its joints use different values"
+        )
+    return first
+
+
+def _residual_physics_for_joint(robot: str, joint_type: str) -> ResidualPhysics:
+    actuator = _actuator_for_joint(robot, joint_type)
     controller_params = actuator.controller.parameters
     physical = actuator.physical_parameters
     dry = physical.get("dry_friction", physical.get("dynamic_friction"))
     return ResidualPhysics(
-        stiffness=_param_for_joint(controller_params.get("stiffness"), joint_type),
-        damping=_param_for_joint(controller_params.get("damping"), joint_type),
-        dry_friction=_param_for_joint(dry, joint_type),
-        viscous_friction=_param_for_joint(physical.get("viscous_friction"), joint_type),
+        stiffness=_param_for_actuator(
+            controller_params.get("stiffness"), joint_type=joint_type,
+            actuator=actuator, parameter_name="stiffness",
+        ),
+        damping=_param_for_actuator(
+            controller_params.get("damping"), joint_type=joint_type,
+            actuator=actuator, parameter_name="damping",
+        ),
+        dry_friction=_param_for_actuator(
+            dry, joint_type=joint_type, actuator=actuator,
+            parameter_name="dry friction",
+        ),
+        viscous_friction=_param_for_actuator(
+            physical.get("viscous_friction"), joint_type=joint_type,
+            actuator=actuator, parameter_name="viscous friction",
+        ),
     )
+
+
+def _delay_metadata_for_joint(robot: str, joint_type: str) -> dict[str, Any]:
+    delay_s = float(_actuator_for_joint(robot, joint_type).delay.duration_ms) / 1000.0
+    return {
+        "handling": "none" if delay_s == 0.0 else "learned",
+        "training_delay_s": delay_s,
+    }
 
 
 def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
@@ -234,12 +284,23 @@ def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
         target_column=resolved.target_column,
         derived_columns=derived_columns,
     )
-    residual_physics = _residual_physics_for_joint(resolved.robot, resolved.joint_type) if resolved.model == "hybrid_residual" else None
+    needs_physics = resolved.model == "hybrid_residual" or "solver_pd" in columns.input_columns
+    residual_physics = (
+        _residual_physics_for_joint(resolved.robot, resolved.joint_type)
+        if needs_physics
+        else None
+    )
+    bundle = get_robot(resolved.robot)
+    control_frequency = float(bundle.run_config["simulation"]["control_freq"])
+    if control_frequency <= 0.0:
+        raise ValueError("simulation.control_freq must be greater than zero")
     metadata: dict[str, Any] = {
         "robot": resolved.robot,
         "config_sources": resolved.config_sources,
         "skip_optuna": resolved.skip_optuna,
         "noise_std": resolved.noise_std,
+        "sample_dt_s": 1.0 / control_frequency,
+        "delay": _delay_metadata_for_joint(resolved.robot, resolved.joint_type),
     }
     if residual_physics is not None:
         metadata["physics_params"] = residual_physics.__dict__

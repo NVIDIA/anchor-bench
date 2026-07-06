@@ -157,6 +157,12 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
         self.assertEqual("measured_torque", resolved.target_column)
 
+    def test_grouped_residual_model_requires_shared_physics_baseline(self):
+        from anchor_bench.training.runner import _residual_physics_for_joint
+
+        with self.assertRaisesRegex(ValueError, "one shared stiffness"):
+            _residual_physics_for_joint("so101", "full")
+
     @unittest.skipUnless(
         importlib.util.find_spec("torch") and importlib.util.find_spec("pandas"),
         "training smoke test requires torch and pandas",
@@ -196,6 +202,16 @@ class TrainingRunnerTests(unittest.TestCase):
             self.assertEqual("Rotation", stats["joint_type"])
             self.assertIn("network", plan.metadata["artifacts"])
 
+            import torch
+
+            extra_files = {"metadata.json": ""}
+            torch.jit.load(str(output_dir / "gru_Rotation_network.pt"), _extra_files=extra_files)
+            metadata = json.loads(extra_files["metadata.json"].decode("utf-8"))
+            self.assertEqual("gru", metadata["model_type"])
+            self.assertEqual(["torque"], metadata["target_columns"])
+            self.assertEqual(0.002, metadata["sample_dt_s"])
+            self.assertEqual("none", metadata["delay"]["handling"])
+
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export test requires torch")
     def test_gru_checkpoint_export_writes_scripted_network_with_gru_attribute(self):
         from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
@@ -213,6 +229,24 @@ class TrainingRunnerTests(unittest.TestCase):
                     "model_state_dict": model.state_dict(),
                     "input_columns": ["position", "position_error", "velocity"],
                     "target_columns": ["torque"],
+                    "runtime_metadata": {
+                        "schema_version": 1,
+                        "model_type": "gru",
+                        "input_columns": ["position", "position_error", "velocity"],
+                        "target_columns": ["torque"],
+                        "sample_dt_s": 0.002,
+                        "normalization": {
+                            "inputs": {
+                                "mean": {"position": 0.0, "position_error": 0.0, "velocity": 0.0},
+                                "std": {"position": 1.0, "position_error": 1.0, "velocity": 1.0},
+                            },
+                            "targets": {
+                                "mean": {"torque": 0.0},
+                                "std": {"torque": 1.0},
+                            },
+                        },
+                        "delay": {"handling": "none", "training_delay_s": 0.0},
+                    },
                     "hyperparameters": {"hidden_size": 4, "num_layers": 1, "dropout": 0.0},
                 },
                 checkpoint_path,
@@ -222,7 +256,10 @@ class TrainingRunnerTests(unittest.TestCase):
             extra_files = {"metadata.json": ""}
             network = torch.jit.load(str(network_path), _extra_files=extra_files)
             self.assertTrue(hasattr(network, "gru"))
-            self.assertEqual("", extra_files["metadata.json"].decode("utf-8"))
+            metadata = json.loads(extra_files["metadata.json"].decode("utf-8"))
+            self.assertEqual("gru", metadata["model_type"])
+            self.assertEqual(["torque"], metadata["target_columns"])
+            self.assertEqual(0.002, metadata["sample_dt_s"])
             output, hidden = network(torch.zeros(2, 1, 3), torch.zeros(1, 2, 4))
             self.assertEqual((2, 1, 1), tuple(output.shape))
             self.assertEqual((1, 2, 4), tuple(hidden.shape))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,10 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
     torch = _import_torch()
     source = Path(checkpoint_path)
     checkpoint: dict[str, Any] = torch.load(source, map_location="cpu")
+    runtime_metadata = checkpoint.get("runtime_metadata")
+    if not isinstance(runtime_metadata, dict):
+        raise ValueError(f"{source} checkpoint is missing runtime_metadata")
+
     hparams = checkpoint.get("hyperparameters") or {}
     input_columns = checkpoint.get("input_columns") or []
     target_columns = checkpoint.get("target_columns") or []
@@ -71,5 +76,9 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
     if destination == source:
         destination = source.with_name(f"{source.stem}_network.pt")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    scripted.save(str(destination))
+    torch.jit.save(
+        scripted,
+        str(destination),
+        _extra_files={"metadata.json": json.dumps(runtime_metadata, sort_keys=True)},
+    )
     return destination

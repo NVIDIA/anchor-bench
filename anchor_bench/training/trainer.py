@@ -213,6 +213,59 @@ def _run_epoch(torch, model, optimizer, loss_fn, sequences, hparams, *, train: b
     return float(sum(losses) / max(1, len(losses)))
 
 
+def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]:
+    if len(job.target_columns) != 1:
+        raise ValueError("GRU runtime artifacts require exactly one target column")
+
+    try:
+        sample_dt_s = float(job.metadata["sample_dt_s"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("training metadata must define sample_dt_s") from exc
+    if not math.isfinite(sample_dt_s) or sample_dt_s <= 0.0:
+        raise ValueError("sample_dt_s must be finite and greater than zero")
+
+    delay = job.metadata.get("delay")
+    if not isinstance(delay, dict):
+        raise ValueError("training metadata must define delay handling")
+
+    source_target = job.target_columns[0]
+    target = "torque_residual" if job.model == "hybrid_residual" else "torque"
+    normalization = stats["normalization"]
+    runtime = {
+        "schema_version": 1,
+        "model_type": "gru",
+        "input_columns": list(job.input_columns),
+        "target_columns": [target],
+        "sample_dt_s": sample_dt_s,
+        "normalization": {
+            "inputs": normalization["inputs"],
+            "targets": {
+                "mean": {target: normalization["targets"]["mean"][source_target]},
+                "std": {target: normalization["targets"]["std"][source_target]},
+            },
+        },
+        "delay": dict(delay),
+    }
+
+    needs_pd = target == "torque_residual" or "solver_pd" in job.input_columns
+    physics = job.metadata.get("physics_params")
+    if needs_pd:
+        if not isinstance(physics, dict):
+            raise ValueError("residual and solver_pd models require physics_params")
+        runtime["pd_baseline"] = {
+            "kp": float(physics["stiffness"]),
+            "kd": float(physics["damping"]),
+            "velocity_target": "zero",
+        }
+    if target == "torque_residual":
+        assert isinstance(physics, dict)
+        runtime["friction_baseline"] = {
+            "dry": float(physics["dry_friction"]),
+            "viscous": float(physics["viscous_friction"]),
+        }
+    return runtime
+
+
 def _fit_once(
     job: TrainingJob,
     hparams: TrainingHyperParameters,
@@ -273,6 +326,7 @@ def _fit_once(
         "input_columns": job.input_columns,
         "target_columns": job.target_columns,
         "normalization": stats["normalization"],
+        "runtime_metadata": _runtime_metadata(job, stats),
         "hyperparameters": hparams.__dict__,
         "metrics": metrics,
     }
