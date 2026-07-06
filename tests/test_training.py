@@ -163,6 +163,20 @@ class TrainingRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one shared stiffness"):
             _residual_physics_for_joint("so101", "full")
 
+    def test_grouped_model_requires_complete_parameter_map(self):
+        from types import SimpleNamespace
+
+        from anchor_bench.training.runner import _param_for_actuator
+
+        actuator = SimpleNamespace(name="arm", joints=["shoulder", "elbow"])
+        with self.assertRaisesRegex(ValueError, "missing: elbow"):
+            _param_for_actuator(
+                {"shoulder": 20.0},
+                joint_type="full",
+                actuator=actuator,
+                parameter_name="stiffness",
+            )
+
     @unittest.skipUnless(
         importlib.util.find_spec("torch") and importlib.util.find_spec("pandas"),
         "training smoke test requires torch and pandas",
@@ -211,6 +225,77 @@ class TrainingRunnerTests(unittest.TestCase):
             self.assertEqual(["torque"], metadata["target_columns"])
             self.assertEqual(0.002, metadata["sample_dt_s"])
             self.assertEqual("none", metadata["delay"]["handling"])
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("torch") and importlib.util.find_spec("pandas"),
+        "training smoke test requires torch and pandas",
+    )
+    def test_residual_and_solver_pd_exports_embed_physics_baselines(self):
+        from anchor_bench.core.schemas import TrainActuatorRunConfig
+        from anchor_bench.training.runner import run_train_actuator
+
+        import torch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "data"
+            data_dir.mkdir()
+            _write_csv(data_dir / "a.csv", _demo_rows(length=12))
+            _write_csv(data_dir / "b.csv", _demo_rows(length=12))
+
+            cases = [
+                {
+                    "model": "hybrid_residual",
+                    "input_columns": ["position", "position_error", "velocity"],
+                    "network_name": "hybrid_residual_Rotation_network.pt",
+                    "target": "torque_residual",
+                    "has_friction": True,
+                },
+                {
+                    "model": "gru",
+                    "input_columns": ["position", "position_error", "velocity", "solver_pd"],
+                    "network_name": "gru_Rotation_network.pt",
+                    "target": "torque",
+                    "has_friction": False,
+                },
+            ]
+            for index, case in enumerate(cases):
+                with self.subTest(model=case["model"]):
+                    output_dir = root / f"out_{index}"
+                    run_train_actuator(
+                        TrainActuatorRunConfig(
+                            robot="so101",
+                            model=case["model"],
+                            data=str(data_dir),
+                            output=str(output_dir),
+                            joint_type="Rotation",
+                            input_columns=case["input_columns"],
+                            skip_optuna=True,
+                            final_epochs=1,
+                            n_streams=1,
+                            seed=5,
+                            dry_run=False,
+                        )
+                    )
+
+                    extra_files = {"metadata.json": ""}
+                    torch.jit.load(
+                        str(output_dir / case["network_name"]),
+                        _extra_files=extra_files,
+                    )
+                    metadata = json.loads(extra_files["metadata.json"].decode("utf-8"))
+                    self.assertEqual([case["target"]], metadata["target_columns"])
+                    self.assertEqual(
+                        {"kp": 48.419899, "kd": 3.334595, "velocity_target": "zero"},
+                        metadata["pd_baseline"],
+                    )
+                    if case["has_friction"]:
+                        self.assertEqual(
+                            {"dry": 0.347432, "viscous": 1.590709},
+                            metadata["friction_baseline"],
+                        )
+                    else:
+                        self.assertNotIn("friction_baseline", metadata)
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export test requires torch")
     def test_gru_checkpoint_export_writes_scripted_network_with_gru_attribute(self):

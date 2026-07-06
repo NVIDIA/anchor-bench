@@ -223,10 +223,16 @@ def _param_for_actuator(
 ) -> float:
     if not isinstance(value, dict) or joint_type in value:
         return _param_for_joint(value, joint_type, default)
-
-    covered_values = [float(value[joint]) for joint in actuator.joints if joint in value]
-    if not covered_values:
+    if joint_type in actuator.joints:
         return default
+
+    missing_joints = [joint for joint in actuator.joints if joint not in value]
+    if missing_joints:
+        raise ValueError(
+            f"GRU metadata requires {parameter_name} for every joint in actuator "
+            f"{actuator.name!r}; missing: {', '.join(missing_joints)}"
+        )
+    covered_values = [float(value[joint]) for joint in actuator.joints]
     first = covered_values[0]
     if not all(math.isclose(item, first) for item in covered_values[1:]):
         raise ValueError(
@@ -276,7 +282,7 @@ def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
         return plan
     csvs = discover_csv_files(resolved.data)
     train_csvs, val_csvs = split_csv_files(csvs, seed=resolved.seed)
-    derived_columns = ["solver_pd"] if resolved.model == "hybrid_residual" else []
+    derived_columns = ["solver_pd"] if "solver_pd" in resolved.input_columns else []
     columns = resolve_training_columns(
         read_csv_header(train_csvs[0]),
         model=resolved.model,
