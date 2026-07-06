@@ -34,6 +34,10 @@ jobs:
       - name: Run unit tests
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp/anchor-bench-home \
+            -e XDG_CACHE_HOME=/tmp/anchor-bench-cache \
+            -e MPLCONFIGDIR=/tmp/anchor-bench-cache/matplotlib \
             -v "${{ github.workspace }}:/workspace/anchor-bench" \
             -w /workspace/anchor-bench \
             -e ANCHOR_BENCH_ASSET_DIR=/workspace/anchor-bench/assets/robots \
