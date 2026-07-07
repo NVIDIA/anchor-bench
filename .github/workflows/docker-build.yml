@@ -18,7 +18,7 @@ env:
 
 jobs:
   kitless:
-    name: Build kitless image
+    name: Build kitless image and run unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -30,3 +30,16 @@ jobs:
 
       - name: Verify kitless image
         run: docker image inspect anchor-bench:kitless
+
+      - name: Run unit tests
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp/anchor-bench-home \
+            -e XDG_CACHE_HOME=/tmp/anchor-bench-cache \
+            -e MPLCONFIGDIR=/tmp/anchor-bench-cache/matplotlib \
+            -v "${{ github.workspace }}:/workspace/anchor-bench" \
+            -w /workspace/anchor-bench \
+            -e ANCHOR_BENCH_ASSET_DIR=/workspace/anchor-bench/assets/robots \
+            anchor-bench:kitless \
+            python3 scripts/run_unit_tests.py

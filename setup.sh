@@ -246,7 +246,9 @@ run_check() {
 open_shell() {
   ensure_docker
   ensure_image full "${FULL_IMAGE}"
-  install_assets >/dev/null
+  if ! is_dry_run; then
+    install_assets >/dev/null
+  fi
   prepare_local_isaaclab
   if is_dry_run; then
     run_cmd "${ROOT}/docker/run-persist.sh" "$@"

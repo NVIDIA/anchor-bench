@@ -37,7 +37,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install --extra-index-url https://pypi.nvidia.com \
          "${WARP_PACKAGE}==${WARP_VERSION}" \
          "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_REF}" \
-         cmaes optuna pandas pyarrow tqdm
+         cmaes matplotlib optuna pandas pyarrow tqdm
 
 COPY docker/entrypoint.sh /usr/local/bin/anchor-bench-entrypoint
 RUN chmod +x /usr/local/bin/anchor-bench-entrypoint \
