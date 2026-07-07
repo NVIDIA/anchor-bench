@@ -19,7 +19,7 @@ GRU_INPUT_COLUMNS = {
 }
 
 
-def _duplicates(values: list[str]) -> list[str]:
+def _find_duplicates(values: list[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
     for value in values:
@@ -38,7 +38,7 @@ def parse_gru_columns(value: Any) -> list[str]:
         raise ValueError("must be a string or list of strings")
     if not columns:
         raise ValueError("must contain at least one column")
-    duplicates = _duplicates(columns)
+    duplicates = _find_duplicates(columns)
     if duplicates:
         raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
     unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
@@ -56,7 +56,7 @@ def parse_joint_names(value: Any) -> list[str]:
         raise ValueError("must be a string or list of strings")
     if not names:
         raise ValueError("must contain at least one joint")
-    duplicates = _duplicates(names)
+    duplicates = _find_duplicates(names)
     if duplicates:
         raise ValueError(f"contains duplicate joints: {', '.join(duplicates)}")
     return names
