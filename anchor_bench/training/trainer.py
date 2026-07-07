@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 
-from anchor_bench.training.data import EPSILON_STD, TrainingSource, load_training_table, write_stats_json
+from anchor_bench.training.data import EPSILON_STD, TrainingSource, write_stats_json
 from anchor_bench.training.export import export_gru_checkpoint
 
 
@@ -51,6 +52,10 @@ class TrainingJob:
     noise_std: float
     residual_physics: ResidualPhysics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    input_joints: Sequence[str] | None = None
+    output_joints: Sequence[str] | None = None
+    sample_dt_s: float | None = None
+    dynamic_bias_provider: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -76,44 +81,333 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "joint"
 
 
-def _load_sequences(job: TrainingJob) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
-    def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
-        required = (set(job.input_columns) - {"solver_pd"}) | set(job.source_target_columns)
-        if "solver_pd" in job.input_columns and job.model != "hybrid_residual":
-            required.add("solver_pd")
-        if job.model == "hybrid_residual":
-            required.update(("position_error", "velocity"))
-        table = load_training_table(
-            source,
-            joint=job.joint_type,
-            columns=sorted(required),
+def _validated_axes(
+    input_joints: Sequence[str],
+    output_joints: Sequence[str] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    inputs = tuple(input_joints)
+    outputs = tuple(output_joints) if output_joints is not None else inputs
+    if not inputs:
+        raise ValueError("GRU training requires at least one input joint")
+    if not outputs:
+        raise ValueError("GRU training requires at least one output joint")
+    if any(not isinstance(name, str) or not name for name in (*inputs, *outputs)):
+        raise ValueError("GRU joint names must be non-empty strings")
+    if len(set(inputs)) != len(inputs):
+        raise ValueError("input_joints must not contain duplicates")
+    if len(set(outputs)) != len(outputs):
+        raise ValueError("output_joints must not contain duplicates")
+    missing = [name for name in outputs if name not in inputs]
+    if missing:
+        raise ValueError(
+            "output_joints must be a subset of input_joints; missing: "
+            + ", ".join(missing)
         )
-        physics = job.residual_physics
-        solver_pd: np.ndarray | None = table.get("solver_pd")
-        if job.model == "hybrid_residual":
-            if physics is None:
-                raise ValueError("hybrid residual training requires residual physics parameters")
-            solver_pd = physics.stiffness * table["position_error"] - physics.damping * table["velocity"]
+    return inputs, outputs
 
-        feature_columns = [
-            solver_pd if column == "solver_pd" else table[column]
-            for column in job.input_columns
-        ]
-        features = np.column_stack(feature_columns).astype(np.float32)
-        if job.model == "hybrid_residual":
-            assert solver_pd is not None
-            torque = table[job.source_target_columns[0]]
-            friction = physics.dry_friction * np.sign(table["velocity"]) + physics.viscous_friction * table["velocity"]
-            target = (torque - solver_pd - friction).astype(np.float32)[:, None]
-        else:
-            target = np.column_stack([table[column] for column in job.source_target_columns]).astype(np.float32)
-        if len(features) == 0:
-            raise ValueError(f"training source has no rows: {source.path}")
-        return features, target
+
+def _source_axes(
+    job: TrainingJob,
+    source: TrainingSource | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if job.input_joints is not None:
+        return _validated_axes(job.input_joints, job.output_joints)
+    if job.output_joints is not None:
+        raise ValueError("output_joints requires input_joints")
+    if job.joint_type == "full":
+        if source is None or not source.joint:
+            raise ValueError(
+                "joint_type='full' training sources must be expanded to one joint per source"
+            )
+        name = source.joint
+    else:
+        name = source.joint if source is not None and source.joint else job.joint_type
+    return _validated_axes((name,), None)
+
+
+def _runtime_axes(job: TrainingJob) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if job.input_joints is not None:
+        return _validated_axes(job.input_joints, job.output_joints)
+    name = "actuator" if job.joint_type == "full" else job.joint_type
+    return _validated_axes((name,), None)
+
+
+def _sample_dt_s(job: TrainingJob) -> float:
+    value = job.sample_dt_s
+    if value is None:
+        value = job.metadata.get("sample_dt_s")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("GRU training requires sample_dt_s") from exc
+    if not math.isfinite(result) or result <= 0.0:
+        raise ValueError("sample_dt_s must be finite and greater than zero")
+    return result
+
+
+def _feature_widths(job: TrainingJob) -> tuple[int, ...]:
+    inputs, outputs = _runtime_axes(job)
+    return tuple(
+        len(outputs) if column == "previous_torque" else len(inputs)
+        for column in job.input_columns
+    )
+
+
+def _episode_array(
+    values: Any,
+    *,
+    name: str,
+    rows: int,
+    width: int,
+    source: str,
+) -> np.ndarray:
+    result = np.asarray(values, dtype=np.float32)
+    if result.shape != (rows, width):
+        raise ValueError(
+            f"{source} {name} has shape {result.shape}, expected {(rows, width)}"
+        )
+    if not np.isfinite(result).all():
+        raise ValueError(f"{source} {name} contains non-finite values")
+    return result
+
+
+def _apply_physics_baseline(
+    job: TrainingJob,
+    blocks: dict[str, np.ndarray],
+    target: np.ndarray,
+    *,
+    input_joints: Sequence[str],
+    output_joints: Sequence[str],
+    source: str,
+) -> np.ndarray:
+    needs_physics = job.model == "hybrid_residual" or "solver_pd" in job.input_columns
+    if not needs_physics:
+        return target
+    physics = job.residual_physics
+    if physics is None:
+        raise ValueError("residual and solver_pd training require residual physics parameters")
+    missing = [name for name in ("position_error", "velocity") if name not in blocks]
+    if missing:
+        raise ValueError(
+            f"{source} missing features required by the physics baseline: "
+            + ", ".join(missing)
+        )
+    blocks["solver_pd"] = (
+        physics.stiffness * blocks["position_error"]
+        - physics.damping * blocks["velocity"]
+    ).astype(np.float32)
+    if job.model != "hybrid_residual":
+        return target
+    output_indices = [input_joints.index(name) for name in output_joints]
+    output_velocity = blocks["velocity"][:, output_indices]
+    output_solver_pd = blocks["solver_pd"][:, output_indices]
+    friction = (
+        physics.dry_friction * np.sign(output_velocity)
+        + physics.viscous_friction * output_velocity
+    )
+    return (target - output_solver_pd - friction).astype(np.float32)
+
+
+def _flatten_feature_blocks(
+    job: TrainingJob,
+    blocks: dict[str, np.ndarray],
+    target: np.ndarray,
+    *,
+    rows: int,
+    input_width: int,
+    output_width: int,
+    source: str,
+) -> np.ndarray:
+    if "previous_torque" in job.input_columns:
+        previous_target = np.zeros_like(target, dtype=np.float32)
+        previous_target[1:] = target[:-1]
+        blocks["previous_torque"] = previous_target
+    ordered: list[np.ndarray] = []
+    for column in job.input_columns:
+        if column not in blocks:
+            raise ValueError(f"{source} missing required feature {column!r}")
+        expected_width = output_width if column == "previous_torque" else input_width
+        block = blocks[column]
+        if block.shape != (rows, expected_width):
+            raise ValueError(
+                f"{source} feature {column!r} has shape {block.shape}, "
+                f"expected {(rows, expected_width)}"
+            )
+        ordered.append(block)
+    if not ordered:
+        raise ValueError("GRU training requires at least one input feature")
+    features = np.concatenate(ordered, axis=1).astype(np.float32, copy=False)
+    if not np.isfinite(features).all():
+        raise ValueError(f"{source} contains non-finite training values")
+    return features
+
+
+def _prepare_episode(
+    job: TrainingJob,
+    episode: Any,
+    *,
+    source: TrainingSource | None = None,
+    source_name: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    input_joints, output_joints = _source_axes(job, source)
+    label = source_name or (str(source.path) if source is not None else "training episode")
+    episode_inputs = tuple(episode.input_joints)
+    episode_outputs = tuple(episode.output_joints)
+    if episode_inputs != input_joints:
+        raise ValueError(
+            f"{label} input joint order {episode_inputs} does not match {input_joints}"
+        )
+    if episode_outputs != output_joints:
+        raise ValueError(
+            f"{label} output joint order {episode_outputs} does not match {output_joints}"
+        )
+
+    timestamps = np.asarray(episode.timestamps, dtype=np.float64)
+    if timestamps.ndim != 1 or len(timestamps) == 0:
+        raise ValueError(f"{label} timestamps must be a non-empty one-dimensional array")
+    if not np.isfinite(timestamps).all():
+        raise ValueError(f"{label} timestamps contain non-finite values")
+    rows = len(timestamps)
+    input_width = len(input_joints)
+    output_width = len(output_joints)
+    raw_blocks = episode.feature_blocks
+    if not isinstance(raw_blocks, Mapping):
+        raise ValueError(f"{label} feature_blocks must be a mapping")
+
+    blocks: dict[str, np.ndarray] = {}
+    for name, values in raw_blocks.items():
+        blocks[name] = _episode_array(
+            values,
+            name=f"feature {name!r}",
+            rows=rows,
+            width=input_width,
+            source=label,
+        )
+    target = _episode_array(
+        episode.target_torque,
+        name="target_torque",
+        rows=rows,
+        width=output_width,
+        source=label,
+    )
+    target = _apply_physics_baseline(
+        job,
+        blocks,
+        target,
+        input_joints=input_joints,
+        output_joints=output_joints,
+        source=label,
+    )
+    features = _flatten_feature_blocks(
+        job,
+        blocks,
+        target,
+        rows=rows,
+        input_width=input_width,
+        output_width=output_width,
+        source=label,
+    )
+    return features, target
+
+
+_DYNAMIC_BIAS_JOINT_LIST_FIELDS = {
+    "trajectory_joint_names",
+    "requested_joint_names",
+    "mapped_joint_names",
+    "unmapped_trajectory_joint_names",
+    "defaulted_joint_names",
+}
+
+
+def _merge_dynamic_bias_provenance(
+    accumulated: dict[str, Any] | None,
+    episode: Mapping[str, Any],
+) -> dict[str, Any]:
+    stable = {
+        key: value
+        for key, value in episode.items()
+        if key not in _DYNAMIC_BIAS_JOINT_LIST_FIELDS
+    }
+    if accumulated is None:
+        result = dict(stable)
+        for key in _DYNAMIC_BIAS_JOINT_LIST_FIELDS:
+            values = episode.get(key, [])
+            if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+                raise ValueError(f"dynamic_bias provenance {key} must be a list of strings")
+            result[key] = sorted(set(values))
+        return result
+    existing_stable = {
+        key: value
+        for key, value in accumulated.items()
+        if key not in _DYNAMIC_BIAS_JOINT_LIST_FIELDS
+    }
+    if existing_stable != stable:
+        raise ValueError("stable dynamic_bias provenance differs between training episodes")
+    result = dict(accumulated)
+    for key in _DYNAMIC_BIAS_JOINT_LIST_FIELDS:
+        values = episode.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+            raise ValueError(f"dynamic_bias provenance {key} must be a list of strings")
+        result[key] = sorted(set(result.get(key, ())).union(values))
+    return result
+
+
+def _load_sequences(
+    job: TrainingJob,
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
+    from anchor_bench.training.data import load_training_episode
+
+    if not job.train_sources:
+        raise ValueError("TrainingJob requires at least one training sequence")
+    if job.source_target_columns != ["torque"]:
+        raise ValueError("grouped SAGE actuator training supports target_column='torque'")
+
+    loader_columns = [
+        column
+        for column in job.input_columns
+        if column not in {"solver_pd", "previous_torque"}
+    ]
+    if job.model == "hybrid_residual" or "solver_pd" in job.input_columns:
+        for required in ("position_error", "velocity"):
+            if required not in loader_columns:
+                loader_columns.append(required)
+
+    provenance: dict[str, Any] | None = None
+
+    def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
+        nonlocal provenance
+        input_joints, output_joints = _source_axes(job, source)
+        episode = load_training_episode(
+            source,
+            input_joints=input_joints,
+            output_joints=output_joints,
+            input_columns=loader_columns,
+            sample_dt_s=_sample_dt_s(job),
+            dynamic_bias_provider=job.dynamic_bias_provider,
+        )
+        if "dynamic_bias" in job.input_columns:
+            episode_provenance = episode.dynamic_bias_provenance
+            if not isinstance(episode_provenance, Mapping):
+                raise ValueError(
+                    f"{source.path} dynamic_bias episode is missing derivation provenance"
+                )
+            value = dict(episode_provenance)
+            provenance = _merge_dynamic_bias_provenance(provenance, value)
+        return _prepare_episode(job, episode, source=source)
 
     train = [load_one(source) for source in job.train_sources]
     val = [load_one(source) for source in job.val_sources]
+    if provenance is not None:
+        existing = job.metadata.get("dynamic_bias_derivation")
+        if existing is not None and existing != provenance:
+            raise ValueError("configured dynamic_bias provenance does not match episode provenance")
+        job.metadata["dynamic_bias_derivation"] = provenance
     return train, val
+
+
+def _scalar_or_list(values: np.ndarray) -> float | list[float]:
+    result = [float(value) for value in values]
+    return result[0] if len(result) == 1 else result
 
 
 def _normalization_stats(
@@ -122,30 +416,90 @@ def _normalization_stats(
     input_columns: Sequence[str],
     target_columns: Sequence[str],
     metadata: dict[str, Any],
+    input_widths: Sequence[int] | None = None,
+    target_width: int | None = None,
 ) -> dict[str, Any]:
+    reserved = {"schema_version", "input_columns", "target_columns", "normalization"}
+    collisions = sorted(reserved.intersection(metadata))
+    if collisions:
+        raise ValueError(
+            "training metadata cannot override reserved fields: " + ", ".join(collisions)
+        )
+    if not sequences:
+        raise ValueError("normalization requires at least one training sequence")
+    if len(target_columns) != 1:
+        raise ValueError("GRU runtime artifacts require exactly one semantic target column")
     inputs = np.concatenate([item[0] for item in sequences], axis=0)
     targets = np.concatenate([item[1] for item in sequences], axis=0)
+    widths = tuple(input_widths or (1 for _ in input_columns))
+    if len(widths) != len(input_columns) or any(width <= 0 for width in widths):
+        raise ValueError("input normalization widths must match input_columns")
+    if sum(widths) != inputs.shape[1]:
+        raise ValueError(
+            f"input normalization widths sum to {sum(widths)}, expected {inputs.shape[1]}"
+        )
+    resolved_target_width = target_width or targets.shape[1]
+    if resolved_target_width != targets.shape[1] or resolved_target_width <= 0:
+        raise ValueError(
+            f"target normalization width is {resolved_target_width}, expected {targets.shape[1]}"
+        )
     input_mean = inputs.mean(axis=0)
     input_std = np.maximum(inputs.std(axis=0), EPSILON_STD)
     target_mean = targets.mean(axis=0)
     target_std = np.maximum(targets.std(axis=0), EPSILON_STD)
+    offsets = np.cumsum((0, *widths))
+    input_means = {
+        column: _scalar_or_list(input_mean[offsets[index]:offsets[index + 1]])
+        for index, column in enumerate(input_columns)
+    }
+    input_stds = {
+        column: _scalar_or_list(input_std[offsets[index]:offsets[index + 1]])
+        for index, column in enumerate(input_columns)
+    }
+    target = target_columns[0]
     stats = {
         "schema_version": 1,
         "input_columns": list(input_columns),
         "target_columns": list(target_columns),
         "normalization": {
             "inputs": {
-                "mean": {column: float(input_mean[idx]) for idx, column in enumerate(input_columns)},
-                "std": {column: float(input_std[idx]) for idx, column in enumerate(input_columns)},
+                "mean": input_means,
+                "std": input_stds,
             },
             "targets": {
-                "mean": {column: float(target_mean[idx]) for idx, column in enumerate(target_columns)},
-                "std": {column: float(target_std[idx]) for idx, column in enumerate(target_columns)},
+                "mean": {target: _scalar_or_list(target_mean)},
+                "std": {target: _scalar_or_list(target_std)},
             },
         },
     }
     stats.update(metadata)
     return stats
+
+
+def _stat_vector(
+    values: Mapping[str, Any],
+    *,
+    columns: Sequence[str],
+    widths: Sequence[int],
+    name: str,
+) -> np.ndarray:
+    flattened: list[float] = []
+    for column, width in zip(columns, widths, strict=True):
+        value = values.get(column)
+        if width == 1 and not isinstance(value, list):
+            raw = [value]
+        elif isinstance(value, list) and len(value) == width:
+            raw = value
+        else:
+            raise ValueError(f"{name}.{column} must contain {width} value(s)")
+        try:
+            numbers = [float(item) for item in raw]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name}.{column} must contain numeric values") from exc
+        if not all(math.isfinite(item) for item in numbers):
+            raise ValueError(f"{name}.{column} must contain finite values")
+        flattened.extend(numbers)
+    return np.asarray(flattened, dtype=np.float32)
 
 
 def _normalize_sequences(
@@ -154,13 +508,41 @@ def _normalize_sequences(
     *,
     input_columns: Sequence[str],
     target_columns: Sequence[str],
+    input_widths: Sequence[int] | None = None,
+    target_width: int | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
+    if len(target_columns) != 1:
+        raise ValueError("GRU runtime artifacts require exactly one semantic target column")
     input_norm = stats["normalization"]["inputs"]
     target_norm = stats["normalization"]["targets"]
-    input_mean = np.array([input_norm["mean"][column] for column in input_columns], dtype=np.float32)
-    input_std = np.array([input_norm["std"][column] for column in input_columns], dtype=np.float32)
-    target_mean = np.array([target_norm["mean"][column] for column in target_columns], dtype=np.float32)
-    target_std = np.array([target_norm["std"][column] for column in target_columns], dtype=np.float32)
+    widths = tuple(input_widths or (1 for _ in input_columns))
+    resolved_target_width = target_width or sequences[0][1].shape[1]
+    input_mean = _stat_vector(
+        input_norm["mean"],
+        columns=input_columns,
+        widths=widths,
+        name="normalization.inputs.mean",
+    )
+    input_std = _stat_vector(
+        input_norm["std"],
+        columns=input_columns,
+        widths=widths,
+        name="normalization.inputs.std",
+    )
+    target_mean = _stat_vector(
+        target_norm["mean"],
+        columns=target_columns,
+        widths=(resolved_target_width,),
+        name="normalization.targets.mean",
+    )
+    target_std = _stat_vector(
+        target_norm["std"],
+        columns=target_columns,
+        widths=(resolved_target_width,),
+        name="normalization.targets.std",
+    )
+    if np.any(input_std <= 0.0) or np.any(target_std <= 0.0):
+        raise ValueError("normalization standard deviations must be greater than zero")
     return [((inputs - input_mean) / input_std, (targets - target_mean) / target_std) for inputs, targets in sequences]
 
 
@@ -210,6 +592,87 @@ def _run_epoch(torch, model, optimizer, loss_fn, sequences, hparams, *, train: b
     return float(sum(losses) / max(1, len(losses)))
 
 
+def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]:
+    if len(job.target_columns) != 1:
+        raise ValueError("GRU runtime artifacts require exactly one semantic target column")
+    input_joints, output_joints = _runtime_axes(job)
+    semantic_target = "torque_residual" if job.model == "hybrid_residual" else "torque"
+    source_target = job.target_columns[0]
+    normalization = stats["normalization"]
+    delay = job.metadata.get(
+        "delay",
+        {"handling": "learned", "training_delay_s": 0.0},
+    )
+    if not isinstance(delay, Mapping):
+        raise ValueError("training metadata delay must be a mapping")
+    if delay.get("handling") != "learned":
+        raise ValueError("GRU actuator training requires delay.handling='learned'")
+    try:
+        training_delay_s = float(delay.get("training_delay_s", 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("delay.training_delay_s must be numeric") from exc
+    if not math.isfinite(training_delay_s) or training_delay_s < 0.0:
+        raise ValueError("delay.training_delay_s must be finite and nonnegative")
+
+    runtime: dict[str, Any] = {
+        "schema_version": 1,
+        "model_type": "gru",
+        "joint_names": list(input_joints),
+        "output_joint_names": list(output_joints),
+        "input_columns": list(job.input_columns),
+        "target_columns": [semantic_target],
+        "sample_dt_s": _sample_dt_s(job),
+        "normalization": {
+            "inputs": normalization["inputs"],
+            "targets": {
+                "mean": {
+                    semantic_target: normalization["targets"]["mean"][source_target]
+                },
+                "std": {
+                    semantic_target: normalization["targets"]["std"][source_target]
+                },
+            },
+        },
+        "delay": {
+            "handling": "learned",
+            "training_delay_s": training_delay_s,
+            "external_delay_s": 0.0,
+        },
+    }
+    if "dynamic_bias" in job.input_columns:
+        derivation = job.metadata.get("dynamic_bias_derivation")
+        if not isinstance(derivation, Mapping):
+            raise ValueError("dynamic_bias training requires derivation provenance")
+        runtime["dynamic_bias_derivation"] = dict(derivation)
+    if "previous_torque" in job.input_columns:
+        runtime["previous_torque_derivation"] = {
+            "source": "previous_target",
+            "runtime_source": "previous_raw_network_output_pre_clamp",
+            "initialization": "physical_zero",
+            "reset": "episode",
+            "value_space": "physical_torque",
+        }
+
+    needs_pd = semantic_target == "torque_residual" or "solver_pd" in job.input_columns
+    physics = job.residual_physics
+    if needs_pd and physics is None:
+        raise ValueError("residual and solver_pd models require residual physics parameters")
+    if needs_pd:
+        assert physics is not None
+        runtime["pd_baseline"] = {
+            "kp": float(physics.stiffness),
+            "kd": float(physics.damping),
+            "velocity_target": "zero",
+        }
+    if semantic_target == "torque_residual":
+        assert physics is not None
+        runtime["friction_baseline"] = {
+            "dry": float(physics.dry_friction),
+            "viscous": float(physics.viscous_friction),
+        }
+    return runtime
+
+
 def _fit_once(
     job: TrainingJob,
     hparams: TrainingHyperParameters,
@@ -227,7 +690,22 @@ def _fit_once(
     except Exception:
         pass
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = _build_model(torch, len(job.input_columns), len(job.target_columns), hparams).to(device)
+    if not train_sequences:
+        raise ValueError("TrainingJob requires at least one training sequence")
+    input_size = train_sequences[0][0].shape[1]
+    output_size = train_sequences[0][1].shape[1]
+    for features, targets in (*train_sequences, *val_sequences):
+        if features.ndim != 2 or features.shape[1] != input_size:
+            raise ValueError("all GRU training sequences must have the same input width")
+        if targets.ndim != 2 or targets.shape[1] != output_size:
+            raise ValueError("all GRU training sequences must have the same output width")
+        if len(features) != len(targets):
+            raise ValueError("GRU input and target sequences must have the same row count")
+    expected_input_size = sum(_feature_widths(job))
+    _, output_joints = _runtime_axes(job)
+    if input_size != expected_input_size or output_size != len(output_joints):
+        raise ValueError("assembled GRU tensor dimensions do not match the configured joint axes")
+    model = _build_model(torch, input_size, output_size, hparams).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=hparams.learning_rate, weight_decay=hparams.weight_decay)
     loss_fn = torch.nn.HuberLoss(delta=hparams.huber_delta)
     best_val = math.inf
@@ -269,7 +747,12 @@ def _fit_once(
         "model_state_dict": model.state_dict(),
         "input_columns": job.input_columns,
         "target_columns": job.target_columns,
+        "input_size": input_size,
+        "output_size": output_size,
+        "input_joints": list(_runtime_axes(job)[0]),
+        "output_joints": list(_runtime_axes(job)[1]),
         "normalization": stats["normalization"],
+        "runtime_metadata": _runtime_metadata(job, stats),
         "hyperparameters": hparams.__dict__,
         "metrics": metrics,
     }
@@ -328,6 +811,8 @@ def _select_hparams(
 
 def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
     train_raw, val_raw = _load_sequences(job)
+    input_widths = _feature_widths(job)
+    output_width = len(_runtime_axes(job)[1])
     stats = _normalization_stats(
         train_raw,
         input_columns=job.input_columns,
@@ -342,12 +827,24 @@ def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
                 "n_streams": job.n_streams,
             },
         },
+        input_widths=input_widths,
+        target_width=output_width,
     )
     train_sequences = _normalize_sequences(
-        train_raw, stats, input_columns=job.input_columns, target_columns=job.target_columns
+        train_raw,
+        stats,
+        input_columns=job.input_columns,
+        target_columns=job.target_columns,
+        input_widths=input_widths,
+        target_width=output_width,
     )
     val_sequences = _normalize_sequences(
-        val_raw, stats, input_columns=job.input_columns, target_columns=job.target_columns
+        val_raw,
+        stats,
+        input_columns=job.input_columns,
+        target_columns=job.target_columns,
+        input_widths=input_widths,
+        target_width=output_width,
     ) if val_raw else []
     hparams = _select_hparams(job, train_sequences, val_sequences, stats)
     _, artifacts = _fit_once(

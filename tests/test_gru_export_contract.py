@@ -1,0 +1,543 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import tempfile
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+
+from anchor_bench.training.trainer import (
+    ResidualPhysics,
+    TrainingJob,
+    _merge_dynamic_bias_provenance,
+    _normalization_stats,
+    _prepare_episode,
+    _runtime_metadata,
+)
+
+
+def _job(
+    *,
+    model: str = "gru",
+    input_joints: tuple[str, ...] = ("j0",),
+    output_joints: tuple[str, ...] | None = None,
+    input_columns: tuple[str, ...] = ("position",),
+    physics: ResidualPhysics | None = None,
+) -> TrainingJob:
+    return TrainingJob(
+        model=model,
+        joint_type="grouped",
+        train_sources=[],
+        val_sources=[],
+        output_dir=Path("unused"),
+        input_columns=list(input_columns),
+        target_columns=["torque_residual" if model == "hybrid_residual" else "torque"],
+        source_target_columns=["torque"],
+        seed=1,
+        final_epochs=1,
+        trial_epochs=1,
+        trials=1,
+        skip_optuna=True,
+        n_streams=1,
+        noise_std=0.0,
+        residual_physics=physics,
+        input_joints=input_joints,
+        output_joints=output_joints,
+        sample_dt_s=0.01,
+        metadata={"delay": {"handling": "learned", "training_delay_s": 0.0}},
+    )
+
+
+def _episode(
+    *,
+    input_joints: tuple[str, ...],
+    output_joints: tuple[str, ...],
+    blocks: dict[str, np.ndarray],
+    target: np.ndarray,
+):
+    return SimpleNamespace(
+        timestamps=np.arange(len(target), dtype=np.float64) * 0.01,
+        input_joints=input_joints,
+        output_joints=output_joints,
+        feature_blocks=blocks,
+        target_torque=target,
+        dynamic_bias_provenance=None,
+    )
+
+
+class GruEpisodeAssemblyTests(unittest.TestCase):
+    def test_miso_is_feature_major_and_previous_target_has_output_width(self):
+        job = _job(
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            input_columns=("position", "velocity", "previous_torque"),
+        )
+        episode = _episode(
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            blocks={
+                "position": np.array([[1, 2], [3, 4], [5, 6]], dtype=np.float32),
+                "velocity": np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]], dtype=np.float32),
+            },
+            target=np.array([[10], [20], [30]], dtype=np.float32),
+        )
+
+        features, target = _prepare_episode(job, episode)
+
+        np.testing.assert_allclose(
+            features,
+            [
+                [1, 2, 0.1, 0.2, 0],
+                [3, 4, 0.3, 0.4, 10],
+                [5, 6, 0.5, 0.6, 20],
+            ],
+        )
+        np.testing.assert_allclose(target, [[10], [20], [30]])
+
+    def test_mimo_preserves_explicit_output_order(self):
+        job = _job(
+            input_joints=("j0", "j1"),
+            output_joints=("j1", "j0"),
+            input_columns=("position", "previous_torque"),
+        )
+        episode = _episode(
+            input_joints=("j0", "j1"),
+            output_joints=("j1", "j0"),
+            blocks={"position": np.array([[1, 2], [3, 4]], dtype=np.float32)},
+            target=np.array([[20, 10], [40, 30]], dtype=np.float32),
+        )
+
+        features, target = _prepare_episode(job, episode)
+
+        np.testing.assert_allclose(features, [[1, 2, 0, 0], [3, 4, 20, 10]])
+        np.testing.assert_allclose(target, [[20, 10], [40, 30]])
+
+    def test_residual_target_is_computed_before_previous_target(self):
+        physics = ResidualPhysics(
+            stiffness=2.0,
+            damping=1.0,
+            dry_friction=0.5,
+            viscous_friction=0.25,
+        )
+        job = _job(
+            model="hybrid_residual",
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            input_columns=("solver_pd", "previous_torque"),
+            physics=physics,
+        )
+        episode = _episode(
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            blocks={
+                "position_error": np.array([[1, 2], [3, 4]], dtype=np.float32),
+                "velocity": np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+            },
+            target=np.array([[10], [20]], dtype=np.float32),
+        )
+
+        features, target = _prepare_episode(job, episode)
+
+        np.testing.assert_allclose(target[:, 0], [5.65, 11.8], atol=1.0e-6)
+        np.testing.assert_allclose(
+            features,
+            [[1.9, 3.8, 0.0], [5.7, 7.6, 5.65]],
+            atol=1.0e-6,
+        )
+
+    def test_previous_torque_resets_to_zero_for_each_episode(self):
+        job = _job(
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            input_columns=("position", "previous_torque"),
+        )
+        episodes = [
+            _episode(
+                input_joints=("j0", "j1"),
+                output_joints=("j1",),
+                blocks={"position": np.array([[1, 2], [3, 4]], dtype=np.float32)},
+                target=np.array([[10], [20]], dtype=np.float32),
+            ),
+            _episode(
+                input_joints=("j0", "j1"),
+                output_joints=("j1",),
+                blocks={"position": np.array([[5, 6], [7, 8]], dtype=np.float32)},
+                target=np.array([[30], [40]], dtype=np.float32),
+            ),
+        ]
+
+        first_features, _ = _prepare_episode(job, episodes[0])
+        second_features, _ = _prepare_episode(job, episodes[1])
+
+        self.assertEqual(0.0, first_features[0, -1])
+        self.assertEqual(10.0, first_features[1, -1])
+        self.assertEqual(0.0, second_features[0, -1])
+        self.assertEqual(30.0, second_features[1, -1])
+
+    def test_normalization_uses_input_and_output_feature_domains(self):
+        sequences = [
+            (
+                np.array([[1, 10, 100], [3, 14, 200]], dtype=np.float32),
+                np.array([[5], [9]], dtype=np.float32),
+            )
+        ]
+        stats = _normalization_stats(
+            sequences,
+            input_columns=["position", "previous_torque"],
+            target_columns=["torque"],
+            metadata={},
+            input_widths=(2, 1),
+            target_width=1,
+        )
+
+        self.assertEqual([2.0, 12.0], stats["normalization"]["inputs"]["mean"]["position"])
+        self.assertEqual(150.0, stats["normalization"]["inputs"]["mean"]["previous_torque"])
+        self.assertEqual(7.0, stats["normalization"]["targets"]["mean"]["torque"])
+
+        with self.assertRaisesRegex(ValueError, "cannot override reserved fields"):
+            _normalization_stats(
+                sequences,
+                input_columns=["position", "previous_torque"],
+                target_columns=["torque"],
+                metadata={"normalization": {}},
+                input_widths=(2, 1),
+                target_width=1,
+            )
+
+    def test_runtime_metadata_describes_miso_axes_and_previous_target(self):
+        job = _job(
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            input_columns=("position", "previous_torque"),
+        )
+        stats = {
+            "normalization": {
+                "inputs": {
+                    "mean": {"position": [0.0, 0.0], "previous_torque": 0.0},
+                    "std": {"position": [1.0, 1.0], "previous_torque": 1.0},
+                },
+                "targets": {"mean": {"torque": 0.0}, "std": {"torque": 1.0}},
+            }
+        }
+
+        metadata = _runtime_metadata(job, stats)
+
+        self.assertEqual(["j0", "j1"], metadata["joint_names"])
+        self.assertEqual(["j1"], metadata["output_joint_names"])
+        self.assertEqual("previous_target", metadata["previous_torque_derivation"]["source"])
+        self.assertEqual("physical_zero", metadata["previous_torque_derivation"]["initialization"])
+        self.assertEqual(
+            "previous_raw_network_output_pre_clamp",
+            metadata["previous_torque_derivation"]["runtime_source"],
+        )
+        self.assertEqual("learned", metadata["delay"]["handling"])
+
+    def test_dynamic_bias_provenance_unions_episode_joint_sets(self):
+        first = _merge_dynamic_bias_provenance(
+            None,
+            {
+                "source": "fake",
+                "trajectory_joint_names": ["j0", "j1"],
+                "requested_joint_names": ["j0"],
+                "mapped_joint_names": ["j0", "j1"],
+                "unmapped_trajectory_joint_names": [],
+                "defaulted_joint_names": ["j2"],
+            },
+        )
+        merged = _merge_dynamic_bias_provenance(
+            first,
+            {
+                "source": "fake",
+                "trajectory_joint_names": ["j0", "j3"],
+                "requested_joint_names": ["j0"],
+                "mapped_joint_names": ["j0"],
+                "unmapped_trajectory_joint_names": ["j3"],
+                "defaulted_joint_names": ["j1", "j2"],
+            },
+        )
+
+        self.assertEqual(["j0", "j1", "j3"], merged["trajectory_joint_names"])
+        self.assertEqual(["j3"], merged["unmapped_trajectory_joint_names"])
+        self.assertEqual(["j1", "j2"], merged["defaulted_joint_names"])
+
+    def test_generic_full_dynamic_bias_accepts_concrete_source_joint_provenance(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        base = _job(input_columns=("dynamic_bias",))
+        job = replace(
+            base,
+            joint_type="full",
+            input_joints=None,
+            output_joints=None,
+            metadata={
+                "delay": {"handling": "learned", "training_delay_s": 0.0},
+                "dynamic_bias_derivation": {
+                    "source": "fake",
+                    "trajectory_joint_names": ["j0", "j1"],
+                    "requested_joint_names": ["j0", "j1"],
+                    "mapped_joint_names": ["j0", "j1"],
+                    "unmapped_trajectory_joint_names": [],
+                    "defaulted_joint_names": [],
+                },
+            },
+        )
+        stats = {
+            "normalization": {
+                "inputs": {
+                    "mean": {"dynamic_bias": 0.0},
+                    "std": {"dynamic_bias": 1.0},
+                },
+                "targets": {
+                    "mean": {"torque": 0.0},
+                    "std": {"torque": 1.0},
+                },
+            }
+        }
+
+        metadata = _runtime_metadata(job, stats)
+
+        self.assertEqual(["actuator"], metadata["joint_names"])
+        _validate_runtime_metadata(metadata, input_size=1, output_size=1)
+
+
+class GruExportContractTests(unittest.TestCase):
+    def _metadata(self) -> dict:
+        return {
+            "schema_version": 1,
+            "model_type": "gru",
+            "joint_names": ["j0", "j1"],
+            "output_joint_names": ["j1"],
+            "input_columns": ["position", "previous_torque"],
+            "target_columns": ["torque"],
+            "sample_dt_s": 0.01,
+            "normalization": {
+                "inputs": {
+                    "mean": {"position": [0.0, 0.0], "previous_torque": 0.0},
+                    "std": {"position": [1.0, 1.0], "previous_torque": 1.0},
+                },
+                "targets": {"mean": {"torque": 0.0}, "std": {"torque": 1.0}},
+            },
+            "delay": {"handling": "learned", "training_delay_s": 0.0},
+            "previous_torque_derivation": {
+                "source": "previous_target",
+                "runtime_source": "previous_raw_network_output_pre_clamp",
+                "initialization": "physical_zero",
+                "reset": "episode",
+                "value_space": "physical_torque",
+            },
+        }
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
+    def test_export_embeds_metadata_and_uses_explicit_dimensions(self):
+        import torch
+
+        from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "model_best.pt"
+            model = build_runtime_gru(
+                input_size=3, output_size=1, hidden_size=4, num_layers=1, dropout=0.0
+            )
+            runtime_metadata = self._metadata()
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "input_columns": ["position", "previous_torque"],
+                    "target_columns": ["torque"],
+                    "input_size": 3,
+                    "output_size": 1,
+                    "normalization": runtime_metadata["normalization"],
+                    "runtime_metadata": runtime_metadata,
+                    "hyperparameters": {"hidden_size": 4, "num_layers": 1, "dropout": 0.0},
+                },
+                checkpoint_path,
+            )
+
+            network_path = export_gru_checkpoint(checkpoint_path)
+            extra_files = {"metadata.json": ""}
+            network = torch.jit.load(str(network_path), _extra_files=extra_files)
+
+        metadata = json.loads(extra_files["metadata.json"].decode("utf-8"))
+        self.assertEqual(["j1"], metadata["output_joint_names"])
+        output, hidden = network(torch.zeros(2, 1, 3), torch.zeros(1, 2, 4))
+        self.assertEqual((2, 1, 1), tuple(output.shape))
+        self.assertEqual((1, 2, 4), tuple(hidden.shape))
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
+    def test_siso_and_mimo_exports_have_deterministic_shapes(self):
+        import torch
+
+        from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
+
+        siso = self._metadata()
+        siso.update(
+            {
+                "joint_names": ["j0"],
+                "output_joint_names": ["j0"],
+                "input_columns": ["position"],
+                "normalization": {
+                    "inputs": {"mean": {"position": 0.0}, "std": {"position": 1.0}},
+                    "targets": {"mean": {"torque": 0.0}, "std": {"torque": 1.0}},
+                },
+            }
+        )
+        siso.pop("previous_torque_derivation")
+        mimo = self._metadata()
+        mimo["output_joint_names"] = ["j0", "j1"]
+        mimo["normalization"] = {
+            "inputs": {
+                "mean": {"position": [0.0, 0.0], "previous_torque": [0.0, 0.0]},
+                "std": {"position": [1.0, 1.0], "previous_torque": [1.0, 1.0]},
+            },
+            "targets": {
+                "mean": {"torque": [0.0, 0.0]},
+                "std": {"torque": [1.0, 1.0]},
+            },
+        }
+        cases = [
+            ("siso", siso, 1, 1),
+            ("mimo", mimo, 4, 2),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, metadata, input_size, output_size in cases:
+                with self.subTest(name=name):
+                    torch.manual_seed(7)
+                    model = build_runtime_gru(
+                        input_size=input_size,
+                        output_size=output_size,
+                        hidden_size=4,
+                        num_layers=1,
+                        dropout=0.0,
+                    )
+                    checkpoint_path = Path(tmp) / f"{name}_best.pt"
+                    torch.save(
+                        {
+                            "model_state_dict": model.state_dict(),
+                            "input_columns": metadata["input_columns"],
+                            "target_columns": ["torque"],
+                            "input_size": input_size,
+                            "output_size": output_size,
+                            "normalization": metadata["normalization"],
+                            "runtime_metadata": metadata,
+                            "hyperparameters": {
+                                "hidden_size": 4,
+                                "num_layers": 1,
+                                "dropout": 0.0,
+                            },
+                        },
+                        checkpoint_path,
+                    )
+                    network = torch.jit.load(str(export_gru_checkpoint(checkpoint_path)))
+                    features = torch.zeros(2, 3, input_size)
+                    hidden = torch.zeros(1, 2, 4)
+                    first, _ = network(features, hidden)
+                    second, _ = network(features, hidden)
+                    self.assertEqual((2, 3, output_size), tuple(first.shape))
+                    torch.testing.assert_close(first, second, rtol=0.0, atol=0.0)
+
+    def test_export_rejects_metadata_dimension_mismatch(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        with self.assertRaisesRegex(ValueError, "metadata requires 3"):
+            _validate_runtime_metadata(self._metadata(), input_size=4, output_size=1)
+
+    def test_checkpoint_contract_rejects_same_width_semantic_mismatches(self):
+        from anchor_bench.training.export import _validate_checkpoint_contract
+
+        metadata = self._metadata()
+        base = {
+            "input_columns": metadata["input_columns"],
+            "target_columns": metadata["target_columns"],
+            "input_joints": metadata["joint_names"],
+            "output_joints": metadata["output_joint_names"],
+            "normalization": metadata["normalization"],
+        }
+        cases = [
+            (
+                "input_columns",
+                {**base, "input_columns": ["velocity", "previous_torque"]},
+            ),
+            (
+                "target_columns",
+                {**base, "target_columns": ["torque_residual"]},
+            ),
+            (
+                "input_joints",
+                {**base, "input_joints": ["j1", "j0"]},
+            ),
+            (
+                "normalization",
+                {
+                    **base,
+                    "normalization": {
+                        **base["normalization"],
+                        "targets": {"mean": {"torque": 1.0}, "std": {"torque": 1.0}},
+                    },
+                },
+            ),
+        ]
+        for label, checkpoint in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, label):
+                _validate_checkpoint_contract(checkpoint, metadata)
+
+    def test_export_validation_rejects_unsupported_features_and_missing_baselines(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        unsupported = self._metadata()
+        unsupported["input_columns"] = ["mystery"]
+        with self.assertRaisesRegex(ValueError, "unsupported input features"):
+            _validate_runtime_metadata(unsupported, input_size=2, output_size=1)
+
+        duplicate = self._metadata()
+        duplicate["input_columns"] = ["position", "position"]
+        with self.assertRaisesRegex(ValueError, "must not contain duplicates"):
+            _validate_runtime_metadata(duplicate, input_size=4, output_size=1)
+
+        nonfinite = self._metadata()
+        nonfinite["normalization"]["inputs"]["mean"]["previous_torque"] = float("nan")
+        with self.assertRaisesRegex(ValueError, "must contain finite values"):
+            _validate_runtime_metadata(nonfinite, input_size=3, output_size=1)
+
+        residual = self._metadata()
+        residual["target_columns"] = ["torque_residual"]
+        residual["normalization"]["targets"] = {
+            "mean": {"torque_residual": 0.0},
+            "std": {"torque_residual": 1.0},
+        }
+        with self.assertRaisesRegex(ValueError, "pd_baseline"):
+            _validate_runtime_metadata(residual, input_size=3, output_size=1)
+
+        invalid_delay = self._metadata()
+        invalid_delay["delay"]["handling"] = "none"
+        with self.assertRaisesRegex(ValueError, "handling must be 'learned'"):
+            _validate_runtime_metadata(invalid_delay, input_size=3, output_size=1)
+
+    def test_export_validation_requires_feature_derivations(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        dynamic = self._metadata()
+        dynamic["input_columns"] = ["dynamic_bias"]
+        dynamic["normalization"]["inputs"] = {
+            "mean": {"dynamic_bias": [0.0, 0.0]},
+            "std": {"dynamic_bias": [1.0, 1.0]},
+        }
+        dynamic.pop("previous_torque_derivation")
+        with self.assertRaisesRegex(ValueError, "dynamic_bias_derivation"):
+            _validate_runtime_metadata(dynamic, input_size=2, output_size=1)
+
+        previous = self._metadata()
+        previous["previous_torque_derivation"] = {
+            **previous["previous_torque_derivation"],
+            "value_space": "normalized",
+        }
+        with self.assertRaisesRegex(ValueError, "previous_torque_derivation is inconsistent"):
+            _validate_runtime_metadata(previous, input_size=3, output_size=1)
+
+
+if __name__ == "__main__":
+    unittest.main()

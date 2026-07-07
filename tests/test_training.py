@@ -18,13 +18,14 @@ def _write_sage_motion(root: Path, length: int = 8) -> None:
     control = ["type,timestamp,positions"]
     state = ["type,timestamp,positions,velocities,torques"]
     for index in range(length):
+        timestamp = index * 0.002
         position = 0.1 * index
         command = 1.0
         velocity = 0.05 * index
         torque = 2.0 * (command - position) - 0.25 * velocity
-        control.append(f'CONTROL,{index},"[{command}]"')
+        control.append(f'CONTROL,{timestamp},"[{command}]"')
         state.append(
-            f'STATE_MOTOR,{index},"[{position}]","[{velocity}]","[{torque}]"'
+            f'STATE_MOTOR,{timestamp},"[{position}]","[{velocity}]","[{torque}]"'
         )
     (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
     (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
@@ -177,15 +178,16 @@ class TrainingRunnerTests(unittest.TestCase):
         resolved = resolve_train_actuator_run_config(
             TrainActuatorRunConfig(
                 robot="so101",
+                joint_type="Rotation",
                 data="inputs/datasets/so101/custom_figure8_with_camera",
                 input_columns=["position", "solver_pd"],
-                target_column="measured_torque",
+                target_column="torque",
                 dry_run=True,
             )
         )
 
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
-        self.assertEqual("measured_torque", resolved.target_column)
+        self.assertEqual("torque", resolved.target_column)
 
     @unittest.skipUnless(
         importlib.util.find_spec("torch"),
@@ -224,6 +226,7 @@ class TrainingRunnerTests(unittest.TestCase):
             stats = json.loads((output_dir / "gru_Rotation_stats.json").read_text(encoding="utf-8"))
             self.assertEqual("gru", stats["model"])
             self.assertEqual("Rotation", stats["joint_type"])
+            self.assertEqual(0.002, stats["sample_dt_s"])
             self.assertIn("network", plan.metadata["artifacts"])
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export test requires torch")
@@ -236,6 +239,38 @@ class TrainingRunnerTests(unittest.TestCase):
             root = Path(tmp)
             checkpoint_path = root / "gru_demo_best.pt"
             model = build_runtime_gru(input_size=3, output_size=1, hidden_size=4, num_layers=1, dropout=0.0)
+            runtime_metadata = {
+                "schema_version": 1,
+                "model_type": "gru",
+                "joint_names": ["demo"],
+                "output_joint_names": ["demo"],
+                "input_columns": ["position", "position_error", "velocity"],
+                "target_columns": ["torque"],
+                "sample_dt_s": 0.002,
+                "normalization": {
+                    "inputs": {
+                        "mean": {
+                            "position": 0.0,
+                            "position_error": 0.0,
+                            "velocity": 0.0,
+                        },
+                        "std": {
+                            "position": 1.0,
+                            "position_error": 1.0,
+                            "velocity": 1.0,
+                        },
+                    },
+                    "targets": {
+                        "mean": {"torque": 0.0},
+                        "std": {"torque": 1.0},
+                    },
+                },
+                "delay": {
+                    "handling": "learned",
+                    "training_delay_s": 0.0,
+                    "external_delay_s": 0.0,
+                },
+            }
             torch.save(
                 {
                     "model": "gru",
@@ -243,6 +278,10 @@ class TrainingRunnerTests(unittest.TestCase):
                     "model_state_dict": model.state_dict(),
                     "input_columns": ["position", "position_error", "velocity"],
                     "target_columns": ["torque"],
+                    "input_size": 3,
+                    "output_size": 1,
+                    "normalization": runtime_metadata["normalization"],
+                    "runtime_metadata": runtime_metadata,
                     "hyperparameters": {"hidden_size": 4, "num_layers": 1, "dropout": 0.0},
                 },
                 checkpoint_path,
@@ -252,7 +291,8 @@ class TrainingRunnerTests(unittest.TestCase):
             extra_files = {"metadata.json": ""}
             network = torch.jit.load(str(network_path), _extra_files=extra_files)
             self.assertTrue(hasattr(network, "gru"))
-            self.assertEqual("", extra_files["metadata.json"].decode("utf-8"))
+            embedded = json.loads(extra_files["metadata.json"].decode("utf-8"))
+            self.assertEqual(runtime_metadata, embedded)
             output, hidden = network(torch.zeros(2, 1, 3), torch.zeros(1, 2, 4))
             self.assertEqual((2, 1, 1), tuple(output.shape))
             self.assertEqual((1, 2, 4), tuple(hidden.shape))

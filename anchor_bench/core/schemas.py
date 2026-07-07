@@ -5,7 +5,12 @@ from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
-from anchor_bench.core.config_model import ConfigModel, parse_gru_columns
+from anchor_bench.core.config_model import (
+    ConfigModel,
+    parse_gru_columns,
+    parse_gru_training_columns,
+    parse_joint_names,
+)
 from anchor_bench.core.experiment_schema import (
     ExperimentActuatorModel,
     ExperimentAnalysis,
@@ -23,6 +28,8 @@ from anchor_bench.core.run_schema import (
     SimulationDefaults,
     SysIdDefaults,
     TrainingDefaults,
+    TrainingFrictionBaseline,
+    TrainingPDBaseline,
 )
 
 
@@ -184,6 +191,12 @@ class TrainActuatorRunConfig:
     data: str | None = None
     output: str | None = None
     joint_type: str | None = None
+    input_joints: list[str] | None = None
+    output_joints: list[str] | None = None
+    pd_kp: float | None = None
+    pd_kd: float | None = None
+    friction_dry: float | None = None
+    friction_viscous: float | None = None
     input_columns: list[str] | None = None
     target_column: str | None = None
     dry_run: bool = True
@@ -194,6 +207,19 @@ class TrainActuatorRunConfig:
     n_streams: int | None = None
     noise_std: float | None = None
     seed: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.input_joints is not None:
+            parse_joint_names(self.input_joints)
+        if self.output_joints is not None:
+            parse_joint_names(self.output_joints)
+        if self.input_columns is not None:
+            parse_gru_training_columns(self.input_columns)
+        if (
+            self.joint_type is not None
+            and (self.input_joints is not None or self.output_joints is not None)
+        ):
+            raise ValueError("joint_type cannot be combined with input_joints or output_joints")
 
 
 @dataclass(frozen=True)
@@ -236,5 +262,7 @@ __all__ = [
     "SysIdDefaults",
     "SysIdRunConfig",
     "TrainingDefaults",
+    "TrainingFrictionBaseline",
+    "TrainingPDBaseline",
     "TrainActuatorRunConfig",
 ]

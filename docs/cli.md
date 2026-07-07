@@ -47,8 +47,8 @@ mounted checkout.
 
 Use `--dry-run` for host-safe command construction checks. Actual SysID and
 benchmark runs require the full Isaac Sim/Newton runtime and, for SysID, the
-`cmaes` package. Neural actuator training does not require Isaac Sim/Newton,
-but execution requires `torch`; omit `--skip-optuna` only in an environment
+`cmaes` package. Neural actuator training requires `torch`; it imports Newton
+only for `dynamic_bias`. Omit `--skip-optuna` only in an environment
 with `optuna` installed.
 
 Robot `run.yaml` provides default SysID data/output paths, training
@@ -60,7 +60,7 @@ for that run; SysID writes the resolved values and their sources into
 
 ## Neural Actuator Training
 
-The native training entrypoint is intentionally separate from CMA-ES SysID:
+The training entrypoint is separate from CMA-ES SysID. Start with a dry run:
 
 ```bash
 anchor-bench train-actuator \
@@ -75,17 +75,98 @@ anchor-bench train-actuator \
   --dry-run
 ```
 
-Training consumes SAGE motion folders. Command position, measured position,
-velocity, torque, and `position_error` are mapped directly in memory;
-per-joint training CSV copies
-are not required. `--joint-type full` creates one independent sequence per
-canonical robot joint without splitting joints from the same motion across
-training and validation.
+Training consumes whole SAGE motion folders. It keeps episode boundaries and
+keeps all joints from one motion in the same training or validation split.
+`--joint-type full` retains the legacy shared scalar model: every robot joint
+becomes an independent sequence for one `F -> 1` network.
 
-Use `--model gru` for full-torque GRU prediction from
-`[position, position_error, velocity]`. Use `--model hybrid_residual`
-when the native PD/friction actuator remains active and the GRU should
-learn residual torque. Training writes the raw checkpoint, stats JSON,
-and a TorchScript GRU network under `outputs/training/<robot>/...`. The
-TorchScript archive exposes a `.gru` module for the local compatibility runtime
-shim; Newton-native GRU loading is not available in the pinned Newton snapshot.
+### Joint domains
+
+Use ordered joint lists for coupled models. Joint aliases are resolved through
+`robot.yaml`; output joints must be a subset of input joints. The list flags
+cannot be combined with `--joint-type`. If `--output-joints` is omitted, it
+defaults to the input list.
+
+```bash
+anchor-bench train-actuator \
+  --robot g1 \
+  --model gru \
+  --data <g1-sage-motion-or-dataset-root> \
+  --input-joints right_shoulder_pitch,right_shoulder_roll,right_shoulder_yaw,right_elbow \
+  --output-joints right_elbow \
+  --input-columns position,position_error,velocity,previous_torque \
+  --output outputs/training/g1/right_arm_to_elbow \
+  --skip-optuna \
+  --dry-run
+```
+
+The resulting topologies are:
+
+| Topology | Input joints | Output joints | Artifact |
+| --- | ---: | ---: | --- |
+| SISO | 1 | 1 | One joint predicts its own torque |
+| MISO | More than 1 | 1 | Joint context predicts one selected torque |
+| MIMO | More than 1 | More than 1 | One coupled network predicts an ordered torque vector |
+
+For `I` input joints and `O` output joints, ordinary feature blocks have
+shape `[T, I]`, `previous_torque` has shape `[T, O]`, and the target has
+shape `[T, O]`. Blocks are flattened feature-first. The GRU input width is
+`I * ordinary_feature_count + O` when `previous_torque` is enabled.
+
+### Features, targets, and timing
+
+Supported inputs are:
+
+| Feature | Training value |
+| --- | --- |
+| `position` | Measured joint position |
+| `position_error` | Linearly interpolated command position minus measured position |
+| `velocity` | Measured joint velocity |
+| `solver_pd` | `kp * position_error - kd * velocity` |
+| `dynamic_bias` | MuJoCo `qfrc_bias` evaluated by Newton without stepping simulation |
+| `previous_torque` | Previous target, with physical zero at the start of each episode |
+
+`dynamic_bias` uses every recorded joint that maps into the runtime model.
+Unrecorded non-input joints retain their model-default position and zero
+velocity. It is evaluated only during real training, so dry runs remain
+host-safe. Execution with this feature requires the full Newton/MuJoCo runtime,
+a declared `runtime_usd`, and
+`SolverMuJoCo.eval_dynamic_bias(state, out)`. Use `dynamic_bias`, not the
+legacy name `qfrc_bias`.
+
+For a full-torque `--model gru`, the target is measured torque. For
+`--model hybrid_residual`, the target is measured torque minus the shared PD
+and friction baselines. In a residual model, `previous_torque` therefore
+means the previous residual target. It means the previous measured torque in a
+full-torque model.
+Training uses that previous target as supervised recurrence. A runtime consumer
+feeds back the previous raw network output and resets it to physical zero with
+the recurrent hidden state at each episode boundary.
+
+PD values are required by residual training and whenever `solver_pd` is an
+input. Friction values are required by residual training. Supply a complete
+pair with `--pd-kp/--pd-kd` or
+`--friction-dry/--friction-viscous`. Resolution order is CLI, then
+`training:` in `run.yaml`, then uniform values inferred from
+`actuators.yaml`. Each artifact has one shared baseline; inference fails when
+selected actuator values differ.
+
+The expected sample period is `1 / simulation.control_freq`. Every recorded
+state interval must match it or training fails. Training does not resample an
+episode or apply zero-order hold; commands continue to be linearly interpolated
+onto the recorded state timestamps.
+
+### Artifacts
+
+A completed run writes a raw checkpoint, normalization stats JSON, and a
+TorchScript network under `outputs/training/<robot>/...`. The TorchScript
+archive embeds `metadata.json`, so a runtime consumer needs only that file.
+The metadata records ordered input and output joints, feature and target
+semantics, sample period, per-feature normalization, delay handling, applicable
+PD/friction baselines, and derivation provenance for dynamic bias and previous
+torque.
+
+Anchor Bench training does not install or modify Newton. A runtime loading an
+enriched or coupled artifact must support this metadata contract; the legacy
+Anchor Bench actuator-schema compatibility path still accepts only its older
+runtime feature set. Do not commit generated weights, datasets, or stats.

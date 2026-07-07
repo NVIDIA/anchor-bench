@@ -3,9 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, StrictBool, field_validator
+from pydantic import Field, StrictBool, field_validator, model_validator
 
-from anchor_bench.core.config_model import ConfigModel, parse_gru_columns
+from anchor_bench.core.config_model import (
+    ConfigModel,
+    parse_gru_training_columns,
+    parse_joint_names,
+)
 
 
 class CMAESConfig(ConfigModel):
@@ -66,11 +70,25 @@ class SysIdDefaults(ConfigModel):
         return [str(item) for item in value]
 
 
+class TrainingPDBaseline(ConfigModel):
+    kp: float = Field(ge=0.0)
+    kd: float = Field(ge=0.0)
+
+
+class TrainingFrictionBaseline(ConfigModel):
+    dry: float = Field(ge=0.0)
+    viscous: float = Field(ge=0.0)
+
+
 class TrainingDefaults(ConfigModel):
     model: Literal["gru", "hybrid_residual"] | None = None
     real_data_dir: str | None = None
     output_dir: str | None = None
     joint_type: str | None = None
+    input_joints: list[str] | None = None
+    output_joints: list[str] | None = None
+    pd_baseline: TrainingPDBaseline | None = None
+    friction_baseline: TrainingFrictionBaseline | None = None
     skip_optuna: StrictBool | None = None
     trials: int | None = Field(default=None, ge=1)
     trial_epochs: int | None = Field(default=None, ge=1)
@@ -84,7 +102,23 @@ class TrainingDefaults(ConfigModel):
     @field_validator("input_columns", mode="before")
     @classmethod
     def _validate_input_columns(cls, value: Any) -> list[str] | None:
-        return None if value is None else parse_gru_columns(value)
+        return None if value is None else parse_gru_training_columns(value)
+
+    @field_validator("input_joints", "output_joints", mode="before")
+    @classmethod
+    def _validate_joint_names(cls, value: Any) -> list[str] | None:
+        return None if value is None else parse_joint_names(value)
+
+    @model_validator(mode="after")
+    def _validate_joint_selection(self) -> "TrainingDefaults":
+        if (
+            self.joint_type is not None
+            and (self.input_joints is not None or self.output_joints is not None)
+        ):
+            raise ValueError("joint_type cannot be combined with input_joints or output_joints")
+        if self.output_joints is not None and self.input_joints is None:
+            raise ValueError("input_joints is required when output_joints is configured")
+        return self
 
 
 class RobotRunFile(ConfigModel):
