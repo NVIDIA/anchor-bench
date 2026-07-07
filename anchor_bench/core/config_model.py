@@ -9,8 +9,14 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
-GRU_TRAINING_INPUT_COLUMNS = GRU_INPUT_COLUMNS | {"dynamic_bias", "previous_torque"}
+GRU_INPUT_COLUMNS = {
+    "position",
+    "position_error",
+    "velocity",
+    "solver_pd",
+    "dynamic_bias",
+    "previous_torque",
+}
 
 
 def _duplicates(values: list[str]) -> list[str]:
@@ -23,7 +29,7 @@ def _duplicates(values: list[str]) -> list[str]:
     return sorted(duplicates)
 
 
-def _parse_gru_columns(value: Any, supported_columns: set[str]) -> list[str]:
+def parse_gru_columns(value: Any) -> list[str]:
     if isinstance(value, str):
         columns = [item.strip() for item in value.split(",") if item.strip()]
     elif isinstance(value, (list, tuple)):
@@ -35,18 +41,10 @@ def _parse_gru_columns(value: Any, supported_columns: set[str]) -> list[str]:
     duplicates = _duplicates(columns)
     if duplicates:
         raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
-    unsupported = sorted(set(columns) - supported_columns)
+    unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     return columns
-
-
-def parse_gru_columns(value: Any) -> list[str]:
-    return _parse_gru_columns(value, GRU_INPUT_COLUMNS)
-
-
-def parse_gru_training_columns(value: Any) -> list[str]:
-    return _parse_gru_columns(value, GRU_TRAINING_INPUT_COLUMNS)
 
 
 def parse_joint_names(value: Any) -> list[str]:

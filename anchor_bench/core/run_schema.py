@@ -7,7 +7,7 @@ from pydantic import Field, StrictBool, field_validator, model_validator
 
 from anchor_bench.core.config_model import (
     ConfigModel,
-    parse_gru_training_columns,
+    parse_gru_columns,
     parse_joint_names,
 )
 
@@ -102,7 +102,7 @@ class TrainingDefaults(ConfigModel):
     @field_validator("input_columns", mode="before")
     @classmethod
     def _validate_input_columns(cls, value: Any) -> list[str] | None:
-        return None if value is None else parse_gru_training_columns(value)
+        return None if value is None else parse_gru_columns(value)
 
     @field_validator("input_joints", "output_joints", mode="before")
     @classmethod

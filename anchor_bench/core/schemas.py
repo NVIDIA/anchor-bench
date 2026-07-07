@@ -8,7 +8,6 @@ from pydantic import Field, field_validator, model_validator
 from anchor_bench.core.config_model import (
     ConfigModel,
     parse_gru_columns,
-    parse_gru_training_columns,
     parse_joint_names,
 )
 from anchor_bench.core.experiment_schema import (
@@ -214,7 +213,7 @@ class TrainActuatorRunConfig:
         if self.output_joints is not None:
             parse_joint_names(self.output_joints)
         if self.input_columns is not None:
-            parse_gru_training_columns(self.input_columns)
+            parse_gru_columns(self.input_columns)
         if (
             self.joint_type is not None
             and (self.input_joints is not None or self.output_joints is not None)

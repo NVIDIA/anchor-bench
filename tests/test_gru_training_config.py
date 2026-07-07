@@ -6,10 +6,7 @@ from unittest.mock import patch
 
 from anchor_bench.cli.commands import dispatch
 from anchor_bench.cli.parser import build_parser
-from anchor_bench.core.config_model import (
-    parse_gru_columns,
-    parse_gru_training_columns,
-)
+from anchor_bench.core.config_model import parse_gru_columns
 from anchor_bench.core.run_schema import TrainingDefaults
 from anchor_bench.core.schemas import (
     ControllerSpec,
@@ -20,7 +17,7 @@ from anchor_bench.core.schemas import (
 
 class GruFeatureValidationTests(unittest.TestCase):
     def test_dynamic_bias_and_previous_torque_are_supported(self):
-        columns = parse_gru_training_columns(
+        columns = parse_gru_columns(
             "position,dynamic_bias,previous_torque,velocity,solver_pd"
         )
 
@@ -37,39 +34,38 @@ class GruFeatureValidationTests(unittest.TestCase):
 
     def test_duplicate_and_legacy_bias_columns_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "duplicate GRU input columns: position"):
-            parse_gru_training_columns(["position", "position"])
+            parse_gru_columns(["position", "position"])
 
         with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: qfrc_bias"):
-            parse_gru_training_columns(["position", "qfrc_bias"])
+            parse_gru_columns(["position", "qfrc_bias"])
 
-    def test_runtime_parser_and_schemas_reject_training_only_features(self):
+    def test_runtime_parser_and_schemas_accept_all_features(self):
         for feature in ("dynamic_bias", "previous_torque"):
             with self.subTest(feature=feature):
-                message = f"unsupported GRU input columns: {feature}"
-                with self.assertRaisesRegex(ValueError, message):
-                    parse_gru_columns(["position", feature])
+                columns = ["position", feature]
+                self.assertEqual(columns, parse_gru_columns(columns))
 
-                with self.assertRaisesRegex(ValueError, message):
-                    ControllerSpec.from_dict(
-                        {
-                            "type": "gru",
-                            "network_file": "runtime.pt",
-                            "parameters": {
-                                "input_columns": ["position", feature],
-                            },
+                controller = ControllerSpec.from_dict(
+                    {
+                        "type": "gru",
+                        "network_file": "runtime.pt",
+                        "parameters": {
+                            "input_columns": columns,
                         },
-                        "controller",
-                    )
+                    },
+                    "controller",
+                )
+                self.assertEqual(columns, controller.parameters["input_columns"])
 
-                with self.assertRaisesRegex(ValueError, message):
-                    ResidualSpec.from_dict(
-                        {
-                            "type": "gru",
-                            "network_file": "runtime.pt",
-                            "input_columns": ["position", feature],
-                        },
-                        "residual",
-                    )
+                residual = ResidualSpec.from_dict(
+                    {
+                        "type": "gru",
+                        "network_file": "runtime.pt",
+                        "input_columns": columns,
+                    },
+                    "residual",
+                )
+                self.assertEqual(columns, residual.input_columns)
 
 
 class TrainingDefaultsTests(unittest.TestCase):
