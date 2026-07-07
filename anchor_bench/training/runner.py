@@ -17,6 +17,7 @@ from anchor_bench.training.data import (
     MODEL_CHOICES,
     SUPPORTED_INPUT_COLUMNS,
     discover_csv_files,
+    discover_sage_dirs,
     read_csv_header,
     resolve_training_columns,
     split_csv_files,
@@ -97,6 +98,9 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
     seed = int(_defaulted(config.seed, training_cfg.get("seed"), 42))
     input_columns = _column_list(_defaulted(config.input_columns, training_cfg.get("input_columns"), DEFAULT_INPUT_COLUMNS))
     assert input_columns is not None
+    duplicates = sorted({column for column in input_columns if input_columns.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
     unsupported_columns = sorted(set(input_columns) - SUPPORTED_INPUT_COLUMNS)
     if unsupported_columns:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported_columns)}")
@@ -168,6 +172,11 @@ def build_train_actuator_command(config: TrainActuatorRunConfig) -> CommandPlan:
     ]
     if resolved.model == "hybrid_residual":
         notes.append("hybrid_residual trains residual torque after subtracting native PD and friction terms")
+    if "dynamic_bias" in resolved.input_columns:
+        notes.append(
+            "dynamic_bias is derived from synchronized SAGE state through Newton SolverMuJoCo without stepping; "
+            "execution requires SolverMuJoCo.eval_dynamic_bias"
+        )
     return CommandPlan(
         workflow="train-actuator",
         robot=resolved.robot,
@@ -181,6 +190,7 @@ def build_train_actuator_command(config: TrainActuatorRunConfig) -> CommandPlan:
             "output": resolved.output,
             "input_columns": resolved.input_columns,
             "target_column": resolved.target_column,
+            "data_format": "sage" if "dynamic_bias" in resolved.input_columns else "scalar_csv",
             "skip_optuna": resolved.skip_optuna,
             "config_sources": resolved.config_sources,
             "artifact_convention": {
@@ -275,16 +285,51 @@ def _delay_metadata_for_joint(robot: str, joint_type: str) -> dict[str, Any]:
     }
 
 
+def _canonical_training_joint(bundle, joint_type: str) -> str:
+    canonical = bundle.spec.joint_aliases.get(joint_type, joint_type)
+    if canonical not in bundle.spec.joint_names:
+        raise ValueError(
+            "dynamic_bias training is currently SISO and requires joint_type to name "
+            f"one robot joint; got {joint_type!r}"
+        )
+    return canonical
+
+
 def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
     plan = build_train_actuator_command(config)
     resolved = resolve_train_actuator_run_config(config)
     if resolved.dry_run:
         return plan
-    csvs = discover_csv_files(resolved.data)
-    train_csvs, val_csvs = split_csv_files(csvs, seed=resolved.seed)
-    derived_columns = ["solver_pd"] if "solver_pd" in resolved.input_columns else []
+
+    bundle = get_robot(resolved.robot)
+    uses_dynamic_bias = "dynamic_bias" in resolved.input_columns
+    joint_type = (
+        _canonical_training_joint(bundle, resolved.joint_type)
+        if uses_dynamic_bias
+        else resolved.joint_type
+    )
+
+    train_csvs: list[Path] = []
+    val_csvs: list[Path] = []
+    train_sage_dirs: list[Path] = []
+    val_sage_dirs: list[Path] = []
+    if uses_dynamic_bias:
+        if resolved.target_column != "torque":
+            raise ValueError("SAGE dynamic_bias training supports target_column='torque'")
+        sage_dirs = discover_sage_dirs(resolved.data)
+        train_sage_dirs, val_sage_dirs = split_csv_files(sage_dirs, seed=resolved.seed)
+        source_header = ["position", "position_error", "velocity", "torque"]
+    else:
+        csvs = discover_csv_files(resolved.data)
+        train_csvs, val_csvs = split_csv_files(csvs, seed=resolved.seed)
+        source_header = read_csv_header(train_csvs[0])
+
+    derived_columns = [
+        column for column in ("solver_pd", "dynamic_bias")
+        if column in resolved.input_columns
+    ]
     columns = resolve_training_columns(
-        read_csv_header(train_csvs[0]),
+        source_header,
         model=resolved.model,
         input_columns=resolved.input_columns,
         target_column=resolved.target_column,
@@ -292,11 +337,11 @@ def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
     )
     needs_physics = resolved.model == "hybrid_residual" or "solver_pd" in columns.input_columns
     residual_physics = (
-        _residual_physics_for_joint(resolved.robot, resolved.joint_type)
+        _residual_physics_for_joint(resolved.robot, joint_type)
         if needs_physics
         else None
     )
-    bundle = get_robot(resolved.robot)
+
     control_frequency = float(bundle.run_config["simulation"]["control_freq"])
     if control_frequency <= 0.0:
         raise ValueError("simulation.control_freq must be greater than zero")
@@ -306,16 +351,26 @@ def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
         "skip_optuna": resolved.skip_optuna,
         "noise_std": resolved.noise_std,
         "sample_dt_s": 1.0 / control_frequency,
-        "delay": _delay_metadata_for_joint(resolved.robot, resolved.joint_type),
+        "delay": _delay_metadata_for_joint(resolved.robot, joint_type),
     }
     if residual_physics is not None:
         metadata["physics_params"] = residual_physics.__dict__
+
+    dynamic_bias_provider = None
+    if uses_dynamic_bias:
+        from anchor_bench.training.dynamic_bias import NewtonMuJoCoDynamicBiasProvider
+
+        dynamic_bias_provider = NewtonMuJoCoDynamicBiasProvider(bundle)
+        metadata["dynamic_bias_derivation"] = dynamic_bias_provider.provenance
+
     artifacts = train_stateful_gru(
         TrainingJob(
             model=resolved.model,
-            joint_type=resolved.joint_type,
+            joint_type=joint_type,
             train_csvs=train_csvs,
             val_csvs=val_csvs,
+            train_sage_dirs=train_sage_dirs,
+            val_sage_dirs=val_sage_dirs,
             output_dir=Path(resolved.output),
             input_columns=columns.input_columns,
             target_columns=columns.target_columns,
@@ -328,6 +383,7 @@ def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
             n_streams=resolved.n_streams,
             noise_std=resolved.noise_std,
             residual_physics=residual_physics,
+            dynamic_bias_provider=dynamic_bias_provider,
             metadata=metadata,
         )
     )

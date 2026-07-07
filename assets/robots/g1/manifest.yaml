@@ -1,5 +1,5 @@
 name: g1
-description: Unitree G1 asset manifest. Training-only workflows do not require the USD.
+description: Unitree G1 asset manifest. Dynamic-bias training requires the USD; scalar CSV training does not.
 expected_assets:
   - g1.usd
 source_notes:

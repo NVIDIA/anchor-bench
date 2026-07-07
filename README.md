@@ -1,7 +1,7 @@
 # Anchor Bench
 
 Anchor Bench is a focused system identification (SysID) and sim-to-real benchmark package for robot
-actuator models on Isaac Sim 6.0, Newton 1.2, and Isaac Lab `develop`.
+actuator models on Isaac Sim 6.0, a pinned Newton 1.4 development revision, and Isaac Lab `develop`.
 
 The repo provides robot configs, data loaders, SysID command builders, Newton
 benchmark command builders, and analysis helpers around the actuator-identification workflow.
@@ -9,9 +9,17 @@ benchmark command builders, and analysis helpers around the actuator-identificat
 ## Compatibility
 
 - Isaac Sim: `6.0.0.0`
-- Newton: `1.2.0`
-- Isaac Lab: `develop` at `482d21c936b863e323f0a135c8e8e8e8a9c166b2`
+- Newton: `1.4.0.dev0` at `ae365981f0ba40371d2b19489e4ba07a5e5767ce`
+- Warp: `1.15.0.dev20260626`
+- Isaac Lab: `develop` at `5f2db9902baa724427b7aa654835aa559fce64e8`
 - Python: `3.12`
+
+The Newton Git SHA is pinned because the required GRU and dynamic-bias APIs are
+not yet available together in a stable release.
+
+Docker setup supplies the NVIDIA package index required by the pinned Warp build.
+For a direct full-extra install, use
+`python -m pip install --extra-index-url https://pypi.nvidia.com -e ".[full]"`.
 
 ## Installation
 

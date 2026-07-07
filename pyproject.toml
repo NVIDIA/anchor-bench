@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anchor-bench"
 version = "0.1.0"
-description = "Focused Newton 1.2 SysID and sim-to-real benchmark tooling for robot actuator models."
+description = "Focused Newton SysID and sim-to-real benchmark tooling for robot actuator models."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -18,9 +18,10 @@ dependencies = [
 dev = ["pytest>=8.0", "ruff>=0.5"]
 full = [
   "isaacsim==6.0.0.0",
-  "newton==1.2.0",
-  "mujoco>=3.5.0",
-  "mujoco-warp>=3.5.0",
+  "newton[sim] @ git+https://github.com/vidurv-nvidia/newton.git@ae365981f0ba40371d2b19489e4ba07a5e5767ce",
+  "mujoco~=3.10.0",
+  "warp-lang==1.15.0.dev20260626",
+  "mujoco-warp~=3.10.0,>=3.10.0.1",
   "cmaes",
   "optuna",
   "scipy",
@@ -39,3 +40,11 @@ include = ["anchor_bench*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+explicit = true
+
+[tool.uv.sources]
+warp-lang = { index = "nvidia" }

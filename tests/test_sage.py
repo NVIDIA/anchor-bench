@@ -23,7 +23,10 @@ def write_sage(root: Path, control_rows: int = 2, state_rows: int = 2, time_unit
     for i in range(control_rows):
         control.append(f'CONTROL,{i * 2000},"[{0.1 + i}, {0.2 + i}]"')
     for i in range(state_rows):
-        state.append(f'STATE_MOTOR,{i * 2000},"[{0.3 + i}, {0.4 + i}]","[0.0, 0.0]","[0.0, 0.0]"')
+        state.append(
+            f'STATE_MOTOR,{i * 2000},"[{0.3 + i}, {0.4 + i}]",'
+            f'"[{float(i)}, {2.0 * i}]","[{10.0 + i}, {20.0 + 2.0 * i}]"'
+        )
     (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
     (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
 
@@ -38,6 +41,8 @@ class SageLoaderTests(unittest.TestCase):
             self.assertEqual(data.control_positions[0], [0.2, 0.1])
             self.assertEqual(data.metadata["time_unit"], "seconds")
             self.assertEqual(data.control_timestamps, [0.0, 0.002])
+            self.assertEqual(data.state_velocities[1], [2.0, 1.0])
+            self.assertEqual(data.state_torques[1], [22.0, 11.0])
 
     def test_initial_state_uses_first_motor_state_in_requested_joint_order(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,6 +80,9 @@ class SageLoaderTests(unittest.TestCase):
             write_sage(root, control_rows=3, state_rows=3)
 
             data = load_real_data(root, target_dt=0.001, joint_names=["Rotation"])
+            held = load_real_data(
+                root, target_dt=0.001, joint_names=["Rotation"], hold_controls=True
+            )
 
         self.assertEqual(data.metadata["time_unit"], "seconds")
         self.assertEqual(data.metadata["target_dt"], 0.001)
@@ -82,6 +90,35 @@ class SageLoaderTests(unittest.TestCase):
         self.assertEqual(data.state_timestamps, data.control_timestamps)
         np.testing.assert_allclose(data.control_positions, [[0.1], [0.6], [1.1], [1.6], [2.1]])
         np.testing.assert_allclose(data.state_positions, [[0.3], [0.8], [1.3], [1.8], [2.3]])
+
+        np.testing.assert_allclose(data.state_velocities, [[0.0], [0.5], [1.0], [1.5], [2.0]])
+        np.testing.assert_allclose(data.state_torques, [[10.0], [10.5], [11.0], [11.5], [12.0]])
+
+        np.testing.assert_allclose(
+            held.control_positions, [[0.1], [0.1], [1.1], [1.1], [2.1]]
+        )
+
+    def test_uniform_grid_discards_partial_tail_without_rounding_past_overlap(self):
+        from anchor_bench.data.sage import _uniform_grid
+
+        self.assertEqual([0.0, 0.002], _uniform_grid(0.0, 0.0032, 0.002))
+
+    def test_loader_allows_position_only_state_outside_actuator_training(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_sage(root)
+            (root / "state_motor.csv").write_text(
+                'type,timestamp,positions\n'
+                'STATE_MOTOR,0,"[0.3, 0.4]"\n'
+                'STATE_MOTOR,2000,"[1.3, 1.4]"\n',
+                encoding="utf-8",
+            )
+
+            data = load_real_data(root)
+            self.assertEqual([], data.state_velocities)
+            self.assertEqual([], data.state_torques)
+            with self.assertRaisesRegex(ValueError, "actuator-training columns"):
+                load_real_data(root, require_state_dynamics=True)
 
     def test_loader_accepts_seconds_without_scaling(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,6 +151,20 @@ class SageLoaderTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "do not overlap"):
                 load_real_data(root, target_dt=0.001)
+
+    def test_loader_rejects_wrong_state_vector_width(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_sage(root)
+            (root / "state_motor.csv").write_text(
+                'type,timestamp,positions,velocities,torques\n'
+                'STATE_MOTOR,0,"[0.3, 0.4]","[0.0]","[10.0, 20.0]"\n'
+                'STATE_MOTOR,2000,"[1.3, 1.4]","[1.0]","[11.0, 22.0]"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "velocities row 0"):
+                load_real_data(root)
 
 
 if __name__ == "__main__":

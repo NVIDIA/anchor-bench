@@ -8,11 +8,14 @@ services:
       args:
         PYTHON_VERSION: "3.12"
         NEWTON_PACKAGE: newton
-        NEWTON_VERSION: 1.2.0
+        NEWTON_REPO: https://github.com/vidurv-nvidia/newton.git
+        NEWTON_REF: ae365981f0ba40371d2b19489e4ba07a5e5767ce
+        WARP_PACKAGE: warp-lang
+        WARP_VERSION: 1.15.0.dev20260626
         ISAACSIM_VERSION: 6.0.0.0
         ISAACLAB_REPO: https://github.com/isaac-sim/IsaacLab.git
         ISAACLAB_BRANCH: develop
-        ISAACLAB_REF: 482d21c936b863e323f0a135c8e8e8e8a9c166b2
+        ISAACLAB_REF: 5f2db9902baa724427b7aa654835aa559fce64e8
     environment:
       NVIDIA_DRIVER_CAPABILITIES: all
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}

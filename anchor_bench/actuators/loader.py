@@ -30,7 +30,7 @@ def _residual_to_dict(residual: ResidualSpec | None) -> dict[str, Any] | None:
 
 
 def build_newton_component_dicts(spec: ActuatorFile) -> list[dict[str, Any]]:
-    """Return Newton 1.2 composable actuator component descriptions.
+    """Return composable Newton actuator component descriptions.
 
     Runtime construction is intentionally separated from schema validation so
     host-only tests do not import Isaac Sim or Newton.
@@ -149,7 +149,7 @@ def _author_pd_actuator(stage: Any, articulation_prim_path: str, actuator, joint
 
 
 GRU_RUNTIME_SHIM_MESSAGE = (
-    "GRU actuators are not Newton-native in this Newton/IsaacLab snapshot; "
+    "GRU actuators are not enabled through the pinned Isaac Lab adapter; "
     "use anchor_bench.runtime.actuator_net_gru for full-torque GRU and GRU residual runtime support."
 )
 
@@ -167,13 +167,12 @@ def author_newton_actuator_prims(spec: ActuatorFile, *, stage: Any, articulation
     The prims are intentionally loaded by Newton later via
     ``NewtonActuatorAdapter.from_usd`` or ``ModelBuilder.add_usd``. GRU
     controllers and residuals stay on ``anchor_bench.runtime.actuator_net_gru``
-    because this Newton/IsaacLab snapshot has MLP/LSTM neural actuators but no
-    native GRU actuator controller.
+    until the pinned Isaac Lab adapter exposes Newton's native GRU controller
+    through its USD loading path.
     """
     _ensure_newton_native_supported(spec)
     joint_prims = _collect_joint_prims(stage, articulation_prim_path)
     for actuator in spec.actuators:
-        effort = _effort_limit(actuator)
         for joint_name in actuator.joints:
             if joint_name not in joint_prims:
                 raise ValueError(f"joint {joint_name!r} not found under {articulation_prim_path}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import csv
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ class SageDataset:
     control_positions: list[list[float]]
     state_timestamps: list[float]
     state_positions: list[list[float]]
+    state_velocities: list[list[float]]
+    state_torques: list[list[float]]
     metadata: dict[str, Any]
 
 
@@ -57,24 +60,30 @@ def load_vector_csv(path: Path, columns: tuple[str, ...]) -> tuple[np.ndarray, d
     }
 
 
-def _load_rows(path: Path, vector_column: str) -> tuple[list[float], list[list[float]]]:
-    timestamps, vectors = load_vector_csv(path, (vector_column,))
-    return timestamps.tolist(), vectors[vector_column].tolist()
-
-
-def _select_joints(vectors: list[list[float]], source_joints: list[str], requested_joints: list[str]) -> list[list[float]]:
+def _select_joints(
+    vectors: list[list[float]],
+    source_joints: list[str],
+    requested_joints: list[str],
+    column: str = "vectors",
+) -> list[list[float]]:
     indices = []
     for joint in requested_joints:
         if joint not in source_joints:
             raise ValueError(f"joint '{joint}' not found in joint_list.txt")
         indices.append(source_joints.index(joint))
+    for row_index, row in enumerate(vectors):
+        if len(row) != len(source_joints):
+            raise ValueError(
+                f"{column} row {row_index} has {len(row)} values but "
+                f"joint_list.txt has {len(source_joints)} joints"
+            )
     return [[row[idx] for idx in indices] for row in vectors]
 
 
 def _select_vector(values: list[float], source_joints: list[str], requested_joints: list[str], column: str) -> list[float]:
     if len(values) != len(source_joints):
         raise ValueError(f"{column} has {len(values)} values but joint_list.txt has {len(source_joints)} joints")
-    return _select_joints([values], source_joints, requested_joints)[0]
+    return _select_joints([values], source_joints, requested_joints, column)[0]
 
 
 def _normalize_timestamps(values: list[float], metadata: dict[str, Any]) -> list[float]:
@@ -93,31 +102,61 @@ def _sort_rows(timestamps: list[float], vectors: list[list[float]]) -> tuple[lis
     return [row[0] for row in rows], [row[1] for row in rows]
 
 
+def _sort_vector_fields(
+    timestamps: list[float],
+    fields: dict[str, list[list[float]]],
+) -> tuple[list[float], dict[str, list[list[float]]]]:
+    for name, values in fields.items():
+        if len(values) != len(timestamps):
+            raise ValueError(
+                f"state field {name!r} has {len(values)} rows but timestamps has {len(timestamps)}"
+            )
+    order = sorted(range(len(timestamps)), key=timestamps.__getitem__)
+    return (
+        [timestamps[index] for index in order],
+        {name: [values[index] for index in order] for name, values in fields.items()},
+    )
+
+
 def _uniform_grid(start: float, end: float, target_dt: float) -> list[float]:
     if target_dt <= 0.0:
         raise ValueError("target_dt must be positive")
     span = end - start
-    count = int(round(span / target_dt)) + 1
-    drift = abs(span - (count - 1) * target_dt)
-    if drift > 0.5 * target_dt:
-        raise ValueError(
-            f"timestamp span {span} is not a multiple of target_dt {target_dt} "
-            f"(drift {drift} exceeds half a step)"
-        )
-    return [round(float(start + index * target_dt), 12) for index in range(count)]
+    step_count = int(math.floor(span / target_dt + 1.0e-9))
+    return [
+        round(float(start + index * target_dt), 12)
+        for index in range(step_count + 1)
+    ]
 
 
-def _interpolate_positions(timestamps: list[float], positions: list[list[float]], target_times: list[float]) -> list[list[float]]:
+def _interpolate_vectors(timestamps: list[float], positions: list[list[float]], target_times: list[float]) -> list[list[float]]:
     if not target_times:
         return []
     source_t = np.asarray(timestamps, dtype=float)
     values = np.asarray(positions, dtype=float)
     if values.ndim != 2:
-        raise ValueError("positions must be a 2-D vector trace")
+        raise ValueError("values must be a 2-D vector trace")
     target_t = np.asarray(target_times, dtype=float)
     columns = [np.interp(target_t, source_t, values[:, idx]) for idx in range(values.shape[1])]
     matrix = np.column_stack(columns) if columns else np.empty((len(target_times), 0), dtype=float)
     return [[float(round(value, 12)) for value in row] for row in matrix.tolist()]
+
+
+def _hold_vectors(
+    timestamps: list[float],
+    values: list[list[float]],
+    target_times: list[float],
+) -> list[list[float]]:
+    """Sample a commanded vector using previous-sample (zero-order) hold."""
+    if not target_times:
+        return []
+    source_t = np.asarray(timestamps, dtype=float)
+    source_values = np.asarray(values, dtype=float)
+    if source_values.ndim != 2:
+        raise ValueError("values must be a 2-D vector trace")
+    indices = np.searchsorted(source_t, np.asarray(target_times, dtype=float), side="right") - 1
+    indices = np.clip(indices, 0, len(source_t) - 1)
+    return [[float(value) for value in row] for row in source_values[indices].tolist()]
 
 
 def validate_sage_dir(data_dir: str | Path) -> dict[str, Any]:
@@ -168,20 +207,54 @@ def load_initial_state(data_dir: str | Path, joint_names: list[str] | None = Non
     raise ValueError(f"{root / 'state_motor.csv'} has no STATE_MOTOR rows")
 
 
-def load_real_data(data_dir: str | Path, target_dt: float | None = None, joint_names: list[str] | None = None) -> SageDataset:
+def load_real_data(
+    data_dir: str | Path,
+    target_dt: float | None = None,
+    joint_names: list[str] | None = None,
+    require_state_dynamics: bool = False,
+    hold_controls: bool = False,
+) -> SageDataset:
     root = Path(data_dir)
     metadata = validate_sage_dir(root)
     source_joints = load_joint_list(root / "joint_list.txt")
     requested_joints = list(joint_names or source_joints)
-    control_t, control_pos = _load_rows(root / "control.csv", "positions")
-    state_t, state_pos = _load_rows(root / "state_motor.csv", "positions")
 
-    control_t = _normalize_timestamps(control_t, metadata)
-    state_t = _normalize_timestamps(state_t, metadata)
-    control_pos = _select_joints(control_pos, source_joints, requested_joints)
-    state_pos = _select_joints(state_pos, source_joints, requested_joints)
+    control_t_array, control_fields_array = load_vector_csv(root / "control.csv", ("positions",))
+    state_path = root / "state_motor.csv"
+    with state_path.open(newline="", encoding="utf-8") as stream:
+        state_header = set(csv.DictReader(stream).fieldnames or [])
+    dynamic_columns = ("velocities", "torques")
+    if require_state_dynamics:
+        missing = [column for column in dynamic_columns if column not in state_header]
+        if missing:
+            raise ValueError(
+                f"{state_path} missing required actuator-training columns: {', '.join(missing)}"
+            )
+    state_columns = ("positions",) + tuple(
+        column for column in dynamic_columns if column in state_header
+    )
+    state_t_array, state_fields_array = load_vector_csv(
+        state_path,
+        state_columns,
+    )
+    control_t = _normalize_timestamps(control_t_array.tolist(), metadata)
+    state_t = _normalize_timestamps(state_t_array.tolist(), metadata)
+    control_pos = _select_joints(
+        control_fields_array["positions"].tolist(),
+        source_joints,
+        requested_joints,
+        "control positions",
+    )
+    state_fields = {
+        name: _select_joints(values.tolist(), source_joints, requested_joints, name)
+        for name, values in state_fields_array.items()
+    }
     control_t, control_pos = _sort_rows(control_t, control_pos)
-    state_t, state_pos = _sort_rows(state_t, state_pos)
+    state_t, state_fields = _sort_vector_fields(state_t, state_fields)
+
+    state_pos = state_fields["positions"]
+    state_vel = state_fields.get("velocities", [])
+    state_torque = state_fields.get("torques", [])
 
     normalized_metadata = dict(metadata)
     normalized_metadata["source_time_unit"] = metadata.get("time_unit")
@@ -199,9 +272,23 @@ def load_real_data(data_dir: str | Path, target_dt: float | None = None, joint_n
         return SageDataset(
             joint_names=requested_joints,
             control_timestamps=target_times,
-            control_positions=_interpolate_positions(control_t, control_pos, target_times),
+            control_positions=(
+                _hold_vectors(control_t, control_pos, target_times)
+                if hold_controls
+                else _interpolate_vectors(control_t, control_pos, target_times)
+            ),
             state_timestamps=target_times,
-            state_positions=_interpolate_positions(state_t, state_pos, target_times),
+            state_positions=_interpolate_vectors(state_t, state_pos, target_times),
+            state_velocities=(
+                _interpolate_vectors(state_t, state_vel, target_times)
+                if state_vel
+                else []
+            ),
+            state_torques=(
+                _interpolate_vectors(state_t, state_torque, target_times)
+                if state_torque
+                else []
+            ),
             metadata=normalized_metadata,
         )
 
@@ -217,5 +304,7 @@ def load_real_data(data_dir: str | Path, target_dt: float | None = None, joint_n
         control_positions=control_pos[:n],
         state_timestamps=state_t[:n],
         state_positions=state_pos[:n],
+        state_velocities=state_vel[:n],
+        state_torques=state_torque[:n],
         metadata=normalized_metadata,
     )

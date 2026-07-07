@@ -74,7 +74,7 @@ def build_benchmark_command(config: BenchmarkRunConfig) -> CommandPlan:
         robot=resolved.robot,
         command=command,
         dry_run=resolved.dry_run,
-        notes=["uses Newton 1.2 composable actuator descriptions from configs/robots"],
+        notes=["uses Newton composable actuator descriptions from configs/robots"],
     )
 
 

@@ -51,6 +51,9 @@ class TrainingJob:
     noise_std: float
     residual_physics: ResidualPhysics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    train_sage_dirs: Sequence[Path] = field(default_factory=tuple)
+    val_sage_dirs: Sequence[Path] = field(default_factory=tuple)
+    dynamic_bias_provider: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -87,35 +90,190 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "joint"
 
 
-def _load_sequences(job: TrainingJob) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
-    pd = _import_pandas()
+def _normalized_joint_name(value: str) -> str:
+    return value.rsplit("/", 1)[-1].removesuffix("_joint")
 
-    def load_one(path: Path) -> tuple[np.ndarray, np.ndarray]:
-        frame = pd.read_csv(path)
-        if "solver_pd" in job.input_columns and "solver_pd" not in frame.columns:
+
+def _joint_index(joint_names: Sequence[str], requested_name: str) -> int:
+    exact = [index for index, name in enumerate(joint_names) if name == requested_name]
+    if len(exact) == 1:
+        return exact[0]
+    normalized = _normalized_joint_name(requested_name)
+    matches = [
+        index for index, name in enumerate(joint_names)
+        if _normalized_joint_name(name) == normalized
+    ]
+    if len(matches) != 1:
+        if not matches:
+            raise ValueError(f"training joint {requested_name!r} was not found in SAGE joint_list.txt")
+        raise ValueError(
+            f"training joint {requested_name!r} matches multiple SAGE joints: "
+            + ", ".join(joint_names[index] for index in matches)
+        )
+    return matches[0]
+
+
+def _load_sequences(job: TrainingJob) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
+    sage_joint_set: frozenset[str] | None = None
+
+    def prepare(raw_columns: dict[str, np.ndarray], source: Path) -> tuple[np.ndarray, np.ndarray]:
+        columns = {name: np.asarray(values, dtype=np.float32) for name, values in raw_columns.items()}
+        for name, values in columns.items():
+            if values.ndim != 1:
+                raise ValueError(f"{source} column {name!r} must be one-dimensional")
+        lengths = {len(values) for values in columns.values()}
+        if len(lengths) != 1:
+            raise ValueError(f"{source} training columns have mismatched row counts")
+        if not lengths or next(iter(lengths)) == 0:
+            raise ValueError(f"training source has no rows: {source}")
+
+        if "solver_pd" in job.input_columns and "solver_pd" not in columns:
             physics = job.residual_physics
             if physics is None:
                 raise ValueError("solver_pd input requires residual physics parameters")
-            error = frame["position_error"].astype("float32").to_numpy()
-            velocity = frame["velocity"].astype("float32").to_numpy()
-            frame["solver_pd"] = (physics.stiffness * error - physics.damping * velocity).astype("float32")
-        features = frame[job.input_columns].astype("float32").to_numpy()
+            try:
+                error = columns["position_error"]
+                velocity = columns["velocity"]
+            except KeyError as exc:
+                raise ValueError("solver_pd input requires position_error and velocity columns") from exc
+            columns["solver_pd"] = (physics.stiffness * error - physics.damping * velocity).astype(np.float32)
+
+        missing_inputs = [name for name in job.input_columns if name not in columns]
+        if missing_inputs:
+            raise ValueError(f"{source} missing required training columns: {', '.join(missing_inputs)}")
+        features = np.column_stack([columns[name] for name in job.input_columns]).astype(np.float32, copy=False)
+
         if job.model == "hybrid_residual":
             physics = job.residual_physics or ResidualPhysics()
-            error = frame["position_error"].astype("float32").to_numpy()
-            velocity = frame["velocity"].astype("float32").to_numpy()
-            torque = frame[job.source_target_columns[0]].astype("float32").to_numpy()
+            try:
+                error = columns["position_error"]
+                velocity = columns["velocity"]
+                torque = columns[job.source_target_columns[0]]
+            except KeyError as exc:
+                raise ValueError(
+                    "hybrid_residual training requires position_error, velocity, and torque"
+                ) from exc
             solver_pd = physics.stiffness * error - physics.damping * velocity
             friction = physics.dry_friction * np.sign(velocity) + physics.viscous_friction * velocity
-            target = (torque - solver_pd - friction).astype("float32")[:, None]
+            target = (torque - solver_pd - friction).astype(np.float32)[:, None]
         else:
-            target = frame[job.target_columns].astype("float32").to_numpy()
-        if len(features) == 0:
-            raise ValueError(f"CSV file has no rows: {path}")
+            missing_targets = [name for name in job.target_columns if name not in columns]
+            if missing_targets:
+                raise ValueError(f"{source} missing required target columns: {', '.join(missing_targets)}")
+            target = np.column_stack([columns[name] for name in job.target_columns]).astype(np.float32, copy=False)
+
+        if not np.isfinite(features).all() or not np.isfinite(target).all():
+            raise ValueError(f"{source} contains non-finite training values")
         return features, target
 
-    train = [load_one(Path(path)) for path in job.train_csvs]
-    val = [load_one(Path(path)) for path in job.val_csvs]
+    def load_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        pd = _import_pandas()
+        frame = pd.read_csv(path)
+        required_columns = set(job.input_columns)
+        if "solver_pd" in job.input_columns and "solver_pd" not in frame.columns:
+            required_columns.update(("position_error", "velocity"))
+        if job.model == "hybrid_residual":
+            required_columns.update(("position_error", "velocity", *job.source_target_columns))
+        else:
+            required_columns.update(job.target_columns)
+        raw_columns = {
+            name: frame[name].to_numpy()
+            for name in required_columns
+            if name in frame.columns
+        }
+        return prepare(raw_columns, path)
+
+    def load_sage(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        nonlocal sage_joint_set
+        from anchor_bench.data.sage import load_real_data
+
+        if job.source_target_columns != ["torque"]:
+            raise ValueError("SAGE actuator training supports target_column='torque'")
+        provider = job.dynamic_bias_provider
+        if provider is None:
+            raise ValueError("SAGE dynamic_bias training requires a bias provider")
+        try:
+            sample_dt_s = float(job.metadata["sample_dt_s"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("SAGE training requires sample_dt_s metadata") from exc
+
+        dataset = load_real_data(
+            path,
+            target_dt=sample_dt_s,
+            require_state_dynamics=True,
+            hold_controls=True,
+        )
+        normalized_names = tuple(
+            _normalized_joint_name(name) for name in dataset.joint_names
+        )
+        if len(set(normalized_names)) != len(normalized_names):
+            raise ValueError(f"{path} has duplicate normalized joint names")
+        episode_joint_set = frozenset(normalized_names)
+        if sage_joint_set is None:
+            sage_joint_set = episode_joint_set
+            derivation = job.metadata.get("dynamic_bias_derivation")
+            if isinstance(derivation, dict):
+                derivation["trajectory_joint_names"] = sorted(episode_joint_set)
+        elif episode_joint_set != sage_joint_set:
+            missing = sorted(sage_joint_set - episode_joint_set)
+            extra = sorted(episode_joint_set - sage_joint_set)
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if extra:
+                details.append(f"extra {', '.join(extra)}")
+            raise ValueError(
+                f"{path} does not use the common SAGE joint set: {'; '.join(details)}"
+            )
+        positions = np.asarray(dataset.state_positions, dtype=np.float32)
+        velocities = np.asarray(dataset.state_velocities, dtype=np.float32)
+        torques = np.asarray(dataset.state_torques, dtype=np.float32)
+        controls = np.asarray(dataset.control_positions, dtype=np.float32)
+        expected_shape = (len(dataset.state_timestamps), len(dataset.joint_names))
+        for name, values in (
+            ("state_positions", positions),
+            ("state_velocities", velocities),
+            ("state_torques", torques),
+            ("control_positions", controls),
+        ):
+            if values.shape != expected_shape:
+                raise ValueError(f"{path} {name} has shape {values.shape}, expected {expected_shape}")
+
+        dynamic_bias = np.asarray(
+            provider.compute(
+                joint_names=dataset.joint_names,
+                positions=positions,
+                velocities=velocities,
+            ),
+            dtype=np.float32,
+        )
+        if dynamic_bias.shape != expected_shape:
+            raise ValueError(
+                f"dynamic-bias provider returned shape {dynamic_bias.shape}, expected {expected_shape}"
+            )
+
+        joint_index = _joint_index(dataset.joint_names, job.joint_type)
+        return prepare(
+            {
+                "position": positions[:, joint_index],
+                "position_error": controls[:, joint_index] - positions[:, joint_index],
+                "velocity": velocities[:, joint_index],
+                "dynamic_bias": dynamic_bias[:, joint_index],
+                "torque": torques[:, joint_index],
+            },
+            path,
+        )
+
+    if job.train_sage_dirs or job.val_sage_dirs:
+        if job.train_csvs or job.val_csvs:
+            raise ValueError("TrainingJob cannot mix scalar CSV and SAGE sources")
+        train = [load_sage(Path(path)) for path in job.train_sage_dirs]
+        val = [load_sage(Path(path)) for path in job.val_sage_dirs]
+    else:
+        train = [load_csv(Path(path)) for path in job.train_csvs]
+        val = [load_csv(Path(path)) for path in job.val_csvs]
+    if not train:
+        raise ValueError("TrainingJob requires at least one training sequence")
     return train, val
 
 
@@ -234,6 +392,7 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
     runtime = {
         "schema_version": 1,
         "model_type": "gru",
+        "joint_names": [job.joint_type],
         "input_columns": list(job.input_columns),
         "target_columns": [target],
         "sample_dt_s": sample_dt_s,
@@ -246,6 +405,11 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
         },
         "delay": dict(delay),
     }
+    if "dynamic_bias" in job.input_columns:
+        derivation = job.metadata.get("dynamic_bias_derivation")
+        if not isinstance(derivation, dict):
+            raise ValueError("dynamic_bias training metadata must define dynamic_bias_derivation")
+        runtime["dynamic_bias_derivation"] = dict(derivation)
 
     needs_pd = target == "torque_residual" or "solver_pd" in job.input_columns
     physics = job.metadata.get("physics_params")
@@ -394,6 +558,11 @@ def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
             "model": job.model,
             "joint_type": job.joint_type,
             "data": {
+                "source_format": "sage" if job.train_sage_dirs else "scalar_csv",
+                "train_sequence_count": len(job.train_sage_dirs or job.train_csvs),
+                "val_sequence_count": len(job.val_sage_dirs or job.val_csvs),
+                "train_sage_count": len(job.train_sage_dirs),
+                "val_sage_count": len(job.val_sage_dirs),
                 "train_csv_count": len(job.train_csvs),
                 "val_csv_count": len(job.val_csvs),
                 "n_streams": job.n_streams,

@@ -7,7 +7,8 @@ from typing import Any
 
 
 CONTROLLERS = {"pd", "pid", "mlp", "lstm", "gru", "fmu", "torque_passthrough"}
-GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
+RUNTIME_GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
+TRAINING_GRU_INPUT_COLUMNS = RUNTIME_GRU_INPUT_COLUMNS | {"dynamic_bias"}
 CLAMPS = {"effort", "velocity", "dc_motor", "position", "none"}
 EXPERIMENT_ACTUATOR_TYPES = CONTROLLERS | {"implicit"}
 EXPERIMENT_BENCHMARK_PARAMS = {"initial", "fitted"}
@@ -44,9 +45,17 @@ def _parse_column_list(value: Any, context: str) -> list[str]:
     return columns
 
 
-def _validate_gru_columns(columns: Any, context: str) -> list[str]:
+def _validate_gru_columns(
+    columns: Any,
+    context: str,
+    supported_columns: set[str] = RUNTIME_GRU_INPUT_COLUMNS,
+) -> list[str]:
     parsed = _parse_column_list(columns, context)
-    unsupported = sorted(set(parsed) - GRU_INPUT_COLUMNS)
+    duplicates = sorted({column for column in parsed if parsed.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
+
+    unsupported = sorted(set(parsed) - supported_columns)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     return parsed
@@ -390,7 +399,11 @@ def _validate_training_section(training: dict[str, Any], source: str) -> dict[st
     if "seed" in resolved:
         resolved["seed"] = int(resolved["seed"])
     if "input_columns" in resolved:
-        resolved["input_columns"] = _validate_gru_columns(resolved["input_columns"], f"{source}.training.input_columns")
+        resolved["input_columns"] = _validate_gru_columns(
+            resolved["input_columns"],
+            f"{source}.training.input_columns",
+            TRAINING_GRU_INPUT_COLUMNS,
+        )
     if "target_column" in resolved:
         resolved["target_column"] = str(resolved["target_column"])
     return resolved

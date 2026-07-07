@@ -33,7 +33,7 @@ class CliDryRunTests(unittest.TestCase):
             sysid_output = Path(tmp) / "anchor-bench-sysid"
             result = run_cli("sysid", "--robot", "so101", "--data", data, "--output", str(sysid_output), "--dry-run")
         self.assertIn("dry_run: true", result.stdout)
-        self.assertIn("newton 1.2", result.stdout)
+        self.assertIn("newton 1.4.0.dev0", result.stdout)
 
         result = run_cli("benchmark", "--robot", "so101", "--motion", data, "--dry-run")
         self.assertIn("benchmark", result.stdout)

@@ -1,6 +1,5 @@
 
 import unittest
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
@@ -277,6 +276,14 @@ class NativeActuatorSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: qfrc_bias"):
             ActuatorSpec.from_dict(actuator, "actuator")
 
+        actuator["residual"] = {
+            "type": "gru",
+            "network_file": "net.pt",
+            "input_columns": ["position", "dynamic_bias"],
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: dynamic_bias"):
+            ActuatorSpec.from_dict(actuator, "actuator")
+
     def test_instantiate_newton_actuators_delegates_pd_to_newton_adapter(self):
         from anchor_bench.actuators import loader
         from anchor_bench.core.schemas import ActuatorFile
@@ -364,7 +371,7 @@ class NativeActuatorSchemaTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "GRU actuators are not Newton-native.*anchor_bench.runtime.actuator_net_gru",
+            "GRU actuators are not enabled through the pinned Isaac Lab adapter.*anchor_bench.runtime.actuator_net_gru",
         ):
             instantiate_newton_actuators(
                 spec,

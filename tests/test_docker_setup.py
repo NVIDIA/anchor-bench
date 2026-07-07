@@ -1,6 +1,5 @@
 import os
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 
@@ -44,10 +43,13 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("docker build", result.stdout)
         self.assertIn("--target kitless", result.stdout)
         self.assertIn("anchor-bench:kitless", result.stdout)
-        self.assertIn("--build-arg NEWTON_VERSION=1.2.0", result.stdout)
+        self.assertIn("--build-arg NEWTON_REPO=https://github.com/vidurv-nvidia/newton.git", result.stdout)
+        self.assertIn("--build-arg NEWTON_REF=ae365981f0ba40371d2b19489e4ba07a5e5767ce", result.stdout)
+        self.assertIn("--build-arg WARP_PACKAGE=warp-lang", result.stdout)
+        self.assertIn("--build-arg WARP_VERSION=1.15.0.dev20260626", result.stdout)
         self.assertIn("--build-arg ISAACSIM_VERSION=6.0.0.0", result.stdout)
         self.assertIn(
-            "--build-arg ISAACLAB_REF=482d21c936b863e323f0a135c8e8e8e8a9c166b2",
+            "--build-arg ISAACLAB_REF=5f2db9902baa724427b7aa654835aa559fce64e8",
             result.stdout,
         )
         self.assertNotIn("-m venv", result.stdout)
@@ -56,7 +58,8 @@ class DockerSetupTests(unittest.TestCase):
     def test_check_dry_run_runs_environment_check_inside_kitless_image(self):
         result = run_setup("--check", dry_run=True)
         self.assertIn("docker image inspect anchor-bench:kitless", result.stdout)
-        self.assertIn("python check_environment.py --dry-run", result.stdout)
+        self.assertIn("python check_environment.py --profile kitless", result.stdout)
+        self.assertNotIn("check_environment.py --dry-run", result.stdout)
 
     def test_shell_dry_run_delegates_to_internal_persistent_helper(self):
         result = run_setup("--shell", dry_run=True)
@@ -86,11 +89,11 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("https://github.com/isaac-sim/IsaacLab.git", result.stdout)
         isaaclab_dir = REPO / "third_party" / "IsaacLab"
         self.assertIn(
-            f"git -C {isaaclab_dir} fetch origin 482d21c936b863e323f0a135c8e8e8e8a9c166b2",
+            f"git -C {isaaclab_dir} fetch origin 5f2db9902baa724427b7aa654835aa559fce64e8",
             result.stdout,
         )
         self.assertIn(
-            f"git -C {isaaclab_dir} switch --detach 482d21c936b863e323f0a135c8e8e8e8a9c166b2",
+            f"git -C {isaaclab_dir} switch --detach 5f2db9902baa724427b7aa654835aa559fce64e8",
             result.stdout,
         )
         self.assertIn(
@@ -195,14 +198,29 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("--extra-index-url https://pypi.nvidia.com", dockerfile_text)
         self.assertIn("--editable source/isaaclab", dockerfile_text)
         self.assertIn("source/isaaclab_newton", dockerfile_text)
-        self.assertIn("${NEWTON_PACKAGE}[sim]==${NEWTON_VERSION}", dockerfile_text)
+        self.assertIn(
+            "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_REF}",
+            dockerfile_text,
+        )
+        self.assertIn("ae365981f0ba40371d2b19489e4ba07a5e5767ce", dockerfile_text)
+        self.assertIn("ARG WARP_PACKAGE=warp-lang", dockerfile_text)
+        self.assertIn("ARG WARP_VERSION=1.15.0.dev20260626", dockerfile_text)
+        self.assertEqual(3, dockerfile_text.count('"${WARP_PACKAGE}==${WARP_VERSION}"'))
+        self.assertEqual(
+            4,
+            dockerfile_text.count("--extra-index-url https://pypi.nvidia.com"),
+        )
         self.assertIn("ACCEPT_EULA=Y", dockerfile_text)
         self.assertIn("OMNI_KIT_ACCEPT_EULA=YES", dockerfile_text)
         self.assertIn("libxt6", dockerfile_text)
         self.assertIn("libglu1-mesa", dockerfile_text)
-        self.assertIn("482d21c936b863e323f0a135c8e8e8e8a9c166b2", dockerfile_text)
+        self.assertIn("5f2db9902baa724427b7aa654835aa559fce64e8", dockerfile_text)
 
         compose_text = compose.read_text(encoding="utf-8")
+        self.assertIn("NEWTON_REPO: https://github.com/vidurv-nvidia/newton.git", compose_text)
+        self.assertIn("NEWTON_REF: ae365981f0ba40371d2b19489e4ba07a5e5767ce", compose_text)
+        self.assertIn("WARP_PACKAGE: warp-lang", compose_text)
+        self.assertIn("WARP_VERSION: 1.15.0.dev20260626", compose_text)
         self.assertIn("/workspace/anchor-bench", compose_text)
         self.assertIn("ACCEPT_EULA: Y", compose_text)
         self.assertIn("OMNI_KIT_ACCEPT_EULA: YES", compose_text)
@@ -259,7 +277,8 @@ class DockerSetupTests(unittest.TestCase):
         run_gui_text = (REPO / "docker" / "run-gui.sh").read_text(encoding="utf-8")
         run_persist_text = (REPO / "docker" / "run-persist.sh").read_text(encoding="utf-8")
 
-        self.assertIn('"git", "-c", f"safe.directory={lab_dir}", "-C"', check_environment)
+        self.assertIn('f"safe.directory={lab_dir}"', check_environment)
+        self.assertIn('"rev-parse"', check_environment)
         self.assertIn('mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}"', entrypoint_text)
         self.assertIn('mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${MPLCONFIGDIR}" && sleep infinity', run_persist_text)
         for script_text in (run_gui_text, run_persist_text):

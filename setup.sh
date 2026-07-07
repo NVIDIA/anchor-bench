@@ -39,7 +39,10 @@ manifest_value() {
 PYTHON_VERSION="$(manifest_value isaac_sim python)"
 ISAACSIM_VERSION="$(manifest_value isaac_sim version)"
 NEWTON_PACKAGE="$(manifest_value newton package)"
-NEWTON_VERSION="$(manifest_value newton version)"
+NEWTON_REPO="$(manifest_value newton repo)"
+NEWTON_REF="$(manifest_value newton commit)"
+WARP_PACKAGE="$(manifest_value warp package)"
+WARP_VERSION="$(manifest_value warp version)"
 ISAACLAB_REPO="$(manifest_value isaac_lab repo)"
 ISAACLAB_BRANCH="$(manifest_value isaac_lab branch)"
 ISAACLAB_SHA="$(manifest_value isaac_lab commit)"
@@ -50,7 +53,10 @@ CONTAINER_THIRD_PARTY_ISAACLAB="${CONTAINER_REPO}/third_party/IsaacLab"
 : "${PYTHON_VERSION:?Missing isaac_sim.python in versions/compatibility.toml}"
 : "${ISAACSIM_VERSION:?Missing isaac_sim.version in versions/compatibility.toml}"
 : "${NEWTON_PACKAGE:?Missing newton.package in versions/compatibility.toml}"
-: "${NEWTON_VERSION:?Missing newton.version in versions/compatibility.toml}"
+: "${NEWTON_REPO:?Missing newton.repo in versions/compatibility.toml}"
+: "${NEWTON_REF:?Missing newton.commit in versions/compatibility.toml}"
+: "${WARP_PACKAGE:?Missing warp.package in versions/compatibility.toml}"
+: "${WARP_VERSION:?Missing warp.version in versions/compatibility.toml}"
 : "${ISAACLAB_REPO:?Missing isaac_lab.repo in versions/compatibility.toml}"
 : "${ISAACLAB_BRANCH:?Missing isaac_lab.branch in versions/compatibility.toml}"
 : "${ISAACLAB_SHA:?Missing isaac_lab.commit in versions/compatibility.toml}"
@@ -189,7 +195,10 @@ build_image() {
     --tag "${image}" \
     --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
     --build-arg "NEWTON_PACKAGE=${NEWTON_PACKAGE}" \
-    --build-arg "NEWTON_VERSION=${NEWTON_VERSION}" \
+    --build-arg "NEWTON_REPO=${NEWTON_REPO}" \
+    --build-arg "NEWTON_REF=${NEWTON_REF}" \
+    --build-arg "WARP_PACKAGE=${WARP_PACKAGE}" \
+    --build-arg "WARP_VERSION=${WARP_VERSION}" \
     --build-arg "ISAACSIM_VERSION=${ISAACSIM_VERSION}" \
     --build-arg "ISAACLAB_REPO=${ISAACLAB_REPO}" \
     --build-arg "ISAACLAB_BRANCH=${ISAACLAB_BRANCH}" \
@@ -231,7 +240,7 @@ run_check() {
     -v "${ROOT}:/workspace/anchor-bench" \
     -w /workspace/anchor-bench \
     "${KIT_IMAGE}" \
-    python check_environment.py --dry-run
+    python check_environment.py --profile kitless
 }
 
 open_shell() {

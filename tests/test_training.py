@@ -35,6 +35,33 @@ def _demo_rows(length: int = 8) -> list[dict[str, float]]:
     return rows
 
 
+def _write_sage_training_episode(root: Path, *, offset: float = 0.0) -> None:
+    root.mkdir(parents=True)
+    (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+    (root / "metadata.yaml").write_text(
+        "schema: sage\n"
+        "time_unit: microseconds\n"
+        "position_unit: rad\n"
+        "velocity_unit: rad/s\n"
+        "torque_unit: N*m\n",
+        encoding="utf-8",
+    )
+    control = ["type,timestamp,positions"]
+    state = ["type,timestamp,positions,velocities,torques"]
+    for index in range(3):
+        control.append(
+            f'CONTROL,{index * 2000},"[{offset + 0.1 + index}, {offset + 0.2 + index}]"'
+        )
+        state.append(
+            f'STATE_MOTOR,{index * 2000},'
+            f'"[{offset + 0.3 + index}, {offset + 0.4 + index}]",'
+            f'"[{0.5 + 0.1 * index}, {1.5 + 0.1 * index}]",'
+            f'"[{10.0 + index}, {20.0 + index}]"'
+        )
+    (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
+    (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
+
+
 class TrainingDataTests(unittest.TestCase):
     def test_csv_discovery_split_and_stats_are_deterministic(self):
         from anchor_bench.training.data import (
@@ -76,6 +103,26 @@ class TrainingDataTests(unittest.TestCase):
             loaded = json.loads(stats_path.read_text(encoding="utf-8"))
             self.assertEqual(stats, loaded)
 
+    def test_sage_discovery_keeps_whole_episodes(self):
+        from anchor_bench.training.data import discover_sage_dirs, split_csv_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_sage_training_episode(root / "episode_b")
+            _write_sage_training_episode(root / "nested" / "episode_a", offset=1.0)
+            (root / "unrelated").mkdir()
+
+            episodes = discover_sage_dirs(root)
+            self.assertEqual(
+                {"episode_a", "episode_b"},
+                {path.name for path in episodes},
+            )
+            train_a, val_a = split_csv_files(episodes, seed=17)
+            train_b, val_b = split_csv_files(episodes, seed=17)
+            self.assertEqual((train_a, val_a), (train_b, val_b))
+            self.assertEqual(1, len(train_a))
+            self.assertEqual(1, len(val_a))
+
     def test_column_resolution_uses_model_defaults_and_validates_headers(self):
         from anchor_bench.training.data import resolve_training_columns
 
@@ -113,6 +160,21 @@ class TrainingDataTests(unittest.TestCase):
             derived_columns=["solver_pd"],
         )
         self.assertEqual(["torque_residual"], hybrid.target_columns)
+
+        dynamic = resolve_training_columns(
+            ["position", "position_error", "velocity", "torque"],
+            model="gru",
+            input_columns=["position", "dynamic_bias"],
+            derived_columns=["dynamic_bias"],
+        )
+        self.assertEqual(["position", "dynamic_bias"], dynamic.input_columns)
+
+        with self.assertRaisesRegex(ValueError, "duplicate GRU input columns: position"):
+            resolve_training_columns(
+                ["position", "torque"],
+                model="gru",
+                input_columns=["position", "position"],
+            )
 
         with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: qfrc_bias"):
             resolve_training_columns(
@@ -156,6 +218,194 @@ class TrainingRunnerTests(unittest.TestCase):
 
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
         self.assertEqual("measured_torque", resolved.target_column)
+        with self.assertRaisesRegex(ValueError, "duplicate GRU input columns: position"):
+            resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(
+                    robot="so101",
+                    input_columns=["position", "position"],
+                    dry_run=True,
+                )
+            )
+
+    def test_sage_sequence_uses_full_state_for_scalar_dynamic_bias(self):
+        from dataclasses import replace
+
+        import numpy as np
+
+        from anchor_bench.training.trainer import (
+            TrainingJob, _load_sequences, _runtime_metadata,
+        )
+
+        class FakeBiasProvider:
+            def __init__(self):
+                self.calls = []
+
+            def compute(self, *, joint_names, positions, velocities):
+                self.calls.append((list(joint_names), positions.copy(), velocities.copy()))
+                return positions + 10.0 * velocities
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            episode = root / "episode"
+            _write_sage_training_episode(episode)
+            provider = FakeBiasProvider()
+            job = TrainingJob(
+                model="gru",
+                joint_type="Pitch",
+                train_csvs=[],
+                val_csvs=[],
+                train_sage_dirs=[episode],
+                val_sage_dirs=[],
+                output_dir=root / "out",
+                input_columns=["position", "position_error", "velocity", "dynamic_bias"],
+                target_columns=["torque"],
+                source_target_columns=["torque"],
+                seed=1,
+                final_epochs=1,
+                trial_epochs=1,
+                trials=1,
+                skip_optuna=True,
+                n_streams=1,
+                noise_std=0.0,
+                dynamic_bias_provider=provider,
+                metadata={
+                    "sample_dt_s": 0.002,
+                    "delay": {"handling": "none", "training_delay_s": 0.0},
+                    "dynamic_bias_derivation": {
+                        "source": "newton.solvers.SolverMuJoCo.qfrc_bias",
+                        "asset_sha256": "demo-hash",
+                    },
+                },
+            )
+
+            train, val = _load_sequences(job)
+            inconsistent = root / "inconsistent"
+            _write_sage_training_episode(inconsistent)
+            (inconsistent / "joint_list.txt").write_text(
+                "Rotation\nElbow\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "common SAGE joint set"):
+                _load_sequences(replace(job, train_sage_dirs=[episode, inconsistent]))
+
+        self.assertEqual([], val)
+        self.assertEqual(1, len(train))
+        self.assertEqual(["Rotation", "Pitch"], provider.calls[0][0])
+        self.assertEqual((3, 2), provider.calls[0][1].shape)
+        np.testing.assert_allclose(provider.calls[0][1][0], [0.3, 0.4])
+        features, targets = train[0]
+        np.testing.assert_allclose(
+            features,
+            [
+                [0.4, -0.2, 1.5, 15.4],
+                [1.4, -0.2, 1.6, 17.4],
+                [2.4, -0.2, 1.7, 19.4],
+            ],
+            atol=1.0e-6,
+        )
+        np.testing.assert_allclose(targets[:, 0], [20.0, 21.0, 22.0])
+
+        stats = {
+            "normalization": {
+                "inputs": {
+                    "mean": {column: 0.0 for column in job.input_columns},
+                    "std": {column: 1.0 for column in job.input_columns},
+                },
+                "targets": {
+                    "mean": {"torque": 0.0},
+                    "std": {"torque": 1.0},
+                },
+            },
+        }
+        runtime_metadata = _runtime_metadata(job, stats)
+        self.assertEqual(
+            "demo-hash",
+            runtime_metadata["dynamic_bias_derivation"]["asset_sha256"],
+        )
+
+        self.assertEqual(
+            ["Pitch", "Rotation"],
+            runtime_metadata["dynamic_bias_derivation"]["trajectory_joint_names"],
+        )
+
+    def test_scalar_csv_ignores_unselected_text_columns(self):
+        from unittest.mock import patch
+
+        import numpy as np
+
+        from anchor_bench.training.trainer import TrainingJob, _load_sequences
+
+        class FakeSeries:
+            def __init__(self, values):
+                self._values = np.asarray(values)
+
+            def to_numpy(self):
+                return self._values
+
+        class FakeFrame:
+            def __init__(self):
+                self._columns = {
+                    "episode": ["run-a", "run-a"],
+                    "position": [0.1, 0.2],
+                    "position_error": [0.3, 0.4],
+                    "velocity": [0.5, 0.6],
+                    "torque": [0.7, 0.8],
+                }
+                self.columns = list(self._columns)
+
+            def __getitem__(self, name):
+                return FakeSeries(self._columns[name])
+
+        class FakePandas:
+            @staticmethod
+            def read_csv(_path):
+                return FakeFrame()
+
+        job = TrainingJob(
+            model="gru",
+            joint_type="Rotation",
+            train_csvs=[Path("trajectory.csv")],
+            val_csvs=[],
+            output_dir=Path("unused"),
+            input_columns=["position", "position_error", "velocity"],
+            target_columns=["torque"],
+            source_target_columns=["torque"],
+            seed=1,
+            final_epochs=1,
+            trial_epochs=1,
+            trials=1,
+            skip_optuna=True,
+            n_streams=1,
+            noise_std=0.0,
+        )
+
+        with patch("anchor_bench.training.trainer._import_pandas", return_value=FakePandas()):
+            train, val = _load_sequences(job)
+
+        self.assertEqual([], val)
+        np.testing.assert_allclose(
+            train[0][0],
+            [[0.1, 0.3, 0.5], [0.2, 0.4, 0.6]],
+        )
+        np.testing.assert_allclose(train[0][1], [[0.7], [0.8]])
+
+    def test_g1_dynamic_bias_dry_run_does_not_require_newton_or_assets(self):
+        from anchor_bench.core.schemas import TrainActuatorRunConfig
+        from anchor_bench.training.runner import run_train_actuator
+
+        plan = run_train_actuator(
+            TrainActuatorRunConfig(
+                robot="g1",
+                data="inputs/datasets/g1/g1_arm_multi_joint",
+                input_columns=[
+                    "position", "position_error", "velocity", "dynamic_bias",
+                ],
+                dry_run=True,
+            )
+        )
+
+        self.assertTrue(plan.dry_run)
+        self.assertEqual("sage", plan.metadata["data_format"])
+        self.assertIn("dynamic_bias", plan.metadata["input_columns"])
 
     def test_grouped_residual_model_requires_shared_physics_baseline(self):
         from anchor_bench.training.runner import _residual_physics_for_joint

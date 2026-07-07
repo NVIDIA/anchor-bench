@@ -4,10 +4,16 @@ version = "6.0.0.0"
 python = "3.12"
 
 [newton]
-version = "1.2.0"
+version = "1.4.0.dev0"
 package = "newton"
+repo = "https://github.com/vidurv-nvidia/newton.git"
+commit = "ae365981f0ba40371d2b19489e4ba07a5e5767ce"
+
+[warp]
+package = "warp-lang"
+version = "1.15.0.dev20260626"
 
 [isaac_lab]
 repo = "https://github.com/isaac-sim/IsaacLab.git"
 branch = "develop"
-commit = "482d21c936b863e323f0a135c8e8e8e8a9c166b2"
+commit = "5f2db9902baa724427b7aa654835aa559fce64e8"

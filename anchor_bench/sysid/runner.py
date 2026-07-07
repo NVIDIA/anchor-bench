@@ -89,7 +89,7 @@ def build_sysid_command(config: SysIdRunConfig) -> CommandPlan:
         command=command,
         dry_run=resolved.dry_run,
         notes=[
-            f"uses {bundle.paths.actuators.relative_to(bundle.paths.config_dir)} with Newton 1.2 native actuator components",
+            f"uses {bundle.paths.actuators.relative_to(bundle.paths.config_dir)} with native Newton actuator components",
             f"requires newton {versions.newton_version} and Isaac Lab {versions.isaac_lab_branch}@{versions.isaac_lab_commit}",
         ],
     )

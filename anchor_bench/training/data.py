@@ -11,9 +11,16 @@ from typing import Any, Iterable, Sequence
 
 DEFAULT_INPUT_COLUMNS = ("position", "position_error", "velocity")
 DEFAULT_TARGET_COLUMN = "torque"
-SUPPORTED_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
+SUPPORTED_INPUT_COLUMNS = {
+    "dynamic_bias",
+    "position",
+    "position_error",
+    "velocity",
+    "solver_pd",
+}
 MODEL_CHOICES = {"gru", "hybrid_residual"}
 EPSILON_STD = 1.0e-8
+SAGE_REQUIRED_FILES = frozenset({"control.csv", "state_motor.csv", "joint_list.txt", "metadata.yaml"})
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,23 @@ def discover_csv_files(root: str | Path) -> list[Path]:
     if not csvs:
         raise ValueError(f"no CSV files found under {path}")
     return csvs
+
+
+def _is_sage_dir(path: Path) -> bool:
+    return path.is_dir() and all((path / name).is_file() for name in SAGE_REQUIRED_FILES)
+
+
+def discover_sage_dirs(root: str | Path) -> list[Path]:
+    """Discover complete SAGE trajectory directories without splitting episodes."""
+    path = Path(root).expanduser()
+    if _is_sage_dir(path):
+        return [path]
+    if not path.exists() or not path.is_dir():
+        raise ValueError(f"no SAGE trajectory directories found under {path}")
+    trajectories = sorted(candidate for candidate in path.rglob("*") if _is_sage_dir(candidate))
+    if not trajectories:
+        raise ValueError(f"no SAGE trajectory directories found under {path}")
+    return trajectories
 
 
 def read_csv_header(path: str | Path) -> list[str]:
@@ -75,6 +99,10 @@ def resolve_training_columns(
         raise ValueError(f"model {model!r} must be one of {sorted(MODEL_CHOICES)}")
     header_set = set(header)
     inputs = list(input_columns or DEFAULT_INPUT_COLUMNS)
+    duplicates = sorted({column for column in inputs if inputs.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
+
     unsupported = sorted(set(inputs) - SUPPORTED_INPUT_COLUMNS)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
