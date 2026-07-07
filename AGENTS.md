@@ -2,7 +2,7 @@
 # Anchor Bench Agent Guide
 
 This repo targets Isaac Sim 6.0, Newton `1.4.0.dev0` at commit
-`ae365981f0ba40371d2b19489e4ba07a5e5767ce`, and Isaac Lab `develop` at
+`b6402cf6630df90234cdf3a2c72f9b08ac72472e`, and Isaac Lab `develop` at
 `5f2db9902baa724427b7aa654835aa559fce64e8`.
 
 ## Rules

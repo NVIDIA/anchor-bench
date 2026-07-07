@@ -44,7 +44,7 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("--target kitless", result.stdout)
         self.assertIn("anchor-bench:kitless", result.stdout)
         self.assertIn("--build-arg NEWTON_REPO=https://github.com/vidurv-nvidia/newton.git", result.stdout)
-        self.assertIn("--build-arg NEWTON_REF=ae365981f0ba40371d2b19489e4ba07a5e5767ce", result.stdout)
+        self.assertIn("--build-arg NEWTON_REF=b6402cf6630df90234cdf3a2c72f9b08ac72472e", result.stdout)
         self.assertIn("--build-arg WARP_PACKAGE=warp-lang", result.stdout)
         self.assertIn("--build-arg WARP_VERSION=1.15.0.dev20260626", result.stdout)
         self.assertIn("--build-arg ISAACSIM_VERSION=6.0.0.0", result.stdout)
@@ -202,7 +202,7 @@ class DockerSetupTests(unittest.TestCase):
             "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_REF}",
             dockerfile_text,
         )
-        self.assertIn("ae365981f0ba40371d2b19489e4ba07a5e5767ce", dockerfile_text)
+        self.assertIn("b6402cf6630df90234cdf3a2c72f9b08ac72472e", dockerfile_text)
         self.assertIn("ARG WARP_PACKAGE=warp-lang", dockerfile_text)
         self.assertIn("ARG WARP_VERSION=1.15.0.dev20260626", dockerfile_text)
         self.assertEqual(3, dockerfile_text.count('"${WARP_PACKAGE}==${WARP_VERSION}"'))
@@ -218,7 +218,7 @@ class DockerSetupTests(unittest.TestCase):
 
         compose_text = compose.read_text(encoding="utf-8")
         self.assertIn("NEWTON_REPO: https://github.com/vidurv-nvidia/newton.git", compose_text)
-        self.assertIn("NEWTON_REF: ae365981f0ba40371d2b19489e4ba07a5e5767ce", compose_text)
+        self.assertIn("NEWTON_REF: b6402cf6630df90234cdf3a2c72f9b08ac72472e", compose_text)
         self.assertIn("WARP_PACKAGE: warp-lang", compose_text)
         self.assertIn("WARP_VERSION: 1.15.0.dev20260626", compose_text)
         self.assertIn("/workspace/anchor-bench", compose_text)

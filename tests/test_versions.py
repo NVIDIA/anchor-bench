@@ -20,7 +20,7 @@ class VersionManifestTests(unittest.TestCase):
             "https://github.com/vidurv-nvidia/newton.git",
         )
         self.assertEqual(
-            versions.newton_commit, "ae365981f0ba40371d2b19489e4ba07a5e5767ce"
+            versions.newton_commit, "b6402cf6630df90234cdf3a2c72f9b08ac72472e"
         )
         self.assertEqual(versions.warp_package, "warp-lang")
         self.assertEqual(versions.warp_version, "1.15.0.dev20260626")

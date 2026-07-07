@@ -18,7 +18,7 @@ dependencies = [
 dev = ["pytest>=8.0", "ruff>=0.5"]
 full = [
   "isaacsim==6.0.0.0",
-  "newton[sim] @ git+https://github.com/vidurv-nvidia/newton.git@ae365981f0ba40371d2b19489e4ba07a5e5767ce",
+  "newton[sim] @ git+https://github.com/vidurv-nvidia/newton.git@b6402cf6630df90234cdf3a2c72f9b08ac72472e",
   "mujoco~=3.10.0",
   "warp-lang==1.15.0.dev20260626",
   "mujoco-warp~=3.10.0,>=3.10.0.1",

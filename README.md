@@ -9,7 +9,7 @@ benchmark command builders, and analysis helpers around the actuator-identificat
 ## Compatibility
 
 - Isaac Sim: `6.0.0.0`
-- Newton: `1.4.0.dev0` at `ae365981f0ba40371d2b19489e4ba07a5e5767ce`
+- Newton: `1.4.0.dev0` at `b6402cf6630df90234cdf3a2c72f9b08ac72472e`
 - Warp: `1.15.0.dev20260626`
 - Isaac Lab: `develop` at `5f2db9902baa724427b7aa654835aa559fce64e8`
 - Python: `3.12`

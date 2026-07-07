@@ -6,7 +6,7 @@ FROM python:${PYTHON_VERSION}-slim AS kitless
 
 ARG NEWTON_PACKAGE=newton
 ARG NEWTON_REPO=https://github.com/vidurv-nvidia/newton.git
-ARG NEWTON_REF=ae365981f0ba40371d2b19489e4ba07a5e5767ce
+ARG NEWTON_REF=b6402cf6630df90234cdf3a2c72f9b08ac72472e
 ARG WARP_PACKAGE=warp-lang
 ARG WARP_VERSION=1.15.0.dev20260626
 
@@ -69,7 +69,7 @@ FROM kitless AS full
 
 ARG NEWTON_PACKAGE=newton
 ARG NEWTON_REPO=https://github.com/vidurv-nvidia/newton.git
-ARG NEWTON_REF=ae365981f0ba40371d2b19489e4ba07a5e5767ce
+ARG NEWTON_REF=b6402cf6630df90234cdf3a2c72f9b08ac72472e
 ARG WARP_PACKAGE=warp-lang
 ARG WARP_VERSION=1.15.0.dev20260626
 ARG ISAACLAB_REPO=https://github.com/isaac-sim/IsaacLab.git
