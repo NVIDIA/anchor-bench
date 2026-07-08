@@ -22,7 +22,6 @@ from anchor_bench.training.data import (
     MODEL_CHOICES,
     SUPPORTED_INPUT_COLUMNS,
     discover_training_sources,
-    expand_joint_sources,
     read_training_header,
     resolve_training_columns,
     split_training_sources,
@@ -38,9 +37,8 @@ class ResolvedTrainActuatorRunConfig:
     model: str
     data: str
     output: str
-    shared_siso_joints: list[str] | None
-    input_joints: list[str] | None
-    output_joints: list[str] | None
+    input_joints: list[str]
+    output_joints: list[str]
     sample_dt_s: float
     pd_kp: float | None
     pd_kd: float | None
@@ -133,53 +131,16 @@ def _resolve_joint_selection(
     config: TrainActuatorRunConfig,
     training_cfg: Any,
     bundle: Any,
-) -> tuple[list[str] | None, list[str] | None, list[str] | None, dict[str, str]]:
+) -> tuple[list[str], list[str], dict[str, str]]:
     sources: dict[str, str] = {}
-    cli_selection = any(
-        value is not None
-        for value in (
-            config.shared_siso_joints,
-            config.input_joints,
-            config.output_joints,
-        )
-    )
+    cli_selection = config.input_joints is not None or config.output_joints is not None
     owner = config if cli_selection else training_cfg
     source = "cli" if cli_selection else "run.yaml"
-    raw_shared = owner.shared_siso_joints
     raw_inputs = owner.input_joints
     raw_outputs = owner.output_joints
 
-    if raw_shared is None and raw_inputs is None:
-        raise ValueError("training requires either shared_siso_joints or input_joints")
-    if raw_shared is not None:
-        if raw_inputs is not None or raw_outputs is not None:
-            raise ValueError(
-                "shared_siso_joints cannot be combined with input_joints or output_joints"
-            )
-        shared_siso_joints = _resolved_joint_list(
-            bundle,
-            raw_shared,
-            label="shared_siso_joints",
-        )
-        sources.update(
-            {
-                "shared_siso_joints": source,
-                "input_joints": (
-                    "overridden_by_cli_shared_siso_joints"
-                    if cli_selection and training_cfg.input_joints is not None
-                    else "not_configured"
-                ),
-                "output_joints": (
-                    "overridden_by_cli_shared_siso_joints"
-                    if cli_selection and training_cfg.output_joints is not None
-                    else "not_configured"
-                ),
-            }
-        )
-        return shared_siso_joints, None, None, sources
-
     if raw_inputs is None:
-        raise ValueError("input_joints is required when output_joints is configured")
+        raise ValueError("training requires input_joints")
     input_joints = _resolved_joint_list(bundle, raw_inputs, label="input_joints")
     output_joints = (
         list(input_joints)
@@ -199,27 +160,17 @@ def _resolve_joint_selection(
         )
     sources.update(
         {
-            "shared_siso_joints": (
-                "overridden_by_cli_input_joints"
-                if cli_selection and training_cfg.shared_siso_joints is not None
-                else "not_configured"
-            ),
             "input_joints": source,
             "output_joints": source if raw_outputs is not None else "input_joints",
         }
     )
-    return None, input_joints, output_joints, sources
+    return input_joints, output_joints, sources
 
 
 def _training_topology(
-    shared_siso_joints: Sequence[str] | None,
-    input_joints: Sequence[str] | None,
-    output_joints: Sequence[str] | None,
+    input_joints: Sequence[str],
+    output_joints: Sequence[str],
 ) -> str:
-    if shared_siso_joints is not None:
-        return "shared_siso"
-    if input_joints is None or output_joints is None:
-        raise ValueError("training joint selection is incomplete")
     if len(input_joints) == 1:
         return "siso"
     if len(output_joints) == 1:
@@ -390,7 +341,7 @@ def resolve_train_actuator_run_config(
         None,
         "--output",
     )
-    shared_siso_joints, input_joints, output_joints, joint_sources = _resolve_joint_selection(
+    input_joints, output_joints, joint_sources = _resolve_joint_selection(
         config,
         training_cfg,
         bundle,
@@ -427,14 +378,8 @@ def resolve_train_actuator_run_config(
 
     pd_required = model == "hybrid_residual" or "solver_pd" in input_columns
     friction_required = model == "hybrid_residual"
-    if shared_siso_joints is not None:
-        selected_inputs = list(shared_siso_joints)
-        selected_outputs = list(shared_siso_joints)
-    else:
-        assert input_joints is not None
-        assert output_joints is not None
-        selected_inputs = list(input_joints)
-        selected_outputs = list(output_joints)
+    selected_inputs = list(input_joints)
+    selected_outputs = list(output_joints)
     pd_joints = selected_inputs if "solver_pd" in input_columns else selected_outputs
     friction_joints = selected_outputs
     actuator_spec: Any | None = None
@@ -473,7 +418,6 @@ def resolve_train_actuator_run_config(
         model=model,
         data=resolve_repo_path_text(data),
         output=resolve_repo_path_text(output),
-        shared_siso_joints=shared_siso_joints,
         input_joints=input_joints,
         output_joints=output_joints,
         sample_dt_s=sample_dt_s,
@@ -515,15 +459,8 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         "--data",
         resolved.data,
     ]
-    if resolved.shared_siso_joints is not None:
-        command.extend(
-            ("--shared-siso-joints", ",".join(resolved.shared_siso_joints))
-        )
-    else:
-        assert resolved.input_joints is not None
-        assert resolved.output_joints is not None
-        command.extend(("--input-joints", ",".join(resolved.input_joints)))
-        command.extend(("--output-joints", ",".join(resolved.output_joints)))
+    command.extend(("--input-joints", ",".join(resolved.input_joints)))
+    command.extend(("--output-joints", ",".join(resolved.output_joints)))
     command.extend(
         (
             "--output",
@@ -586,11 +523,9 @@ def build_resolved_train_actuator_command(
     metadata: dict[str, Any] = {
         "model": resolved.model,
         "training_topology": _training_topology(
-            resolved.shared_siso_joints,
             resolved.input_joints,
             resolved.output_joints,
         ),
-        "shared_siso_joints": resolved.shared_siso_joints,
         "input_joints": resolved.input_joints,
         "output_joints": resolved.output_joints,
         "sample_dt_s": resolved.sample_dt_s,
@@ -661,17 +596,9 @@ def run_resolved_train_actuator(
 
     bundle = get_robot(resolved.robot)
     sources = discover_training_sources(resolved.data)
-    if resolved.shared_siso_joints is not None:
-        sources = expand_joint_sources(sources, resolved.shared_siso_joints)
     train_sources, val_sources = split_training_sources(sources, seed=resolved.seed)
 
-    if resolved.shared_siso_joints is not None:
-        if train_sources[0].joint is None:
-            raise ValueError("shared-SISO training source expansion is incomplete")
-        header_joint = train_sources[0].joint
-    else:
-        assert resolved.input_joints is not None
-        header_joint = resolved.input_joints[0]
+    header_joint = resolved.input_joints[0]
     derived_columns = [
         column
         for column in resolved.input_columns
@@ -696,11 +623,9 @@ def run_resolved_train_actuator(
 
     metadata: dict[str, Any] = {
         "training_topology": _training_topology(
-            resolved.shared_siso_joints,
             resolved.input_joints,
             resolved.output_joints,
         ),
-        "shared_siso_joints": resolved.shared_siso_joints,
         "input_joints": resolved.input_joints,
         "output_joints": resolved.output_joints,
         "robot": resolved.robot,
@@ -715,7 +640,6 @@ def run_resolved_train_actuator(
     artifacts = train_stateful_gru(
         TrainingJob(
             model=resolved.model,
-            shared_siso_joints=resolved.shared_siso_joints,
             train_sources=train_sources,
             val_sources=val_sources,
             output_dir=Path(resolved.output),

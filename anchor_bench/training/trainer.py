@@ -16,7 +16,6 @@ from anchor_bench.training.data import (
     FEATURE_DOMAINS,
     FeatureBlock,
     TrainingSource,
-    slice_training_episode_joint,
     write_stats_json,
 )
 from anchor_bench.training.export import export_gru_checkpoint
@@ -59,7 +58,6 @@ class TrainingJob:
     noise_std: float
     residual_physics: ResidualPhysics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    shared_siso_joints: Sequence[str] | None = None
     input_joints: Sequence[str] | None = None
     output_joints: Sequence[str] | None = None
     sample_dt_s: float | None = None
@@ -114,64 +112,13 @@ def _validated_axes(
     return inputs, outputs
 
 
-def _validated_joint_list(
-    joints: Sequence[str],
-    *,
-    label: str,
-) -> tuple[str, ...]:
-    result = tuple(joints)
-    if not result:
-        raise ValueError(f"{label} must contain at least one joint")
-    if any(not isinstance(name, str) or not name for name in result):
-        raise ValueError(f"{label} must contain non-empty strings")
-    if len(set(result)) != len(result):
-        raise ValueError(f"{label} must not contain duplicates")
-    return result
-
-
-def _source_axes(
-    job: TrainingJob,
-    source: TrainingSource | None = None,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if job.shared_siso_joints is not None:
-        if job.input_joints is not None or job.output_joints is not None:
-            raise ValueError(
-                "shared_siso_joints cannot be combined with input_joints or output_joints"
-            )
-        shared = _validated_joint_list(
-            job.shared_siso_joints,
-            label="shared_siso_joints",
-        )
-        if source is None or source.joint is None:
-            raise ValueError(
-                "shared-SISO training sources must name one concrete joint"
-            )
-        if source.joint not in shared:
-            raise ValueError(
-                f"shared-SISO training source joint {source.joint!r} is not selected"
-            )
-        return _validated_axes((source.joint,), None)
-    if job.input_joints is None:
-        raise ValueError("TrainingJob requires input_joints or shared_siso_joints")
-    return _validated_axes(job.input_joints, job.output_joints)
-
-
 def _runtime_axes(job: TrainingJob) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if job.shared_siso_joints is not None:
-        if job.input_joints is not None or job.output_joints is not None:
-            raise ValueError(
-                "shared_siso_joints cannot be combined with input_joints or output_joints"
-            )
-        _validated_joint_list(job.shared_siso_joints, label="shared_siso_joints")
-        return _validated_axes(("actuator",), None)
     if job.input_joints is None:
-        raise ValueError("TrainingJob requires input_joints or shared_siso_joints")
+        raise ValueError("TrainingJob requires input_joints")
     return _validated_axes(job.input_joints, job.output_joints)
 
 
 def _training_topology(job: TrainingJob) -> str:
-    if job.shared_siso_joints is not None:
-        return "shared_siso"
     inputs, outputs = _runtime_axes(job)
     if len(inputs) == 1:
         return "siso"
@@ -182,28 +129,16 @@ def _training_topology(job: TrainingJob) -> str:
 
 def _artifact_label(job: TrainingJob) -> str:
     topology = _training_topology(job)
-    if job.shared_siso_joints is not None:
-        shared_joints = _validated_joint_list(
-            job.shared_siso_joints,
-            label="shared_siso_joints",
-        )
-        identity = {
-            "topology": topology,
-            "shared_siso_joints": list(shared_joints),
-        }
-        readable = f"{topology}__{'__'.join(shared_joints)}"
-    else:
-        input_joints, output_joints = _runtime_axes(job)
-        identity = {
-            "topology": topology,
-            "input_joints": list(input_joints),
-            "output_joints": list(output_joints),
-        }
-
-        readable = (
-            f"{topology}__in__{'__'.join(input_joints)}"
-            f"__out__{'__'.join(output_joints)}"
-        )
+    input_joints, output_joints = _runtime_axes(job)
+    identity = {
+        "topology": topology,
+        "input_joints": list(input_joints),
+        "output_joints": list(output_joints),
+    }
+    readable = (
+        f"{topology}__in__{'__'.join(input_joints)}"
+        f"__out__{'__'.join(output_joints)}"
+    )
 
     digest = hashlib.sha256(
         json.dumps(identity, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -497,7 +432,7 @@ def _prepare_episode(
     source: TrainingSource | None = None,
     source_name: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    input_joints, output_joints = _source_axes(job, source)
+    input_joints, output_joints = _runtime_axes(job)
     label = source_name or (str(source.path) if source is not None else "training episode")
     episode_inputs = tuple(episode.input_joints)
     episode_outputs = tuple(episode.output_joints)
@@ -636,12 +571,6 @@ def _load_sequences(
                 loader_columns.append(required)
 
     provenance: dict[str, Any] | None = None
-    shared_joints = (
-        _validated_joint_list(job.shared_siso_joints, label="shared_siso_joints")
-        if job.shared_siso_joints is not None
-        else None
-    )
-    shared_episode_cache: dict[Path, Any] = {}
 
     def merge_provenance(source: TrainingSource, episode: Any) -> None:
         nonlocal provenance
@@ -658,32 +587,16 @@ def _load_sequences(
         )
 
     def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
-        input_joints, output_joints = _source_axes(job, source)
-        if shared_joints is None:
-            episode = load_training_episode(
-                source,
-                input_joints=input_joints,
-                output_joints=output_joints,
-                input_columns=loader_columns,
-                sample_dt_s=_sample_dt_s(job),
-                dynamic_bias_provider=job.dynamic_bias_provider,
-            )
-            merge_provenance(source, episode)
-        else:
-            episode = shared_episode_cache.get(source.path)
-            if episode is None:
-                episode = load_training_episode(
-                    source,
-                    input_joints=shared_joints,
-                    output_joints=shared_joints,
-                    input_columns=loader_columns,
-                    sample_dt_s=_sample_dt_s(job),
-                    dynamic_bias_provider=job.dynamic_bias_provider,
-                )
-                shared_episode_cache[source.path] = episode
-                merge_provenance(source, episode)
-            assert source.joint is not None
-            episode = slice_training_episode_joint(episode, source.joint)
+        input_joints, output_joints = _runtime_axes(job)
+        episode = load_training_episode(
+            source,
+            input_joints=input_joints,
+            output_joints=output_joints,
+            input_columns=loader_columns,
+            sample_dt_s=_sample_dt_s(job),
+            dynamic_bias_provider=job.dynamic_bias_provider,
+        )
+        merge_provenance(source, episode)
         return _prepare_episode(job, episode, source=source)
 
     train = [load_one(source) for source in job.train_sources]
@@ -943,8 +856,6 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
             "external_delay_s": 0.0,
         },
     }
-    if job.shared_siso_joints is not None:
-        runtime["shared_siso_joints"] = list(job.shared_siso_joints)
     if "dynamic_bias" in job.input_columns:
         derivation = job.metadata.get("dynamic_bias_derivation")
         if not isinstance(derivation, Mapping):
@@ -1050,11 +961,6 @@ def _fit_once(
     checkpoint = {
         "model": job.model,
         "training_topology": _training_topology(job),
-        "shared_siso_joints": (
-            list(job.shared_siso_joints)
-            if job.shared_siso_joints is not None
-            else None
-        ),
         "model_state_dict": model.state_dict(),
         "input_columns": job.input_columns,
         "input_feature_specs": _input_feature_specs(job),
@@ -1128,11 +1034,6 @@ def _training_stats_metadata(job: TrainingJob) -> dict[str, Any]:
         "model": job.model,
         "input_feature_specs": _input_feature_specs(job),
         "training_topology": _training_topology(job),
-        "shared_siso_joints": (
-            list(job.shared_siso_joints)
-            if job.shared_siso_joints is not None
-            else None
-        ),
         "input_joints": list(input_joints),
         "output_joints": list(output_joints),
         "data": {

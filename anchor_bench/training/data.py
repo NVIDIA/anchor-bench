@@ -44,7 +44,6 @@ class TrainingColumns:
 @dataclass(frozen=True)
 class TrainingSource:
     path: Path
-    joint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -175,45 +174,6 @@ class TrainingEpisode:
                 MappingProxyType(dict(self.dynamic_bias_provenance)),
             )
 
-
-def slice_training_episode_joint(
-    episode: TrainingEpisode,
-    joint: str,
-) -> TrainingEpisode:
-    """Return one joint view while retaining all channels and provenance."""
-
-    try:
-        input_index = episode.input_joints.index(joint)
-    except ValueError as exc:
-        raise ValueError(f"episode does not contain input joint {joint!r}") from exc
-    try:
-        output_index = episode.output_joints.index(joint)
-    except ValueError as exc:
-        raise ValueError(f"episode does not contain output joint {joint!r}") from exc
-
-    feature_blocks: dict[str, FeatureBlock] = {}
-    for name, block in episode.feature_blocks.items():
-        if block.domain == "input_joints":
-            values = block.values[:, input_index : input_index + 1, :]
-        elif block.domain == "output_joints":
-            values = block.values[:, output_index : output_index + 1, :]
-        else:
-            feature_blocks[name] = block
-            continue
-        feature_blocks[name] = FeatureBlock(
-            values=values,
-            domain=block.domain,
-            channels=block.channels,
-        )
-
-    return TrainingEpisode(
-        timestamps=episode.timestamps,
-        input_joints=(joint,),
-        output_joints=(joint,),
-        feature_blocks=feature_blocks,
-        target_torque=episode.target_torque[:, output_index : output_index + 1],
-        dynamic_bias_provenance=episode.dynamic_bias_provenance,
-    )
 
 def _readonly_array(
     values: Any,
@@ -407,16 +367,6 @@ def discover_training_sources(root: str | Path) -> list[TrainingSource]:
     return [TrainingSource(motion) for motion in motions]
 
 
-def expand_joint_sources(
-    sources: Sequence[TrainingSource],
-    joints: Sequence[str],
-) -> list[TrainingSource]:
-    return [
-        TrainingSource(source.path, joint)
-        for source in sources
-        for joint in joints
-    ]
-
 
 def split_training_sources(
     sources: Sequence[TrainingSource],
@@ -426,27 +376,14 @@ def split_training_sources(
 ) -> tuple[list[TrainingSource], list[TrainingSource]]:
     if not sources:
         raise ValueError("cannot split an empty training source list")
-    groups: dict[Path, list[TrainingSource]] = {}
-    for source in sources:
-        groups.setdefault(source.path, []).append(source)
-    paths = list(groups)
-    random.Random(seed).shuffle(paths)
-    if len(paths) == 1:
-        return list(groups[paths[0]]), []
-    val_count = max(1, int(round(len(paths) * val_fraction)))
-    val_count = min(val_count, len(paths) - 1)
-    val_paths = set(paths[:val_count])
-
-    train_paths = sorted(
-        (path for path in paths if path not in val_paths),
-        key=str,
-    )
-    val_paths_ordered = sorted(
-        (path for path in paths if path in val_paths),
-        key=str,
-    )
-    train = [source for path in train_paths for source in groups[path]]
-    val = [source for path in val_paths_ordered for source in groups[path]]
+    shuffled = list(sources)
+    random.Random(seed).shuffle(shuffled)
+    if len(shuffled) == 1:
+        return shuffled, []
+    val_count = max(1, int(round(len(shuffled) * val_fraction)))
+    val_count = min(val_count, len(shuffled) - 1)
+    val = sorted(shuffled[:val_count], key=lambda source: str(source.path))
+    train = sorted(shuffled[val_count:], key=lambda source: str(source.path))
     return train, val
 
 
@@ -458,7 +395,7 @@ def _load_training_motion(path: Path) -> MotionData:
 
 
 def read_training_header(source: TrainingSource, joint: str) -> list[str]:
-    return list(_load_training_motion(source.path).training_columns(source.joint or joint))
+    return list(_load_training_motion(source.path).training_columns(joint))
 
 
 def load_training_table(
@@ -467,7 +404,7 @@ def load_training_table(
     joint: str,
     columns: Sequence[str],
 ) -> dict[str, np.ndarray]:
-    available = _load_training_motion(source.path).training_columns(source.joint or joint)
+    available = _load_training_motion(source.path).training_columns(joint)
     missing = [column for column in columns if column not in available]
     if missing:
         raise ValueError(f"{source.path} missing required training signals: {', '.join(missing)}")

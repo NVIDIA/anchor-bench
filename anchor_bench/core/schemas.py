@@ -190,7 +190,6 @@ class TrainActuatorRunConfig:
     model: str | None = None
     data: str | None = None
     output: str | None = None
-    shared_siso_joints: JointSelection | None = None
     input_joints: JointSelection | None = None
     output_joints: JointSelection | None = None
     pd_kp: float | None = None
@@ -209,19 +208,12 @@ class TrainActuatorRunConfig:
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        for field_name in ("shared_siso_joints", "input_joints", "output_joints"):
+        for field_name in ("input_joints", "output_joints"):
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(self, field_name, parse_joint_selection(value))
         if self.input_columns is not None:
             parse_gru_columns(self.input_columns)
-        if (
-            self.shared_siso_joints is not None
-            and (self.input_joints is not None or self.output_joints is not None)
-        ):
-            raise ValueError(
-                "shared_siso_joints cannot be combined with input_joints or output_joints"
-            )
         if self.output_joints is not None and self.input_joints is None:
             raise ValueError("input_joints is required when output_joints is configured")
 

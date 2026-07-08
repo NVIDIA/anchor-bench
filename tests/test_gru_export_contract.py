@@ -5,7 +5,6 @@ import importlib.util
 import json
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,13 +26,11 @@ def _job(
     model: str = "gru",
     input_joints: tuple[str, ...] = ("j0",),
     output_joints: tuple[str, ...] | None = None,
-    shared_siso_joints: tuple[str, ...] | None = None,
     input_columns: tuple[str, ...] = ("position",),
     physics: ResidualPhysics | None = None,
 ) -> TrainingJob:
     return TrainingJob(
         model=model,
-        shared_siso_joints=shared_siso_joints,
         train_sources=[],
         val_sources=[],
         output_dir=Path("unused"),
@@ -253,7 +250,6 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
         self.assertEqual("miso", metadata["training_topology"])
         self.assertEqual(["j0", "j1"], metadata["joint_names"])
         self.assertEqual(["j1"], metadata["output_joint_names"])
-        self.assertNotIn("shared_siso_joints", metadata)
         self.assertEqual("previous_target", metadata["previous_torque_derivation"]["source"])
         self.assertEqual("physical_zero", metadata["previous_torque_derivation"]["initialization"])
         self.assertEqual(
@@ -289,56 +285,6 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
         self.assertEqual(["j0", "j1", "j3"], merged["trajectory_joint_names"])
         self.assertEqual(["j3"], merged["unmapped_trajectory_joint_names"])
         self.assertEqual(["j1", "j2"], merged["defaulted_joint_names"])
-
-    def test_shared_siso_dynamic_bias_uses_generic_runtime_axes(self):
-        from anchor_bench.training.export import _validate_runtime_metadata
-
-        base = _job(input_columns=("dynamic_bias",))
-        job = replace(
-            base,
-            shared_siso_joints=("j0", "j1"),
-            input_joints=None,
-            output_joints=None,
-            metadata={
-                "delay": {"handling": "learned", "training_delay_s": 0.0},
-                "input_feature_specs": [
-                    {
-                        "name": "dynamic_bias",
-                        "domain": "input_joints",
-                        "channels": ["value"],
-                    }
-                ],
-                "dynamic_bias_derivation": {
-                    "source": "fake",
-                    "trajectory_joint_names": ["j0", "j1"],
-                    "requested_joint_names": ["j0", "j1"],
-                    "mapped_joint_names": ["j0", "j1"],
-                    "unmapped_trajectory_joint_names": [],
-                    "defaulted_joint_names": [],
-                },
-            },
-        )
-        stats = {
-            "input_feature_specs": job.metadata["input_feature_specs"],
-            "normalization": {
-                "inputs": {
-                    "mean": {"dynamic_bias": 0.0},
-                    "std": {"dynamic_bias": 1.0},
-                },
-                "targets": {
-                    "mean": {"torque": 0.0},
-                    "std": {"torque": 1.0},
-                },
-            }
-        }
-
-        metadata = _runtime_metadata(job, stats)
-
-        self.assertEqual("shared_siso", metadata["training_topology"])
-        self.assertEqual(["j0", "j1"], metadata["shared_siso_joints"])
-        self.assertEqual(["actuator"], metadata["joint_names"])
-        self.assertEqual(["actuator"], metadata["output_joint_names"])
-        _validate_runtime_metadata(metadata, input_size=1, output_size=1)
 
 
 class GruExportContractTests(unittest.TestCase):
@@ -424,15 +370,6 @@ class GruExportContractTests(unittest.TestCase):
                 "std": {"torque": [1.0, 1.0]},
             }
             return metadata, 4, 2
-        if topology == "shared_siso":
-            metadata["joint_names"] = ["actuator"]
-            metadata["output_joint_names"] = ["actuator"]
-            metadata["shared_siso_joints"] = ["j0", "j1"]
-            metadata["normalization"]["inputs"] = {
-                "mean": {"position": 0.0, "previous_torque": 0.0},
-                "std": {"position": 1.0, "previous_torque": 1.0},
-            }
-            return metadata, 2, 1
         raise ValueError(f"unsupported test topology {topology!r}")
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
@@ -756,7 +693,7 @@ class GruExportContractTests(unittest.TestCase):
     def test_new_topology_metadata_accepts_all_supported_shapes(self):
         from anchor_bench.training.export import _validate_runtime_metadata
 
-        for topology in ("siso", "miso", "mimo", "shared_siso"):
+        for topology in ("siso", "miso", "mimo"):
             with self.subTest(topology=topology):
                 metadata, input_size, output_size = self._metadata_for_topology(
                     topology
@@ -767,57 +704,27 @@ class GruExportContractTests(unittest.TestCase):
                     output_size=output_size,
                 )
 
-    def test_new_topology_metadata_rejects_missing_invalid_and_contradictory_fields(
-        self,
-    ):
+    def test_new_topology_metadata_rejects_invalid_and_contradictory_shapes(self):
         from anchor_bench.training.export import _validate_runtime_metadata
 
-        shared_missing, _, _ = self._metadata_for_topology("shared_siso")
-        shared_missing.pop("shared_siso_joints")
-        shared_duplicate, _, _ = self._metadata_for_topology("shared_siso")
-        shared_duplicate["shared_siso_joints"] = ["j0", "j0"]
-        shared_concrete = self._metadata()
-        shared_concrete.update(
-            {
-                "training_topology": "shared_siso",
-                "shared_siso_joints": ["j0", "j1"],
-            }
-        )
         siso_shape = self._metadata()
         siso_shape["training_topology"] = "siso"
         miso_shape, _, _ = self._metadata_for_topology("siso")
         miso_shape["training_topology"] = "miso"
         mimo_shape = self._metadata()
         mimo_shape["training_topology"] = "mimo"
-        nonshared_list = self._metadata()
-        nonshared_list.update(
-            {
-                "training_topology": "miso",
-                "shared_siso_joints": ["j0"],
-            }
-        )
-        list_without_topology = self._metadata()
-        list_without_topology["shared_siso_joints"] = ["j0"]
+        output_outside_inputs = self._metadata()
+        output_outside_inputs["output_joint_names"] = ["j2"]
         invalid = self._metadata()
         invalid["training_topology"] = "many"
         invalid_type = self._metadata()
         invalid_type["training_topology"] = []
 
         cases = [
-            ("missing shared list", shared_missing, 2, 1, "shared_siso_joints"),
-            ("duplicate shared list", shared_duplicate, 2, 1, "duplicates"),
-            ("shared concrete axes", shared_concrete, 3, 1, "both be"),
             ("siso dimensions", siso_shape, 3, 1, "inconsistent"),
             ("miso dimensions", miso_shape, 2, 1, "inconsistent"),
             ("mimo dimensions", mimo_shape, 3, 1, "inconsistent"),
-            ("nonshared list", nonshared_list, 3, 1, "only valid"),
-            (
-                "list without topology",
-                list_without_topology,
-                3,
-                1,
-                "requires training_topology",
-            ),
+            ("output subset", output_outside_inputs, 3, 1, "must be a subset"),
             ("invalid topology", invalid, 3, 1, "must be one of"),
             ("invalid topology type", invalid_type, 3, 1, "must be one of"),
         ]
@@ -832,42 +739,13 @@ class GruExportContractTests(unittest.TestCase):
                     output_size=output_size,
                 )
 
-    def test_shared_dynamic_bias_provenance_must_match_physical_joint_list(self):
-        from anchor_bench.training.export import _validate_runtime_metadata
-
-        metadata, _, output_size = self._metadata_for_topology("shared_siso")
-        metadata["input_columns"] = ["dynamic_bias"]
-        metadata["normalization"]["inputs"] = {
-            "mean": {"dynamic_bias": 0.0},
-            "std": {"dynamic_bias": 1.0},
-        }
-        metadata.pop("previous_torque_derivation")
-        metadata["dynamic_bias_derivation"] = {
-            "source": "fake",
-            "requested_joint_names": ["j0"],
-        }
-
-        with self.assertRaisesRegex(ValueError, "must match shared_siso_joints"):
-            _validate_runtime_metadata(
-                metadata,
-                input_size=1,
-                output_size=output_size,
-            )
-
-        metadata["dynamic_bias_derivation"]["requested_joint_names"] = ["j1", "j0"]
-        _validate_runtime_metadata(
-            metadata,
-            input_size=1,
-            output_size=output_size,
-        )
-
     def test_export_rejects_metadata_dimension_mismatch(self):
         from anchor_bench.training.export import _validate_runtime_metadata
 
         with self.assertRaisesRegex(ValueError, "metadata requires 3"):
             _validate_runtime_metadata(self._metadata(), input_size=4, output_size=1)
 
-    def test_checkpoint_contract_rejects_topology_and_shared_joint_mismatches(self):
+    def test_checkpoint_contract_rejects_topology_mismatches(self):
         from anchor_bench.training.export import _validate_checkpoint_contract
 
         metadata, _, _ = self._metadata_for_topology("miso")
@@ -882,29 +760,22 @@ class GruExportContractTests(unittest.TestCase):
         _validate_checkpoint_contract(base, metadata)
 
         cases = [
-            ("missing topology", {key: value for key, value in base.items() if key != "training_topology"}),
+            (
+                "missing topology",
+                {
+                    key: value
+                    for key, value in base.items()
+                    if key != "training_topology"
+                },
+            ),
             ("wrong topology", {**base, "training_topology": "mimo"}),
-            ("unexpected shared joints", {**base, "shared_siso_joints": ["j0"]}),
         ]
         for label, checkpoint in cases:
             with self.subTest(label=label), self.assertRaisesRegex(
                 ValueError,
-                "training_topology|shared_siso_joints",
+                "training_topology",
             ):
                 _validate_checkpoint_contract(checkpoint, metadata)
-
-        shared, _, _ = self._metadata_for_topology("shared_siso")
-        shared_checkpoint = {
-            "input_columns": shared["input_columns"],
-            "target_columns": shared["target_columns"],
-            "training_topology": "shared_siso",
-            "shared_siso_joints": ["j0"],
-            "input_joints": shared["joint_names"],
-            "output_joints": shared["output_joint_names"],
-            "normalization": shared["normalization"],
-        }
-        with self.assertRaisesRegex(ValueError, "shared_siso_joints"):
-            _validate_checkpoint_contract(shared_checkpoint, shared)
 
     def test_checkpoint_contract_rejects_same_width_semantic_mismatches(self):
         from anchor_bench.training.export import _validate_checkpoint_contract

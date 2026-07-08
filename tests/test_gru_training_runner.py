@@ -48,77 +48,21 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
             )
         )
 
-        self.assertIsNone(resolved.shared_siso_joints)
         self.assertEqual(
             ["right_shoulder_pitch", "right_elbow"],
             resolved.input_joints,
         )
         self.assertEqual(["right_elbow"], resolved.output_joints)
         self.assertEqual(0.002, resolved.sample_dt_s)
-        self.assertEqual("not_configured", resolved.config_sources["shared_siso_joints"])
         self.assertEqual("cli", resolved.config_sources["input_joints"])
 
         plan = build_resolved_train_actuator_command(resolved)
         self.assertNotIn("--joint-type", plan.command)
-        self.assertNotIn("--shared-siso-joints", plan.command)
         self.assertIn("--input-joints", plan.command)
         self.assertIn("right_shoulder_pitch,right_elbow", plan.command)
         self.assertIn("--output-joints", plan.command)
         self.assertEqual("miso", plan.metadata["training_topology"])
 
-    def test_explicit_cli_shared_siso_overrides_configured_joint_lists(self):
-        training = TrainingDefaults(
-            model="gru",
-            real_data_dir="inputs/demo",
-            output_dir="outputs/demo",
-            input_joints=["joint_a", "joint_b"],
-            output_joints=["joint_b"],
-        )
-
-        with patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)):
-            resolved = resolve_train_actuator_run_config(
-                TrainActuatorRunConfig(
-                    robot="demo",
-                    shared_siso_joints=["b", "a"],
-                    dry_run=True,
-                )
-            )
-
-        self.assertEqual(["joint_b", "joint_a"], resolved.shared_siso_joints)
-        self.assertIsNone(resolved.input_joints)
-        self.assertIsNone(resolved.output_joints)
-        self.assertEqual("cli", resolved.config_sources["shared_siso_joints"])
-        self.assertEqual(
-            "overridden_by_cli_shared_siso_joints",
-            resolved.config_sources["input_joints"],
-        )
-        self.assertEqual(
-            "overridden_by_cli_shared_siso_joints",
-            resolved.config_sources["output_joints"],
-        )
-
-    def test_cli_input_joints_records_overridden_yaml_shared_selector(self):
-        training = TrainingDefaults(
-            model="gru",
-            real_data_dir="inputs/demo",
-            output_dir="outputs/demo",
-            shared_siso_joints=["joint_b", "joint_a"],
-        )
-
-        with patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)):
-            resolved = resolve_train_actuator_run_config(
-                TrainActuatorRunConfig(
-                    robot="demo",
-                    input_joints=["a"],
-                    dry_run=True,
-                )
-            )
-
-        self.assertEqual(["joint_a"], resolved.input_joints)
-        self.assertEqual(
-            "overridden_by_cli_input_joints",
-            resolved.config_sources["shared_siso_joints"],
-        )
 
     def test_cli_input_list_defaults_outputs_without_inheriting_run_outputs(self):
         training = TrainingDefaults(
@@ -215,21 +159,17 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
             ],
         )
 
-    def test_shared_all_expands_to_concrete_robot_order_and_generic_mode(self):
+    def test_so101_defaults_to_explicit_rotation_siso(self):
         resolved = resolve_train_actuator_run_config(
             TrainActuatorRunConfig(robot="so101", dry_run=True)
         )
         plan = build_resolved_train_actuator_command(resolved)
-        expected = ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"]
 
-        self.assertEqual(expected, resolved.shared_siso_joints)
-        self.assertIsNone(resolved.input_joints)
-        self.assertIsNone(resolved.output_joints)
-        selector_index = plan.command.index("--shared-siso-joints")
-        self.assertEqual(",".join(expected), plan.command[selector_index + 1])
-        self.assertNotIn("--input-joints", plan.command)
-        self.assertEqual("shared_siso", plan.metadata["training_topology"])
-        self.assertEqual(expected, plan.metadata["shared_siso_joints"])
+        self.assertEqual(["Rotation"], resolved.input_joints)
+        self.assertEqual(["Rotation"], resolved.output_joints)
+        selector_index = plan.command.index("--input-joints")
+        self.assertEqual("Rotation", plan.command[selector_index + 1])
+        self.assertEqual("siso", plan.metadata["training_topology"])
 
     def test_no_implicit_joint_selection_fallback(self):
         training = TrainingDefaults(
@@ -242,7 +182,7 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
             patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)),
             self.assertRaisesRegex(
                 ValueError,
-                "training requires either shared_siso_joints or input_joints",
+                "training requires input_joints",
             ),
         ):
             resolve_train_actuator_run_config(
@@ -498,7 +438,6 @@ class TrainingRunnerExecutionTests(unittest.TestCase):
 
         provider_type.assert_called_once()
         job = train.call_args.args[0]
-        self.assertIsNone(job.shared_siso_joints)
         self.assertEqual(
             ["right_shoulder_pitch", "right_elbow"],
             job.input_joints,
@@ -510,56 +449,6 @@ class TrainingRunnerExecutionTests(unittest.TestCase):
         self.assertEqual("miso", job.metadata["training_topology"])
         self.assertFalse(plan.dry_run)
 
-    def test_shared_siso_execution_expands_independent_joint_sources(self):
-        base = resolve_train_actuator_run_config(
-            TrainActuatorRunConfig(robot="so101", dry_run=False)
-        )
-        source = TrainingSource(Path("/tmp/episode"))
-        expanded = TrainingSource(Path("/tmp/episode"), "Rotation")
-        artifacts = SimpleNamespace(
-            checkpoint_path=Path("/tmp/model.pt"),
-            stats_path=Path("/tmp/stats.json"),
-            network_path=Path("/tmp/network.pt"),
-            metrics={},
-        )
-
-        with (
-            patch(
-                "anchor_bench.training.runner.discover_training_sources",
-                return_value=[source],
-            ),
-            patch(
-                "anchor_bench.training.runner.expand_joint_sources",
-                return_value=[expanded],
-            ) as expand,
-            patch(
-                "anchor_bench.training.runner.split_training_sources",
-                return_value=([expanded], []),
-            ),
-            patch(
-                "anchor_bench.training.runner.read_training_header",
-                return_value=["position", "position_error", "velocity", "torque"],
-            ),
-            patch(
-                "anchor_bench.training.trainer.train_stateful_gru",
-                return_value=artifacts,
-            ) as train,
-        ):
-            run_resolved_train_actuator(base)
-
-        job = train.call_args.args[0]
-        self.assertEqual(
-            ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"],
-            job.shared_siso_joints,
-        )
-        self.assertIsNone(job.input_joints)
-        self.assertIsNone(job.output_joints)
-        self.assertEqual("shared_siso", job.metadata["training_topology"])
-        expand.assert_called_once()
-        self.assertEqual(
-            ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"],
-            list(expand.call_args.args[1]),
-        )
 
 
 if __name__ == "__main__":

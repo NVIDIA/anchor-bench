@@ -85,7 +85,6 @@ class TrainingDefaults(ConfigModel):
     model: Literal["gru", "hybrid_residual"] | None = None
     real_data_dir: str | None = None
     output_dir: str | None = None
-    shared_siso_joints: JointSelection | None = None
     input_joints: JointSelection | None = None
     output_joints: JointSelection | None = None
     pd_baseline: TrainingPDBaseline | None = None
@@ -105,25 +104,13 @@ class TrainingDefaults(ConfigModel):
     def _validate_input_columns(cls, value: Any) -> list[str] | None:
         return None if value is None else parse_gru_columns(value)
 
-    @field_validator(
-        "shared_siso_joints",
-        "input_joints",
-        "output_joints",
-        mode="before",
-    )
+    @field_validator("input_joints", "output_joints", mode="before")
     @classmethod
     def _parse_joint_selection(cls, value: Any) -> JointSelection | None:
         return None if value is None else parse_joint_selection(value)
 
     @model_validator(mode="after")
     def _validate_joint_selection(self) -> "TrainingDefaults":
-        if (
-            self.shared_siso_joints is not None
-            and (self.input_joints is not None or self.output_joints is not None)
-        ):
-            raise ValueError(
-                "shared_siso_joints cannot be combined with input_joints or output_joints"
-            )
         if self.output_joints is not None and self.input_joints is None:
             raise ValueError("input_joints is required when output_joints is configured")
         return self

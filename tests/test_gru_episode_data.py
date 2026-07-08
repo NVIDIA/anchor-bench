@@ -14,7 +14,6 @@ from anchor_bench.training.data import (
     FeatureDomain,
     TrainingEpisode,
     assemble_training_episode,
-    slice_training_episode_joint,
 )
 from anchor_bench.training.dynamic_bias import DynamicBiasResult
 
@@ -291,57 +290,6 @@ class TrainingEpisodeContractTests(unittest.TestCase):
                         target_torque=np.zeros((1, 1), dtype=np.float32),
                     )
 
-    def test_joint_slice_preserves_multichannel_and_global_blocks(self):
-        input_values = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
-        output_values = np.arange(100, 108, dtype=np.float32).reshape(2, 2, 2)
-        global_values = np.arange(6, dtype=np.float32).reshape(2, 1, 3)
-        global_block = FeatureBlock(
-            values=global_values,
-            domain="global",
-            channels=("gx", "gy", "gz"),
-        )
-        episode = TrainingEpisode(
-            timestamps=np.array([0.0, 1.0]),
-            input_joints=("j0", "j1"),
-            output_joints=("j1", "j0"),
-            feature_blocks={
-                "cartesian_velocity": FeatureBlock(
-                    values=input_values,
-                    domain="input_joints",
-                    channels=("vx", "vy", "vz"),
-                ),
-                "output_state": FeatureBlock(
-                    values=output_values,
-                    domain="output_joints",
-                    channels=("a", "b"),
-                ),
-                "base_velocity": global_block,
-            },
-            target_torque=np.array([[10.0, 20.0], [30.0, 40.0]]),
-            dynamic_bias_provenance={"provider": "test"},
-        )
-
-        sliced = slice_training_episode_joint(episode, "j0")
-
-        self.assertEqual(("j0",), sliced.input_joints)
-        self.assertEqual(("j0",), sliced.output_joints)
-        np.testing.assert_array_equal(
-            sliced.feature_blocks["cartesian_velocity"].values,
-            input_values[:, :1, :],
-        )
-        np.testing.assert_array_equal(
-            sliced.feature_blocks["output_state"].values,
-            output_values[:, 1:2, :],
-        )
-        self.assertEqual(
-            ("vx", "vy", "vz"),
-            sliced.feature_blocks["cartesian_velocity"].channels,
-        )
-        self.assertIs(global_block, sliced.feature_blocks["base_velocity"])
-        np.testing.assert_array_equal(sliced.target_torque, [[20.0], [40.0]])
-        provenance = sliced.dynamic_bias_provenance
-        assert provenance is not None
-        self.assertEqual({"provider": "test"}, dict(provenance))
 
 
 class GRUEpisodeDataTests(unittest.TestCase):

@@ -91,10 +91,6 @@ class TrainingDefaultsTests(unittest.TestCase):
             {"input_joints": "all", "output_joints": "all"},
             "training",
         )
-        shared = TrainingDefaults.from_dict(
-            {"shared_siso_joints": "all"},
-            "training",
-        )
 
         self.assertEqual("all", coupled.input_joints)
         self.assertEqual("all", coupled.output_joints)
@@ -102,8 +98,6 @@ class TrainingDefaultsTests(unittest.TestCase):
             {"input_joints": "all", "output_joints": "all"},
             coupled.to_dict(),
         )
-        self.assertEqual("all", shared.shared_siso_joints)
-        self.assertEqual({"shared_siso_joints": "all"}, shared.to_dict())
 
     def test_joint_lists_reject_duplicates_and_invalid_selection_modes(self):
         with self.assertRaisesRegex(ValueError, "contains duplicate joints: shoulder"):
@@ -118,15 +112,6 @@ class TrainingDefaultsTests(unittest.TestCase):
         ):
             TrainingDefaults.from_dict(
                 {"output_joints": ["shoulder"]},
-                "training",
-            )
-
-        with self.assertRaisesRegex(ValueError, "shared_siso_joints cannot be combined"):
-            TrainingDefaults.from_dict(
-                {
-                    "shared_siso_joints": "all",
-                    "input_joints": ["shoulder"],
-                },
                 "training",
             )
 
@@ -169,13 +154,6 @@ class TrainActuatorRunConfigTests(unittest.TestCase):
             TrainActuatorRunConfig(
                 robot="g1",
                 input_joints=["shoulder", "shoulder"],
-            )
-
-        with self.assertRaisesRegex(ValueError, "shared_siso_joints cannot be combined"):
-            TrainActuatorRunConfig(
-                robot="g1",
-                shared_siso_joints="all",
-                input_joints=["shoulder"],
             )
 
         with self.assertRaisesRegex(
@@ -248,38 +226,6 @@ class TrainActuatorCliTests(unittest.TestCase):
         self.assertEqual(1.5, config.pd_kd)
         self.assertEqual(0.2, config.friction_dry)
         self.assertEqual(0.03, config.friction_viscous)
-
-    def test_cli_preserves_bare_all_for_shared_siso_selection(self):
-        args = build_parser().parse_args(
-            [
-                "train-actuator",
-                "--robot",
-                "so101",
-                "--shared-siso-joints",
-                "all",
-                "--dry-run",
-            ]
-        )
-        resolved = SimpleNamespace(data=None)
-
-        with (
-            patch(
-                "anchor_bench.training.runner.resolve_train_actuator_run_config",
-                return_value=resolved,
-            ) as resolve,
-            patch(
-                "anchor_bench.training.runner.run_resolved_train_actuator",
-                return_value=object(),
-            ),
-            patch("anchor_bench.cli.commands._print_plan", return_value=0),
-        ):
-            status = dispatch(args)
-
-        self.assertEqual(0, status)
-        config = resolve.call_args.args[0]
-        self.assertEqual("all", config.shared_siso_joints)
-        self.assertIsNone(config.input_joints)
-        self.assertIsNone(config.output_joints)
 
 
 if __name__ == "__main__":

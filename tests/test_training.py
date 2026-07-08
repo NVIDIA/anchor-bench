@@ -55,7 +55,6 @@ class TrainingDataTests(unittest.TestCase):
     def test_sage_discovery_and_split_are_deterministic(self):
         from anchor_bench.training.data import (
             discover_training_sources,
-            expand_joint_sources,
             split_training_sources,
         )
 
@@ -65,12 +64,11 @@ class TrainingDataTests(unittest.TestCase):
                 _write_sage_motion(root / f"motion_{index}")
 
             sources = discover_training_sources(root)
-            expanded = expand_joint_sources(sources, ["Rotation"])
             train_a, val_a = split_training_sources(
-                expanded, seed=123, val_fraction=0.4
+                sources, seed=123, val_fraction=0.4
             )
             train_b, val_b = split_training_sources(
-                expanded, seed=123, val_fraction=0.4
+                sources, seed=123, val_fraction=0.4
             )
 
         self.assertEqual(5, len(sources))
@@ -84,7 +82,6 @@ class TrainingDataTests(unittest.TestCase):
 
         from anchor_bench.training.data import (
             discover_training_sources,
-            expand_joint_sources,
             load_training_table,
             read_training_header,
             split_training_sources,
@@ -109,9 +106,8 @@ class TrainingDataTests(unittest.TestCase):
             )
 
             sources = discover_training_sources(root)
-            expanded = expand_joint_sources(sources, ["Rotation", "Pitch"])
-            train_sources, val_sources = split_training_sources(expanded, seed=7)
-            header = read_training_header(expanded[1], "Rotation")
+            train_sources, val_sources = split_training_sources(sources, seed=7)
+            header = read_training_header(sources[0], "Rotation")
             table = load_training_table(
                 sources[0],
                 joint="Pitch",
@@ -119,11 +115,7 @@ class TrainingDataTests(unittest.TestCase):
             )
 
         self.assertEqual(1, len(sources))
-        self.assertEqual(["Rotation", "Pitch"], [source.joint for source in expanded])
-        self.assertEqual(
-            ["Rotation", "Pitch"],
-            [source.joint for source in train_sources],
-        )
+        self.assertEqual(sources, train_sources)
         self.assertEqual([], val_sources)
         self.assertIn("position_error", header)
         np.testing.assert_allclose(table["position"], [1.5, 2.0])
@@ -564,12 +556,8 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual("gru", resolved.model)
         self.assertTrue(resolved.data.endswith("so101_arm_50motion/train"))
         self.assertTrue(resolved.output.endswith("outputs/training/so101"))
-        self.assertEqual(
-            ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"],
-            resolved.shared_siso_joints,
-        )
-        self.assertIsNone(resolved.input_joints)
-        self.assertIsNone(resolved.output_joints)
+        self.assertEqual(["Rotation"], resolved.input_joints)
+        self.assertEqual(["Rotation"], resolved.output_joints)
         self.assertTrue(resolved.skip_optuna)
         self.assertEqual(42, resolved.seed)
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
@@ -593,7 +581,7 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
         self.assertEqual("torque", resolved.target_column)
 
-    def test_shared_dynamic_bias_is_evaluated_once_then_sliced_in_source_order(self):
+    def test_siso_dynamic_bias_loads_the_selected_joint_directly(self):
         import numpy as np
 
         from anchor_bench.training.data import TrainingSource
@@ -643,10 +631,7 @@ class TrainingRunnerTests(unittest.TestCase):
             episode_path = Path(tmp) / "episode"
             _write_two_joint_sage_motion(episode_path)
             provider = FakeBiasProvider()
-            sources = [
-                TrainingSource(episode_path, "Rotation"),
-                TrainingSource(episode_path, "Pitch"),
-            ]
+            sources = [TrainingSource(episode_path)]
             job = TrainingJob(
                 model="gru",
                 train_sources=sources,
@@ -662,7 +647,7 @@ class TrainingRunnerTests(unittest.TestCase):
                 skip_optuna=True,
                 n_streams=1,
                 noise_std=0.0,
-                shared_siso_joints=["Rotation", "Pitch"],
+                input_joints=["Pitch"],
                 sample_dt_s=0.002,
                 dynamic_bias_provider=provider,
             )
@@ -670,17 +655,12 @@ class TrainingRunnerTests(unittest.TestCase):
 
         self.assertEqual([], val)
         self.assertEqual(1, len(provider.calls))
+        self.assertEqual(["Pitch"], provider.calls[0]["requested_joint_names"])
+        self.assertEqual(1, len(train))
+        np.testing.assert_allclose(train[0][0][:, 0], 20.0)
+        np.testing.assert_allclose(train[0][1][:, 0], [20.0, 21.0, 22.0, 23.0])
         self.assertEqual(
-            ["Rotation", "Pitch"],
-            provider.calls[0]["requested_joint_names"],
-        )
-        self.assertEqual(2, len(train))
-        np.testing.assert_allclose(train[0][0][:, 0], 10.0)
-        np.testing.assert_allclose(train[1][0][:, 0], 20.0)
-        np.testing.assert_allclose(train[0][1][:, 0], [10.0, 11.0, 12.0, 13.0])
-        np.testing.assert_allclose(train[1][1][:, 0], [20.0, 21.0, 22.0, 23.0])
-        self.assertEqual(
-            ["Rotation", "Pitch"],
+            ["Pitch"],
             job.metadata["dynamic_bias_derivation"]["requested_joint_names"],
         )
 
@@ -712,8 +692,7 @@ class TrainingRunnerTests(unittest.TestCase):
             job(input_joints=["joint_a"]),
             job(input_joints=["joint_a", "joint_b"], output_joints=["joint_a"]),
             job(input_joints=["joint_a", "joint_b"]),
-            job(shared_siso_joints=["joint_a", "joint_b"]),
-            job(shared_siso_joints=["joint_a", "joint_c"]),
+            job(input_joints=["joint_b"]),
             job(input_joints=["joint_" + "x" * 200]),
         ]
         labels = [_artifact_label(item) for item in jobs]
@@ -723,7 +702,7 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertIn("siso", labels[0])
         self.assertIn("miso", labels[1])
         self.assertIn("mimo", labels[2])
-        self.assertIn("shared_siso", labels[3])
+        self.assertIn("siso", labels[3])
         self.assertTrue(all(len(label) <= 96 for label in labels))
 
     def test_stats_metadata_uses_resolved_runtime_axes(self):
@@ -760,18 +739,17 @@ class TrainingRunnerTests(unittest.TestCase):
             },
         }
         explicit = TrainingJob(**base, input_joints=["joint_a", "joint_b"])
-        shared = TrainingJob(**base, shared_siso_joints=["joint_b", "joint_a"])
+        miso = TrainingJob(
+            **base,
+            input_joints=["joint_a", "joint_b"],
+            output_joints=["joint_b"],
+        )
 
         explicit_metadata = _training_stats_metadata(explicit)
-        shared_metadata = _training_stats_metadata(shared)
+        miso_metadata = _training_stats_metadata(miso)
         self.assertEqual(["joint_a", "joint_b"], explicit_metadata["input_joints"])
         self.assertEqual(["joint_a", "joint_b"], explicit_metadata["output_joints"])
-        self.assertEqual(["actuator"], shared_metadata["input_joints"])
-        self.assertEqual(["actuator"], shared_metadata["output_joints"])
-        self.assertEqual(
-            ["joint_b", "joint_a"],
-            shared_metadata["shared_siso_joints"],
-        )
+        self.assertEqual(["joint_a", "joint_b"], miso_metadata["input_joints"])
 
     @unittest.skipUnless(
         importlib.util.find_spec("torch"),
@@ -815,7 +793,6 @@ class TrainingRunnerTests(unittest.TestCase):
             stats = json.loads(Path(artifacts["stats"]).read_text(encoding="utf-8"))
             self.assertEqual("gru", stats["model"])
             self.assertEqual("siso", stats["training_topology"])
-            self.assertIsNone(stats["shared_siso_joints"])
             self.assertEqual(["Rotation"], stats["input_joints"])
             self.assertEqual(["Rotation"], stats["output_joints"])
             self.assertNotIn("joint_type", stats)

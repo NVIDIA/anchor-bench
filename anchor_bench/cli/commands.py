@@ -72,7 +72,6 @@ def _handle_train(args: argparse.Namespace) -> int:
         model=args.model,
         data=args.data,
         output=args.output,
-        shared_siso_joints=_joint_selection(args.shared_siso_joints),
         input_joints=_joint_selection(args.input_joints),
         output_joints=_joint_selection(args.output_joints),
         pd_kp=args.pd_kp,
