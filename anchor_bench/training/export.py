@@ -155,6 +155,58 @@ def _metadata_axes(
     return input_joints, output_joints, columns, targets[0]
 
 
+def _validate_training_topology(
+    metadata: Mapping[str, Any],
+    *,
+    input_joints: Sequence[str],
+    output_joints: Sequence[str],
+) -> tuple[str | None, list[str] | None]:
+    topology = metadata.get("training_topology")
+    shared_value = metadata.get("shared_siso_joints")
+    if topology is None:
+        if shared_value is not None:
+            raise ValueError(
+                "runtime_metadata.shared_siso_joints requires training_topology"
+            )
+        return None, None
+
+    allowed = {"shared_siso", "siso", "miso", "mimo"}
+    if not isinstance(topology, str) or topology not in allowed:
+        raise ValueError(
+            "runtime_metadata.training_topology must be one of "
+            + ", ".join(sorted(allowed))
+        )
+
+    if topology == "shared_siso":
+        shared_joints = _name_list(shared_value, "shared_siso_joints")
+        if list(input_joints) != ["actuator"] or list(output_joints) != ["actuator"]:
+            raise ValueError(
+                "runtime_metadata.training_topology='shared_siso' requires "
+                "joint_names and output_joint_names to both be ['actuator']"
+            )
+        return topology, shared_joints
+
+    if shared_value is not None:
+        raise ValueError(
+            "runtime_metadata.shared_siso_joints is only valid for "
+            "training_topology='shared_siso'"
+        )
+
+    input_width = len(input_joints)
+    output_width = len(output_joints)
+    valid_dimensions = (
+        (topology == "siso" and input_width == 1 and output_width == 1)
+        or (topology == "miso" and input_width > 1 and output_width == 1)
+        or (topology == "mimo" and input_width > 1 and output_width > 1)
+    )
+    if not valid_dimensions:
+        raise ValueError(
+            f"runtime_metadata.training_topology={topology!r} is inconsistent "
+            f"with {input_width} input joint(s) and {output_width} output joint(s)"
+        )
+    return topology, None
+
+
 def _validate_normalization(
     metadata: Mapping[str, Any],
     *,
@@ -211,6 +263,8 @@ def _validate_feature_derivations(
     *,
     columns: Sequence[str],
     input_joints: Sequence[str],
+    training_topology: str | None,
+    shared_siso_joints: Sequence[str] | None,
 ) -> None:
     if "dynamic_bias" in columns:
         derivation = _mapping(metadata.get("dynamic_bias_derivation"), "dynamic_bias_derivation")
@@ -221,10 +275,19 @@ def _validate_feature_derivations(
             "dynamic_bias_derivation.requested_joint_names",
         )
         generic_scalar_axes = list(input_joints) == ["actuator"]
-        if not generic_scalar_axes and set(requested) != set(input_joints):
+        if training_topology == "shared_siso":
+            assert shared_siso_joints is not None
+            expected_requested = set(shared_siso_joints)
+            mismatch_label = "shared_siso_joints"
+        else:
+            expected_requested = set(input_joints)
+            mismatch_label = "joint_names"
+        if not (training_topology is None and generic_scalar_axes) and (
+            set(requested) != expected_requested
+        ):
             raise ValueError(
                 "runtime_metadata.dynamic_bias_derivation.requested_joint_names "
-                "must match joint_names"
+                f"must match {mismatch_label}"
             )
     if "previous_torque" in columns:
         derivation = _mapping(
@@ -276,6 +339,12 @@ def _validate_runtime_metadata(
         output_size=output_size,
     )
 
+    training_topology, shared_siso_joints = _validate_training_topology(
+        metadata,
+        input_joints=input_joints,
+        output_joints=output_joints,
+    )
+
     _validate_normalization(
         metadata,
         input_joints=input_joints,
@@ -289,6 +358,8 @@ def _validate_runtime_metadata(
         metadata,
         columns=columns,
         input_joints=input_joints,
+        training_topology=training_topology,
+        shared_siso_joints=shared_siso_joints,
     )
 
     _validate_baselines(metadata, columns=columns, target=target)
@@ -301,6 +372,8 @@ def _validate_checkpoint_contract(
     pairs = (
         ("input_columns", "input_columns"),
         ("target_columns", "target_columns"),
+        ("training_topology", "training_topology"),
+        ("shared_siso_joints", "shared_siso_joints"),
     )
     for checkpoint_key, metadata_key in pairs:
         if checkpoint.get(checkpoint_key) != metadata.get(metadata_key):

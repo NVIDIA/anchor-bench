@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from anchor_bench.cli.commands import dispatch
 from anchor_bench.cli.parser import build_parser
-from anchor_bench.core.config_model import parse_gru_columns
+from anchor_bench.core.config_model import parse_gru_columns, parse_joint_selection
 from anchor_bench.core.run_schema import TrainingDefaults
 from anchor_bench.core.schemas import (
     ControllerSpec,
@@ -86,6 +86,25 @@ class TrainingDefaultsTests(unittest.TestCase):
         self.assertEqual(0.03, config.friction_baseline.viscous)
         self.assertEqual(payload, config.to_dict())
 
+    def test_all_joint_selectors_round_trip_as_bare_sentinels(self):
+        coupled = TrainingDefaults.from_dict(
+            {"input_joints": "all", "output_joints": "all"},
+            "training",
+        )
+        shared = TrainingDefaults.from_dict(
+            {"shared_siso_joints": "all"},
+            "training",
+        )
+
+        self.assertEqual("all", coupled.input_joints)
+        self.assertEqual("all", coupled.output_joints)
+        self.assertEqual(
+            {"input_joints": "all", "output_joints": "all"},
+            coupled.to_dict(),
+        )
+        self.assertEqual("all", shared.shared_siso_joints)
+        self.assertEqual({"shared_siso_joints": "all"}, shared.to_dict())
+
     def test_joint_lists_reject_duplicates_and_invalid_selection_modes(self):
         with self.assertRaisesRegex(ValueError, "contains duplicate joints: shoulder"):
             TrainingDefaults.from_dict(
@@ -102,14 +121,27 @@ class TrainingDefaultsTests(unittest.TestCase):
                 "training",
             )
 
-        with self.assertRaisesRegex(ValueError, "joint_type cannot be combined"):
+        with self.assertRaisesRegex(ValueError, "shared_siso_joints cannot be combined"):
             TrainingDefaults.from_dict(
                 {
-                    "joint_type": "full",
+                    "shared_siso_joints": "all",
                     "input_joints": ["shoulder"],
                 },
                 "training",
             )
+
+    def test_all_is_reserved_for_bare_standalone_selection(self):
+        self.assertEqual("all", parse_joint_selection("all"))
+        for value in (["all"], ["shoulder", "all"], "shoulder,all"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "'all' must be used as a standalone joint selector",
+            ):
+                parse_joint_selection(value)
+
+    def test_removed_joint_type_is_rejected_as_an_unknown_key(self):
+        with self.assertRaisesRegex(ValueError, "training has unknown keys: joint_type"):
+            TrainingDefaults.from_dict({"joint_type": "full"}, "training")
 
     def test_nested_baselines_require_complete_pairs(self):
         with self.assertRaisesRegex(ValueError, "missing required key 'kd'"):
@@ -139,15 +171,33 @@ class TrainActuatorRunConfigTests(unittest.TestCase):
                 input_joints=["shoulder", "shoulder"],
             )
 
-        with self.assertRaisesRegex(ValueError, "joint_type cannot be combined"):
+        with self.assertRaisesRegex(ValueError, "shared_siso_joints cannot be combined"):
             TrainActuatorRunConfig(
                 robot="g1",
-                joint_type="full",
+                shared_siso_joints="all",
                 input_joints=["shoulder"],
             )
 
+        with self.assertRaisesRegex(
+            ValueError,
+            "input_joints is required when output_joints is configured",
+        ):
+            TrainActuatorRunConfig(robot="g1", output_joints=["shoulder"])
+
 
 class TrainActuatorCliTests(unittest.TestCase):
+    def test_removed_joint_type_flag_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(
+                [
+                    "train-actuator",
+                    "--robot",
+                    "so101",
+                    "--joint-type",
+                    "Rotation",
+                ]
+            )
+
     def test_cli_builds_run_config_with_joint_domains_and_baselines(self):
         args = build_parser().parse_args(
             [
@@ -198,6 +248,38 @@ class TrainActuatorCliTests(unittest.TestCase):
         self.assertEqual(1.5, config.pd_kd)
         self.assertEqual(0.2, config.friction_dry)
         self.assertEqual(0.03, config.friction_viscous)
+
+    def test_cli_preserves_bare_all_for_shared_siso_selection(self):
+        args = build_parser().parse_args(
+            [
+                "train-actuator",
+                "--robot",
+                "so101",
+                "--shared-siso-joints",
+                "all",
+                "--dry-run",
+            ]
+        )
+        resolved = SimpleNamespace(data=None)
+
+        with (
+            patch(
+                "anchor_bench.training.runner.resolve_train_actuator_run_config",
+                return_value=resolved,
+            ) as resolve,
+            patch(
+                "anchor_bench.training.runner.run_resolved_train_actuator",
+                return_value=object(),
+            ),
+            patch("anchor_bench.cli.commands._print_plan", return_value=0),
+        ):
+            status = dispatch(args)
+
+        self.assertEqual(0, status)
+        config = resolve.call_args.args[0]
+        self.assertEqual("all", config.shared_siso_joints)
+        self.assertIsNone(config.input_joints)
+        self.assertIsNone(config.output_joints)
 
 
 if __name__ == "__main__":

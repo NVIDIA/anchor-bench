@@ -67,7 +67,7 @@ anchor-bench train-actuator \
   --robot so101 \
   --model gru \
   --data inputs/datasets/so101/so101_arm_50motion/train \
-  --joint-type Rotation \
+  --input-joints Rotation \
   --output outputs/training/so101/rotation \
   --input-columns position,position_error,velocity \
   --target-column torque \
@@ -77,15 +77,27 @@ anchor-bench train-actuator \
 
 Training consumes whole SAGE motion folders. It keeps episode boundaries and
 keeps all joints from one motion in the same training or validation split.
-`--joint-type full` retains the legacy shared scalar model: every robot joint
-becomes an independent sequence for one `F -> 1` network.
+`--shared-siso-joints all` trains one shared scalar model: every robot joint
+becomes an independent sequence for one `F -> 1` network. Pass a comma-separated
+joint list instead of `all` to share the model across only that subset.
+
+Joint selection is required; there is no implicit fallback. The old
+`training.joint_type` key and `--joint-type` flag have been removed. Migrate
+them as follows:
+
+- `joint_type: full` becomes `shared_siso_joints: all`.
+- A named `joint_type` becomes a one-item `input_joints` list.
+
+Artifact basenames now encode the topology and resolved joint domains and end
+with a stable digest; the former output-only and `full` names are not retained.
 
 ### Joint domains
 
 Use ordered joint lists for coupled models. Joint aliases are resolved through
-`robot.yaml`; output joints must be a subset of input joints. The list flags
-cannot be combined with `--joint-type`. If `--output-joints` is omitted, it
-defaults to the input list.
+`robot.yaml`; output joints must be a subset of input joints. Use `all` to expand
+the input axis to every robot joint in declarative order, or the output axis to
+the resolved input domain. If `--output-joints` is omitted, it defaults to the
+input domain. `--shared-siso-joints` is mutually exclusive with both axis flags.
 
 ```bash
 anchor-bench train-actuator \
@@ -107,6 +119,7 @@ The resulting topologies are:
 | SISO | 1 | 1 | One joint predicts its own torque |
 | MISO | More than 1 | 1 | Joint context predicts one selected torque |
 | MIMO | More than 1 | More than 1 | One coupled network predicts an ordered torque vector |
+| Shared SISO | 1 per sequence | 1 per sequence | One scalar model shared across selected independent joints |
 
 For `I` input joints and `O` output joints, ordinary feature blocks have
 shape `[T, I]`, `previous_torque` has shape `[T, O]`, and the target has

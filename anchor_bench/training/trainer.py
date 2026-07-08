@@ -1,6 +1,7 @@
-
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from collections.abc import Mapping
@@ -10,7 +11,12 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from anchor_bench.training.data import EPSILON_STD, TrainingSource, write_stats_json
+from anchor_bench.training.data import (
+    EPSILON_STD,
+    TrainingSource,
+    slice_training_episode_joint,
+    write_stats_json,
+)
 from anchor_bench.training.export import export_gru_checkpoint
 
 
@@ -36,7 +42,6 @@ class TrainingHyperParameters:
 @dataclass(frozen=True)
 class TrainingJob:
     model: str
-    joint_type: str
     train_sources: Sequence[TrainingSource]
     val_sources: Sequence[TrainingSource]
     output_dir: Path
@@ -52,6 +57,7 @@ class TrainingJob:
     noise_std: float
     residual_physics: ResidualPhysics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    shared_siso_joints: Sequence[str] | None = None
     input_joints: Sequence[str] | None = None
     output_joints: Sequence[str] | None = None
     sample_dt_s: float | None = None
@@ -106,31 +112,103 @@ def _validated_axes(
     return inputs, outputs
 
 
+def _validated_joint_list(
+    joints: Sequence[str],
+    *,
+    label: str,
+) -> tuple[str, ...]:
+    result = tuple(joints)
+    if not result:
+        raise ValueError(f"{label} must contain at least one joint")
+    if any(not isinstance(name, str) or not name for name in result):
+        raise ValueError(f"{label} must contain non-empty strings")
+    if len(set(result)) != len(result):
+        raise ValueError(f"{label} must not contain duplicates")
+    return result
+
+
 def _source_axes(
     job: TrainingJob,
     source: TrainingSource | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if job.input_joints is not None:
-        return _validated_axes(job.input_joints, job.output_joints)
-    if job.output_joints is not None:
-        raise ValueError("output_joints requires input_joints")
-    if job.joint_type == "full":
-        if source is None or not source.joint:
+    if job.shared_siso_joints is not None:
+        if job.input_joints is not None or job.output_joints is not None:
             raise ValueError(
-                "joint_type='full' training sources must be expanded to one joint per source"
+                "shared_siso_joints cannot be combined with input_joints or output_joints"
             )
-        name = source.joint
-    else:
-        name = source.joint if source is not None and source.joint else job.joint_type
-    return _validated_axes((name,), None)
+        shared = _validated_joint_list(
+            job.shared_siso_joints,
+            label="shared_siso_joints",
+        )
+        if source is None or source.joint is None:
+            raise ValueError(
+                "shared-SISO training sources must name one concrete joint"
+            )
+        if source.joint not in shared:
+            raise ValueError(
+                f"shared-SISO training source joint {source.joint!r} is not selected"
+            )
+        return _validated_axes((source.joint,), None)
+    if job.input_joints is None:
+        raise ValueError("TrainingJob requires input_joints or shared_siso_joints")
+    return _validated_axes(job.input_joints, job.output_joints)
 
 
 def _runtime_axes(job: TrainingJob) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if job.input_joints is not None:
-        return _validated_axes(job.input_joints, job.output_joints)
-    name = "actuator" if job.joint_type == "full" else job.joint_type
-    return _validated_axes((name,), None)
+    if job.shared_siso_joints is not None:
+        if job.input_joints is not None or job.output_joints is not None:
+            raise ValueError(
+                "shared_siso_joints cannot be combined with input_joints or output_joints"
+            )
+        _validated_joint_list(job.shared_siso_joints, label="shared_siso_joints")
+        return _validated_axes(("actuator",), None)
+    if job.input_joints is None:
+        raise ValueError("TrainingJob requires input_joints or shared_siso_joints")
+    return _validated_axes(job.input_joints, job.output_joints)
 
+
+def _training_topology(job: TrainingJob) -> str:
+    if job.shared_siso_joints is not None:
+        return "shared_siso"
+    inputs, outputs = _runtime_axes(job)
+    if len(inputs) == 1:
+        return "siso"
+    if len(outputs) == 1:
+        return "miso"
+    return "mimo"
+
+
+def _artifact_label(job: TrainingJob) -> str:
+    topology = _training_topology(job)
+    if job.shared_siso_joints is not None:
+        shared_joints = _validated_joint_list(
+            job.shared_siso_joints,
+            label="shared_siso_joints",
+        )
+        identity = {
+            "topology": topology,
+            "shared_siso_joints": list(shared_joints),
+        }
+        readable = f"{topology}__{'__'.join(shared_joints)}"
+    else:
+        input_joints, output_joints = _runtime_axes(job)
+        identity = {
+            "topology": topology,
+            "input_joints": list(input_joints),
+            "output_joints": list(output_joints),
+        }
+
+        readable = (
+            f"{topology}__in__{'__'.join(input_joints)}"
+            f"__out__{'__'.join(output_joints)}"
+        )
+
+    digest = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()[:10]
+    suffix = f"__{digest}"
+    prefix = _safe_name(readable)[: 96 - len(suffix)].rstrip("_.-")
+    return f"{prefix}{suffix}"
 
 def _sample_dt_s(job: TrainingJob) -> float:
     value = job.sample_dt_s
@@ -310,6 +388,8 @@ def _prepare_episode(
     return features, target
 
 
+_DYNAMIC_BIAS_ORDERED_JOINT_LIST_FIELDS = {"requested_joint_names"}
+
 _DYNAMIC_BIAS_JOINT_LIST_FIELDS = {
     "trajectory_joint_names",
     "requested_joint_names",
@@ -334,7 +414,11 @@ def _merge_dynamic_bias_provenance(
             values = episode.get(key, [])
             if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
                 raise ValueError(f"dynamic_bias provenance {key} must be a list of strings")
-            result[key] = sorted(set(values))
+            result[key] = (
+                list(dict.fromkeys(values))
+                if key in _DYNAMIC_BIAS_ORDERED_JOINT_LIST_FIELDS
+                else sorted(set(values))
+            )
         return result
     existing_stable = {
         key: value
@@ -348,7 +432,12 @@ def _merge_dynamic_bias_provenance(
         values = episode.get(key, [])
         if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
             raise ValueError(f"dynamic_bias provenance {key} must be a list of strings")
-        result[key] = sorted(set(result.get(key, ())).union(values))
+        if key in _DYNAMIC_BIAS_ORDERED_JOINT_LIST_FIELDS:
+            combined = list(result.get(key, ()))
+            combined.extend(value for value in values if value not in combined)
+            result[key] = combined
+        else:
+            result[key] = sorted(set(result.get(key, ())).union(values))
     return result
 
 
@@ -373,26 +462,54 @@ def _load_sequences(
                 loader_columns.append(required)
 
     provenance: dict[str, Any] | None = None
+    shared_joints = (
+        _validated_joint_list(job.shared_siso_joints, label="shared_siso_joints")
+        if job.shared_siso_joints is not None
+        else None
+    )
+    shared_episode_cache: dict[Path, Any] = {}
+
+    def merge_provenance(source: TrainingSource, episode: Any) -> None:
+        nonlocal provenance
+        if "dynamic_bias" not in job.input_columns:
+            return
+        episode_provenance = episode.dynamic_bias_provenance
+        if not isinstance(episode_provenance, Mapping):
+            raise ValueError(
+                f"{source.path} dynamic_bias episode is missing derivation provenance"
+            )
+        provenance = _merge_dynamic_bias_provenance(
+            provenance,
+            dict(episode_provenance),
+        )
 
     def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
-        nonlocal provenance
         input_joints, output_joints = _source_axes(job, source)
-        episode = load_training_episode(
-            source,
-            input_joints=input_joints,
-            output_joints=output_joints,
-            input_columns=loader_columns,
-            sample_dt_s=_sample_dt_s(job),
-            dynamic_bias_provider=job.dynamic_bias_provider,
-        )
-        if "dynamic_bias" in job.input_columns:
-            episode_provenance = episode.dynamic_bias_provenance
-            if not isinstance(episode_provenance, Mapping):
-                raise ValueError(
-                    f"{source.path} dynamic_bias episode is missing derivation provenance"
+        if shared_joints is None:
+            episode = load_training_episode(
+                source,
+                input_joints=input_joints,
+                output_joints=output_joints,
+                input_columns=loader_columns,
+                sample_dt_s=_sample_dt_s(job),
+                dynamic_bias_provider=job.dynamic_bias_provider,
+            )
+            merge_provenance(source, episode)
+        else:
+            episode = shared_episode_cache.get(source.path)
+            if episode is None:
+                episode = load_training_episode(
+                    source,
+                    input_joints=shared_joints,
+                    output_joints=shared_joints,
+                    input_columns=loader_columns,
+                    sample_dt_s=_sample_dt_s(job),
+                    dynamic_bias_provider=job.dynamic_bias_provider,
                 )
-            value = dict(episode_provenance)
-            provenance = _merge_dynamic_bias_provenance(provenance, value)
+                shared_episode_cache[source.path] = episode
+                merge_provenance(source, episode)
+            assert source.joint is not None
+            episode = slice_training_episode_joint(episode, source.joint)
         return _prepare_episode(job, episode, source=source)
 
     train = [load_one(source) for source in job.train_sources]
@@ -403,7 +520,6 @@ def _load_sequences(
             raise ValueError("configured dynamic_bias provenance does not match episode provenance")
         job.metadata["dynamic_bias_derivation"] = provenance
     return train, val
-
 
 def _scalar_or_list(values: np.ndarray) -> float | list[float]:
     result = [float(value) for value in values]
@@ -617,6 +733,7 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
     runtime: dict[str, Any] = {
         "schema_version": 1,
         "model_type": "gru",
+        "training_topology": _training_topology(job),
         "joint_names": list(input_joints),
         "output_joint_names": list(output_joints),
         "input_columns": list(job.input_columns),
@@ -639,6 +756,8 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
             "external_delay_s": 0.0,
         },
     }
+    if job.shared_siso_joints is not None:
+        runtime["shared_siso_joints"] = list(job.shared_siso_joints)
     if "dynamic_bias" in job.input_columns:
         derivation = job.metadata.get("dynamic_bias_derivation")
         if not isinstance(derivation, Mapping):
@@ -729,7 +848,7 @@ def _fit_once(
         return best_val, None
     job.output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "hybrid_residual" if job.model == "hybrid_residual" else "gru"
-    joint = _safe_name(job.joint_type)
+    joint = _safe_name(_artifact_label(job))
     checkpoint_path = job.output_dir / f"{prefix}_{joint}_best.pt"
     stats_path = job.output_dir / f"{prefix}_{joint}_stats.json"
     network_path = job.output_dir / f"{prefix}_{joint}_network.pt"
@@ -743,7 +862,12 @@ def _fit_once(
         model.load_state_dict(best_state)
     checkpoint = {
         "model": job.model,
-        "joint_type": job.joint_type,
+        "training_topology": _training_topology(job),
+        "shared_siso_joints": (
+            list(job.shared_siso_joints)
+            if job.shared_siso_joints is not None
+            else None
+        ),
         "model_state_dict": model.state_dict(),
         "input_columns": job.input_columns,
         "target_columns": job.target_columns,
@@ -809,6 +933,27 @@ def _select_hparams(
     return TrainingHyperParameters(**study.best_params)
 
 
+def _training_stats_metadata(job: TrainingJob) -> dict[str, Any]:
+    input_joints, output_joints = _runtime_axes(job)
+    return {
+        **job.metadata,
+        "model": job.model,
+        "training_topology": _training_topology(job),
+        "shared_siso_joints": (
+            list(job.shared_siso_joints)
+            if job.shared_siso_joints is not None
+            else None
+        ),
+        "input_joints": list(input_joints),
+        "output_joints": list(output_joints),
+        "data": {
+            "train_source_count": len(job.train_sources),
+            "val_source_count": len(job.val_sources),
+            "n_streams": job.n_streams,
+        },
+    }
+
+
 def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
     train_raw, val_raw = _load_sequences(job)
     input_widths = _feature_widths(job)
@@ -817,16 +962,7 @@ def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
         train_raw,
         input_columns=job.input_columns,
         target_columns=job.target_columns,
-        metadata={
-            **job.metadata,
-            "model": job.model,
-            "joint_type": job.joint_type,
-            "data": {
-                "train_source_count": len(job.train_sources),
-                "val_source_count": len(job.val_sources),
-                "n_streams": job.n_streams,
-            },
-        },
+        metadata=_training_stats_metadata(job),
         input_widths=input_widths,
         target_width=output_width,
     )

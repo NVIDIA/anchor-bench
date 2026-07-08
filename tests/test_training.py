@@ -31,6 +31,26 @@ def _write_sage_motion(root: Path, length: int = 8) -> None:
     (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
 
 
+
+def _write_two_joint_sage_motion(root: Path, length: int = 4) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+    (root / "metadata.yaml").write_text(
+        "schema: sage\ntime_unit: seconds\nposition_unit: rad\n"
+        "velocity_unit: rad/s\ntorque_unit: N*m\n",
+        encoding="utf-8",
+    )
+    control = ["type,timestamp,positions"]
+    state = ["type,timestamp,positions,velocities,torques"]
+    for index in range(length):
+        timestamp = index * 0.002
+        control.append(f'CONTROL,{timestamp},"[{1.0 + index}, {2.0 + index}]"')
+        state.append(
+            f'STATE_MOTOR,{timestamp},"[{0.1 + index}, {0.2 + index}]",'
+            f'"[{0.3 + index}, {0.4 + index}]","[{10.0 + index}, {20.0 + index}]"'
+        )
+    (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
+    (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
 class TrainingDataTests(unittest.TestCase):
     def test_sage_discovery_and_split_are_deterministic(self):
         from anchor_bench.training.data import (
@@ -91,7 +111,7 @@ class TrainingDataTests(unittest.TestCase):
             sources = discover_training_sources(root)
             expanded = expand_joint_sources(sources, ["Rotation", "Pitch"])
             train_sources, val_sources = split_training_sources(expanded, seed=7)
-            header = read_training_header(expanded[1], "full")
+            header = read_training_header(expanded[1], "Rotation")
             table = load_training_table(
                 sources[0],
                 joint="Pitch",
@@ -100,7 +120,10 @@ class TrainingDataTests(unittest.TestCase):
 
         self.assertEqual(1, len(sources))
         self.assertEqual(["Rotation", "Pitch"], [source.joint for source in expanded])
-        self.assertEqual(2, len(train_sources))
+        self.assertEqual(
+            ["Rotation", "Pitch"],
+            [source.joint for source in train_sources],
+        )
         self.assertEqual([], val_sources)
         self.assertIn("position_error", header)
         np.testing.assert_allclose(table["position"], [1.5, 2.0])
@@ -165,7 +188,12 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual("gru", resolved.model)
         self.assertTrue(resolved.data.endswith("so101_arm_50motion/train"))
         self.assertTrue(resolved.output.endswith("outputs/training/so101"))
-        self.assertEqual("full", resolved.joint_type)
+        self.assertEqual(
+            ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"],
+            resolved.shared_siso_joints,
+        )
+        self.assertIsNone(resolved.input_joints)
+        self.assertIsNone(resolved.output_joints)
         self.assertTrue(resolved.skip_optuna)
         self.assertEqual(42, resolved.seed)
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
@@ -178,7 +206,7 @@ class TrainingRunnerTests(unittest.TestCase):
         resolved = resolve_train_actuator_run_config(
             TrainActuatorRunConfig(
                 robot="so101",
-                joint_type="Rotation",
+                input_joints=["Rotation"],
                 data="inputs/datasets/so101/custom_figure8_with_camera",
                 input_columns=["position", "solver_pd"],
                 target_column="torque",
@@ -188,6 +216,177 @@ class TrainingRunnerTests(unittest.TestCase):
 
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
         self.assertEqual("torque", resolved.target_column)
+
+    def test_shared_dynamic_bias_is_evaluated_once_then_sliced_in_source_order(self):
+        import numpy as np
+
+        from anchor_bench.training.data import TrainingSource
+        from anchor_bench.training.dynamic_bias import DynamicBiasResult
+        from anchor_bench.training.trainer import TrainingJob, _load_sequences
+
+        class FakeBiasProvider:
+            def __init__(self):
+                self.calls = []
+
+            def compute(
+                self,
+                *,
+                joint_names,
+                positions,
+                velocities,
+                requested_joint_names,
+            ):
+                requested = list(requested_joint_names)
+                self.calls.append(
+                    {
+                        "joint_names": list(joint_names),
+                        "requested_joint_names": requested,
+                        "positions": np.array(positions, copy=True),
+                        "velocities": np.array(velocities, copy=True),
+                    }
+                )
+                values = np.column_stack(
+                    [
+                        np.full(len(positions), 20.0 if joint == "Pitch" else 10.0)
+                        for joint in requested
+                    ]
+                )
+                return DynamicBiasResult(
+                    values,
+                    {
+                        "source": "fake",
+                        "trajectory_joint_names": list(joint_names),
+                        "requested_joint_names": requested,
+                        "mapped_joint_names": list(joint_names),
+                        "unmapped_trajectory_joint_names": [],
+                        "defaulted_joint_names": [],
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            episode_path = Path(tmp) / "episode"
+            _write_two_joint_sage_motion(episode_path)
+            provider = FakeBiasProvider()
+            sources = [
+                TrainingSource(episode_path, "Rotation"),
+                TrainingSource(episode_path, "Pitch"),
+            ]
+            job = TrainingJob(
+                model="gru",
+                train_sources=sources,
+                val_sources=[],
+                output_dir=Path(tmp) / "out",
+                input_columns=["dynamic_bias"],
+                target_columns=["torque"],
+                source_target_columns=["torque"],
+                seed=1,
+                final_epochs=1,
+                trial_epochs=1,
+                trials=1,
+                skip_optuna=True,
+                n_streams=1,
+                noise_std=0.0,
+                shared_siso_joints=["Rotation", "Pitch"],
+                sample_dt_s=0.002,
+                dynamic_bias_provider=provider,
+            )
+            train, val = _load_sequences(job)
+
+        self.assertEqual([], val)
+        self.assertEqual(1, len(provider.calls))
+        self.assertEqual(
+            ["Rotation", "Pitch"],
+            provider.calls[0]["requested_joint_names"],
+        )
+        self.assertEqual(2, len(train))
+        np.testing.assert_allclose(train[0][0][:, 0], 10.0)
+        np.testing.assert_allclose(train[1][0][:, 0], 20.0)
+        np.testing.assert_allclose(train[0][1][:, 0], [10.0, 11.0, 12.0, 13.0])
+        np.testing.assert_allclose(train[1][1][:, 0], [20.0, 21.0, 22.0, 23.0])
+        self.assertEqual(
+            ["Rotation", "Pitch"],
+            job.metadata["dynamic_bias_derivation"]["requested_joint_names"],
+        )
+
+    def test_artifact_labels_distinguish_topologies_and_joint_domains(self):
+        from anchor_bench.training.data import TrainingSource
+        from anchor_bench.training.trainer import TrainingJob, _artifact_label
+
+        def job(**selection):
+            return TrainingJob(
+                model="gru",
+                train_sources=[TrainingSource(Path("episode"))],
+                val_sources=[],
+                output_dir=Path("out"),
+                input_columns=["position"],
+                target_columns=["torque"],
+                source_target_columns=["torque"],
+                seed=1,
+                final_epochs=1,
+                trial_epochs=1,
+                trials=1,
+                skip_optuna=True,
+                n_streams=1,
+                noise_std=0.0,
+                sample_dt_s=0.01,
+                **selection,
+            )
+
+        jobs = [
+            job(input_joints=["joint_a"]),
+            job(input_joints=["joint_a", "joint_b"], output_joints=["joint_a"]),
+            job(input_joints=["joint_a", "joint_b"]),
+            job(shared_siso_joints=["joint_a", "joint_b"]),
+            job(shared_siso_joints=["joint_a", "joint_c"]),
+            job(input_joints=["joint_" + "x" * 200]),
+        ]
+        labels = [_artifact_label(item) for item in jobs]
+
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertEqual(labels[0], _artifact_label(jobs[0]))
+        self.assertIn("siso", labels[0])
+        self.assertIn("miso", labels[1])
+        self.assertIn("mimo", labels[2])
+        self.assertIn("shared_siso", labels[3])
+        self.assertTrue(all(len(label) <= 96 for label in labels))
+
+    def test_stats_metadata_uses_resolved_runtime_axes(self):
+        from anchor_bench.training.data import TrainingSource
+        from anchor_bench.training.trainer import (
+            TrainingJob,
+            _training_stats_metadata,
+        )
+
+        base = {
+            "model": "gru",
+            "train_sources": [TrainingSource(Path("episode"))],
+            "val_sources": [],
+            "output_dir": Path("out"),
+            "input_columns": ["position"],
+            "target_columns": ["torque"],
+            "source_target_columns": ["torque"],
+            "seed": 1,
+            "final_epochs": 1,
+            "trial_epochs": 1,
+            "trials": 1,
+            "skip_optuna": True,
+            "n_streams": 1,
+            "noise_std": 0.0,
+            "sample_dt_s": 0.01,
+        }
+        explicit = TrainingJob(**base, input_joints=["joint_a", "joint_b"])
+        shared = TrainingJob(**base, shared_siso_joints=["joint_b", "joint_a"])
+
+        explicit_metadata = _training_stats_metadata(explicit)
+        shared_metadata = _training_stats_metadata(shared)
+        self.assertEqual(["joint_a", "joint_b"], explicit_metadata["input_joints"])
+        self.assertEqual(["joint_a", "joint_b"], explicit_metadata["output_joints"])
+        self.assertEqual(["actuator"], shared_metadata["input_joints"])
+        self.assertEqual(["actuator"], shared_metadata["output_joints"])
+        self.assertEqual(
+            ["joint_b", "joint_a"],
+            shared_metadata["shared_siso_joints"],
+        )
 
     @unittest.skipUnless(
         importlib.util.find_spec("torch"),
@@ -210,7 +409,7 @@ class TrainingRunnerTests(unittest.TestCase):
                     model="gru",
                     data=str(data_dir),
                     output=str(output_dir),
-                    joint_type="Rotation",
+                    input_joints=["Rotation"],
                     skip_optuna=True,
                     final_epochs=1,
                     n_streams=1,
@@ -221,11 +420,20 @@ class TrainingRunnerTests(unittest.TestCase):
             plan = run_resolved_train_actuator(resolved)
 
             self.assertFalse(plan.dry_run)
-            self.assertTrue((output_dir / "gru_Rotation_best.pt").exists())
-            self.assertTrue((output_dir / "gru_Rotation_network.pt").exists())
-            stats = json.loads((output_dir / "gru_Rotation_stats.json").read_text(encoding="utf-8"))
+            artifacts = plan.metadata["artifacts"]
+            self.assertTrue(Path(artifacts["checkpoint"]).exists())
+            self.assertTrue(Path(artifacts["network"]).exists())
+            self.assertRegex(
+                Path(artifacts["stats"]).name,
+                r"^gru_siso__in__Rotation__out__Rotation__[0-9a-f]{10}_stats.json$",
+            )
+            stats = json.loads(Path(artifacts["stats"]).read_text(encoding="utf-8"))
             self.assertEqual("gru", stats["model"])
-            self.assertEqual("Rotation", stats["joint_type"])
+            self.assertEqual("siso", stats["training_topology"])
+            self.assertIsNone(stats["shared_siso_joints"])
+            self.assertEqual(["Rotation"], stats["input_joints"])
+            self.assertEqual(["Rotation"], stats["output_joints"])
+            self.assertNotIn("joint_type", stats)
             self.assertEqual(0.002, stats["sample_dt_s"])
             self.assertIn("network", plan.metadata["artifacts"])
 
@@ -274,7 +482,6 @@ class TrainingRunnerTests(unittest.TestCase):
             torch.save(
                 {
                     "model": "gru",
-                    "joint_type": "demo",
                     "model_state_dict": model.state_dict(),
                     "input_columns": ["position", "position_error", "velocity"],
                     "target_columns": ["torque"],

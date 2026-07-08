@@ -38,7 +38,7 @@ class ResolvedTrainActuatorRunConfig:
     model: str
     data: str
     output: str
-    joint_type: str | None
+    shared_siso_joints: list[str] | None
     input_joints: list[str] | None
     output_joints: list[str] | None
     sample_dt_s: float
@@ -112,102 +112,119 @@ def _canonical_joint_list(bundle: Any, values: Sequence[Any], *, label: str) -> 
     return joints
 
 
+def _resolved_joint_list(
+    bundle: Any,
+    value: Any,
+    *,
+    label: str,
+    all_joints: Sequence[str] | None = None,
+) -> list[str]:
+    if value == "all":
+        joints = list(all_joints if all_joints is not None else bundle.spec.joint_names)
+        if not joints:
+            raise ValueError(f"{label}='all' resolved to an empty joint list")
+        return joints
+    if isinstance(value, str):
+        raise ValueError(f"{label} must be 'all' or an ordered joint list")
+    return _canonical_joint_list(bundle, value, label=label)
+
+
 def _resolve_joint_selection(
     config: TrainActuatorRunConfig,
     training_cfg: Any,
     bundle: Any,
-) -> tuple[str | None, list[str] | None, list[str] | None, dict[str, str]]:
+) -> tuple[list[str] | None, list[str] | None, list[str] | None, dict[str, str]]:
     sources: dict[str, str] = {}
-    if config.joint_type is not None:
-        joint_type = str(config.joint_type).strip()
-        if joint_type != "full":
-            joint_type = _canonical_joint(bundle, joint_type, label="joint_type")
-        sources["joint_type"] = "cli"
-        sources["input_joints"] = "overridden_by_cli_joint_type"
-        sources["output_joints"] = "overridden_by_cli_joint_type"
-        return joint_type, None, None, sources
-
-    cli_lists = config.input_joints is not None or config.output_joints is not None
-    configured_lists = (
-        training_cfg.input_joints is not None
-        or training_cfg.output_joints is not None
-    )
-    if cli_lists or configured_lists:
-        raw_inputs = (
-            config.input_joints
-            if config.input_joints is not None
-            else training_cfg.input_joints
+    cli_selection = any(
+        value is not None
+        for value in (
+            config.shared_siso_joints,
+            config.input_joints,
+            config.output_joints,
         )
-        if raw_inputs is None:
+    )
+    owner = config if cli_selection else training_cfg
+    source = "cli" if cli_selection else "run.yaml"
+    raw_shared = owner.shared_siso_joints
+    raw_inputs = owner.input_joints
+    raw_outputs = owner.output_joints
+
+    if raw_shared is None and raw_inputs is None:
+        raise ValueError("training requires either shared_siso_joints or input_joints")
+    if raw_shared is not None:
+        if raw_inputs is not None or raw_outputs is not None:
             raise ValueError(
-                "input_joints is required when selecting output_joints; "
-                "pass --input-joints or configure training.input_joints"
+                "shared_siso_joints cannot be combined with input_joints or output_joints"
             )
-        input_joints = _canonical_joint_list(
+        shared_siso_joints = _resolved_joint_list(
             bundle,
-            raw_inputs,
-            label="input_joints",
+            raw_shared,
+            label="shared_siso_joints",
         )
-        if config.output_joints is not None:
-            raw_outputs = config.output_joints
-        elif config.input_joints is not None:
-            raw_outputs = None
-        else:
-            raw_outputs = training_cfg.output_joints
-        output_joints = (
-            list(input_joints)
-            if raw_outputs is None
-            else _canonical_joint_list(bundle, raw_outputs, label="output_joints")
+        sources.update(
+            {
+                "shared_siso_joints": source,
+                "input_joints": (
+                    "overridden_by_cli_shared_siso_joints"
+                    if cli_selection and training_cfg.input_joints is not None
+                    else "not_configured"
+                ),
+                "output_joints": (
+                    "overridden_by_cli_shared_siso_joints"
+                    if cli_selection and training_cfg.output_joints is not None
+                    else "not_configured"
+                ),
+            }
         )
-        missing = [joint for joint in output_joints if joint not in input_joints]
-        if missing:
-            raise ValueError(
-                "output_joints must be a subset of input_joints; missing: "
-                + ", ".join(missing)
-            )
-        sources["joint_type"] = (
-            "overridden_by_cli_joint_lists" if cli_lists else "not_configured"
-        )
-        sources["input_joints"] = (
-            "cli" if config.input_joints is not None else "run.yaml"
-        )
-        if config.output_joints is not None:
-            sources["output_joints"] = "cli"
-        elif config.input_joints is not None:
-            sources["output_joints"] = "input_joints"
-        elif training_cfg.output_joints is not None:
-            sources["output_joints"] = "run.yaml"
-        else:
-            sources["output_joints"] = "input_joints"
-        return None, input_joints, output_joints, sources
+        return shared_siso_joints, None, None, sources
 
-    joint_type = str(training_cfg.joint_type or "full").strip()
-    if joint_type != "full":
-        joint_type = _canonical_joint(bundle, joint_type, label="joint_type")
-    sources["joint_type"] = (
-        "run.yaml" if training_cfg.joint_type is not None else "fallback"
+    if raw_inputs is None:
+        raise ValueError("input_joints is required when output_joints is configured")
+    input_joints = _resolved_joint_list(bundle, raw_inputs, label="input_joints")
+    output_joints = (
+        list(input_joints)
+        if raw_outputs is None
+        else _resolved_joint_list(
+            bundle,
+            raw_outputs,
+            label="output_joints",
+            all_joints=input_joints,
+        )
     )
-    sources["input_joints"] = "legacy_joint_type"
-    sources["output_joints"] = "legacy_joint_type"
-    return joint_type, None, None, sources
+    missing = [joint for joint in output_joints if joint not in input_joints]
+    if missing:
+        raise ValueError(
+            "output_joints must be a subset of input_joints; missing: "
+            + ", ".join(missing)
+        )
+    sources.update(
+        {
+            "shared_siso_joints": (
+                "overridden_by_cli_input_joints"
+                if cli_selection and training_cfg.shared_siso_joints is not None
+                else "not_configured"
+            ),
+            "input_joints": source,
+            "output_joints": source if raw_outputs is not None else "input_joints",
+        }
+    )
+    return None, input_joints, output_joints, sources
 
 
-def _selected_joints(
-    bundle: Any,
-    joint_type: str | None,
-    input_joints: list[str] | None,
-    output_joints: list[str] | None,
-) -> tuple[list[str], list[str]]:
-    if input_joints is not None:
-        assert output_joints is not None
-        return list(input_joints), list(output_joints)
-    if joint_type == "full":
-        joints = list(bundle.spec.joint_names)
-        return joints, joints
-    if joint_type is None:
+def _training_topology(
+    shared_siso_joints: Sequence[str] | None,
+    input_joints: Sequence[str] | None,
+    output_joints: Sequence[str] | None,
+) -> str:
+    if shared_siso_joints is not None:
+        return "shared_siso"
+    if input_joints is None or output_joints is None:
         raise ValueError("training joint selection is incomplete")
-    return [joint_type], [joint_type]
-
+    if len(input_joints) == 1:
+        return "siso"
+    if len(output_joints) == 1:
+        return "miso"
+    return "mimo"
 
 def _actuator_for_joint(spec: Any, joint: str) -> Any:
     matches = [actuator for actuator in spec.actuators if joint in actuator.joints]
@@ -373,7 +390,7 @@ def resolve_train_actuator_run_config(
         None,
         "--output",
     )
-    joint_type, input_joints, output_joints, joint_sources = _resolve_joint_selection(
+    shared_siso_joints, input_joints, output_joints, joint_sources = _resolve_joint_selection(
         config,
         training_cfg,
         bundle,
@@ -410,12 +427,14 @@ def resolve_train_actuator_run_config(
 
     pd_required = model == "hybrid_residual" or "solver_pd" in input_columns
     friction_required = model == "hybrid_residual"
-    selected_inputs, selected_outputs = _selected_joints(
-        bundle,
-        joint_type,
-        input_joints,
-        output_joints,
-    )
+    if shared_siso_joints is not None:
+        selected_inputs = list(shared_siso_joints)
+        selected_outputs = list(shared_siso_joints)
+    else:
+        assert input_joints is not None
+        assert output_joints is not None
+        selected_inputs = list(input_joints)
+        selected_outputs = list(output_joints)
     pd_joints = selected_inputs if "solver_pd" in input_columns else selected_outputs
     friction_joints = selected_outputs
     actuator_spec: Any | None = None
@@ -454,7 +473,7 @@ def resolve_train_actuator_run_config(
         model=model,
         data=resolve_repo_path_text(data),
         output=resolve_repo_path_text(output),
-        joint_type=joint_type,
+        shared_siso_joints=shared_siso_joints,
         input_joints=input_joints,
         output_joints=output_joints,
         sample_dt_s=sample_dt_s,
@@ -496,8 +515,10 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         "--data",
         resolved.data,
     ]
-    if resolved.joint_type is not None:
-        command.extend(("--joint-type", resolved.joint_type))
+    if resolved.shared_siso_joints is not None:
+        command.extend(
+            ("--shared-siso-joints", ",".join(resolved.shared_siso_joints))
+        )
     else:
         assert resolved.input_joints is not None
         assert resolved.output_joints is not None
@@ -564,7 +585,12 @@ def build_resolved_train_actuator_command(
 
     metadata: dict[str, Any] = {
         "model": resolved.model,
-        "joint_type": resolved.joint_type,
+        "training_topology": _training_topology(
+            resolved.shared_siso_joints,
+            resolved.input_joints,
+            resolved.output_joints,
+        ),
+        "shared_siso_joints": resolved.shared_siso_joints,
         "input_joints": resolved.input_joints,
         "output_joints": resolved.output_joints,
         "sample_dt_s": resolved.sample_dt_s,
@@ -624,13 +650,6 @@ def _residual_physics(resolved: ResolvedTrainActuatorRunConfig) -> Any | None:
     )
 
 
-def _job_joint_type(resolved: ResolvedTrainActuatorRunConfig) -> str:
-    if resolved.joint_type is not None:
-        return resolved.joint_type
-    assert resolved.output_joints
-    return "__".join(resolved.output_joints)
-
-
 def run_resolved_train_actuator(
     resolved: ResolvedTrainActuatorRunConfig,
 ) -> CommandPlan:
@@ -642,17 +661,17 @@ def run_resolved_train_actuator(
 
     bundle = get_robot(resolved.robot)
     sources = discover_training_sources(resolved.data)
-    if resolved.joint_type == "full":
-        sources = expand_joint_sources(sources, bundle.spec.joint_names)
+    if resolved.shared_siso_joints is not None:
+        sources = expand_joint_sources(sources, resolved.shared_siso_joints)
     train_sources, val_sources = split_training_sources(sources, seed=resolved.seed)
 
-    if resolved.input_joints is not None:
-        header_joint = resolved.input_joints[0]
-    elif train_sources[0].joint is not None:
+    if resolved.shared_siso_joints is not None:
+        if train_sources[0].joint is None:
+            raise ValueError("shared-SISO training source expansion is incomplete")
         header_joint = train_sources[0].joint
     else:
-        assert resolved.joint_type is not None
-        header_joint = resolved.joint_type
+        assert resolved.input_joints is not None
+        header_joint = resolved.input_joints[0]
     derived_columns = [
         column
         for column in resolved.input_columns
@@ -676,6 +695,14 @@ def run_resolved_train_actuator(
         dynamic_bias_provider = NewtonMuJoCoDynamicBiasProvider(bundle)
 
     metadata: dict[str, Any] = {
+        "training_topology": _training_topology(
+            resolved.shared_siso_joints,
+            resolved.input_joints,
+            resolved.output_joints,
+        ),
+        "shared_siso_joints": resolved.shared_siso_joints,
+        "input_joints": resolved.input_joints,
+        "output_joints": resolved.output_joints,
         "robot": resolved.robot,
         "config_sources": resolved.config_sources,
         "skip_optuna": resolved.skip_optuna,
@@ -688,7 +715,7 @@ def run_resolved_train_actuator(
     artifacts = train_stateful_gru(
         TrainingJob(
             model=resolved.model,
-            joint_type=_job_joint_type(resolved),
+            shared_siso_joints=resolved.shared_siso_joints,
             train_sources=train_sources,
             val_sources=val_sources,
             output_dir=Path(resolved.output),

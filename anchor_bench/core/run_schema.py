@@ -7,8 +7,9 @@ from pydantic import Field, StrictBool, field_validator, model_validator
 
 from anchor_bench.core.config_model import (
     ConfigModel,
+    JointSelection,
     parse_gru_columns,
-    parse_joint_names,
+    parse_joint_selection,
 )
 
 
@@ -84,9 +85,9 @@ class TrainingDefaults(ConfigModel):
     model: Literal["gru", "hybrid_residual"] | None = None
     real_data_dir: str | None = None
     output_dir: str | None = None
-    joint_type: str | None = None
-    input_joints: list[str] | None = None
-    output_joints: list[str] | None = None
+    shared_siso_joints: JointSelection | None = None
+    input_joints: JointSelection | None = None
+    output_joints: JointSelection | None = None
     pd_baseline: TrainingPDBaseline | None = None
     friction_baseline: TrainingFrictionBaseline | None = None
     skip_optuna: StrictBool | None = None
@@ -104,18 +105,25 @@ class TrainingDefaults(ConfigModel):
     def _validate_input_columns(cls, value: Any) -> list[str] | None:
         return None if value is None else parse_gru_columns(value)
 
-    @field_validator("input_joints", "output_joints", mode="before")
+    @field_validator(
+        "shared_siso_joints",
+        "input_joints",
+        "output_joints",
+        mode="before",
+    )
     @classmethod
-    def _validate_joint_names(cls, value: Any) -> list[str] | None:
-        return None if value is None else parse_joint_names(value)
+    def _parse_joint_selection(cls, value: Any) -> JointSelection | None:
+        return None if value is None else parse_joint_selection(value)
 
     @model_validator(mode="after")
     def _validate_joint_selection(self) -> "TrainingDefaults":
         if (
-            self.joint_type is not None
+            self.shared_siso_joints is not None
             and (self.input_joints is not None or self.output_joints is not None)
         ):
-            raise ValueError("joint_type cannot be combined with input_joints or output_joints")
+            raise ValueError(
+                "shared_siso_joints cannot be combined with input_joints or output_joints"
+            )
         if self.output_joints is not None and self.input_joints is None:
             raise ValueError("input_joints is required when output_joints is configured")
         return self

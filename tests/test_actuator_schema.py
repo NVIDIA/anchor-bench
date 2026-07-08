@@ -191,7 +191,7 @@ class NativeActuatorSchemaTests(unittest.TestCase):
                     "model": "hybrid_residual",
                     "real_data_dir": "inputs/training/demo",
                     "output_dir": "outputs/training/demo",
-                    "joint_type": "Rotation",
+                    "input_joints": ["Rotation"],
                     "skip_optuna": True,
                     "trials": 3,
                     "trial_epochs": 1,
@@ -206,6 +206,8 @@ class NativeActuatorSchemaTests(unittest.TestCase):
 
         self.assertEqual("hybrid_residual", run.training.model)
         self.assertEqual("outputs/training/demo", run.training.output_dir)
+        self.assertEqual(["Rotation"], run.training.input_joints)
+        self.assertIsNone(run.training.output_joints)
         self.assertTrue(run.training.skip_optuna)
         self.assertEqual(4, run.training.n_streams)
 

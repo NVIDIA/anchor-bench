@@ -32,7 +32,7 @@ training:
   model: gru
   real_data_dir: inputs/datasets/so101/so101_arm_50motion/train
   output_dir: outputs/training/so101
-  joint_type: full
+  shared_siso_joints: all
   input_columns: [position, position_error, velocity]
   target_column: torque
   skip_optuna: true

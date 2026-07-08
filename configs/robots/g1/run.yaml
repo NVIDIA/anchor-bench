@@ -31,7 +31,7 @@ training:
   model: hybrid_residual
   real_data_dir: inputs/datasets/g1/g1_arm_multi_joint/csv
   output_dir: outputs/training/g1/right_shoulder_pitch
-  joint_type: right_shoulder_pitch
+  input_joints: [right_shoulder_pitch]
   input_columns: [position, position_error, velocity]
   target_column: torque
   skip_optuna: true

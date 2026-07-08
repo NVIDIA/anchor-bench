@@ -4,7 +4,7 @@ import argparse
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 def _print_plan(plan: Any) -> int:
@@ -19,6 +19,14 @@ def _require_existing_path(label: str, value: str | None, kind: str = "path") ->
 
 def _csv_columns(value: str | None) -> list[str] | None:
     return None if value is None else [column.strip() for column in value.split(",") if column.strip()]
+
+
+def _joint_selection(value: str | None) -> Literal["all"] | list[str] | None:
+    if value is None:
+        return None
+    if value.strip() == "all":
+        return "all"
+    return _csv_columns(value)
 
 
 def _handle_robots(args: argparse.Namespace) -> int:
@@ -64,9 +72,9 @@ def _handle_train(args: argparse.Namespace) -> int:
         model=args.model,
         data=args.data,
         output=args.output,
-        joint_type=args.joint_type,
-        input_joints=_csv_columns(args.input_joints),
-        output_joints=_csv_columns(args.output_joints),
+        shared_siso_joints=_joint_selection(args.shared_siso_joints),
+        input_joints=_joint_selection(args.input_joints),
+        output_joints=_joint_selection(args.output_joints),
         pd_kp=args.pd_kp,
         pd_kd=args.pd_kd,
         friction_dry=args.friction_dry,

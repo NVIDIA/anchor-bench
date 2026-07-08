@@ -25,6 +25,7 @@ class RobotRegistryTests(unittest.TestCase):
         self.assertEqual(robot.spec.joint_names, ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"])
         self.assertTrue(robot.paths.actuators.exists())
         self.assertTrue(robot.paths.bounds.exists())
+        self.assertEqual(robot.run_config.training.shared_siso_joints, "all")
         self.assertEqual(validate_robot("so101"), [])
 
     def test_g1_resolves_right_arm_training_defaults(self):
@@ -35,7 +36,11 @@ class RobotRegistryTests(unittest.TestCase):
             ["right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow"],
         )
         self.assertEqual(robot.run_config.training.model, "hybrid_residual")
-        self.assertEqual(robot.run_config.training.joint_type, "right_shoulder_pitch")
+        self.assertEqual(
+            robot.run_config.training.input_joints,
+            ["right_shoulder_pitch"],
+        )
+        self.assertIsNone(robot.run_config.training.shared_siso_joints)
         self.assertEqual(validate_robot("g1"), [])
 
     def test_get_robot_rejects_inconsistent_joint_configs(self):

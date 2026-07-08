@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -17,6 +17,9 @@ GRU_INPUT_COLUMNS = {
     "dynamic_bias",
     "previous_torque",
 }
+
+
+JointSelection = Literal["all"] | list[str]
 
 
 def _find_duplicates(values: list[str]) -> list[str]:
@@ -59,6 +62,15 @@ def parse_joint_names(value: Any) -> list[str]:
     duplicates = _find_duplicates(names)
     if duplicates:
         raise ValueError(f"contains duplicate joints: {', '.join(duplicates)}")
+    return names
+
+
+def parse_joint_selection(value: Any) -> JointSelection:
+    if isinstance(value, str) and value.strip() == "all":
+        return "all"
+    names = parse_joint_names(value)
+    if "all" in names:
+        raise ValueError("'all' must be used as a standalone joint selector")
     return names
 
 

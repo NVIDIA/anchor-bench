@@ -105,6 +105,39 @@ class TrainingEpisode:
             )
 
 
+def slice_training_episode_joint(
+    episode: TrainingEpisode,
+    joint: str,
+) -> TrainingEpisode:
+    """Return one scalar joint view while retaining episode provenance."""
+
+    try:
+        input_index = episode.input_joints.index(joint)
+    except ValueError as exc:
+        raise ValueError(f"episode does not contain input joint {joint!r}") from exc
+    try:
+        output_index = episode.output_joints.index(joint)
+    except ValueError as exc:
+        raise ValueError(f"episode does not contain output joint {joint!r}") from exc
+
+    input_width = len(episode.input_joints)
+    feature_blocks: dict[str, np.ndarray] = {}
+    for name, block in episode.feature_blocks.items():
+        if block.shape[1] != input_width:
+            raise ValueError(
+                f"episode feature {name!r} width must match input_joints"
+            )
+        feature_blocks[name] = block[:, input_index : input_index + 1]
+
+    return TrainingEpisode(
+        timestamps=episode.timestamps,
+        input_joints=(joint,),
+        output_joints=(joint,),
+        feature_blocks=feature_blocks,
+        target_torque=episode.target_torque[:, output_index : output_index + 1],
+        dynamic_bias_provenance=episode.dynamic_bias_provenance,
+    )
+
 def _readonly_array(
     values: Any,
     *,
@@ -306,12 +339,17 @@ def split_training_sources(
     val_count = min(val_count, len(paths) - 1)
     val_paths = set(paths[:val_count])
 
-    def source_key(source: TrainingSource) -> tuple[str, str]:
-        return str(source.path), source.joint or ""
-
-    train = [source for path in paths if path not in val_paths for source in groups[path]]
-    val = [source for path in paths if path in val_paths for source in groups[path]]
-    return sorted(train, key=source_key), sorted(val, key=source_key)
+    train_paths = sorted(
+        (path for path in paths if path not in val_paths),
+        key=str,
+    )
+    val_paths_ordered = sorted(
+        (path for path in paths if path in val_paths),
+        key=str,
+    )
+    train = [source for path in train_paths for source in groups[path]]
+    val = [source for path in val_paths_ordered for source in groups[path]]
+    return train, val
 
 
 @lru_cache(maxsize=32)

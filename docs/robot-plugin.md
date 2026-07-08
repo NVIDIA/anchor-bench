@@ -196,7 +196,7 @@ training:
   model: gru
   real_data_dir: inputs/datasets/my_robot/default/motion_001
   output_dir: outputs/training/my_robot
-  joint_type: full
+  shared_siso_joints: all
   input_columns: [position, position_error, velocity]
   target_column: torque
   skip_optuna: true
