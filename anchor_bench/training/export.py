@@ -16,6 +16,8 @@ _SUPPORTED_INPUT_COLUMNS = {
     "velocity",
 }
 
+_SUPPORTED_FEATURE_DOMAINS = {"global", "input_joints", "output_joints"}
+
 
 def _import_torch():
     try:
@@ -117,12 +119,90 @@ def _finite_number(value: Any, name: str, *, nonnegative: bool = False) -> float
     return result
 
 
+def _input_feature_widths(
+    metadata: Mapping[str, Any],
+    *,
+    input_joints: Sequence[str],
+    output_joints: Sequence[str],
+    columns: Sequence[str],
+) -> list[int]:
+    if "input_feature_specs" not in metadata:
+        return [
+            len(output_joints) if column == "previous_torque" else len(input_joints)
+            for column in columns
+        ]
+    specs = metadata["input_feature_specs"]
+    if not isinstance(specs, list) or len(specs) != len(columns):
+        raise ValueError(
+            "runtime_metadata.input_feature_specs must be an ordered list "
+            "matching input_columns"
+        )
+
+    widths: list[int] = []
+    names: list[str] = []
+    axis_widths = {
+        "global": 1,
+        "input_joints": len(input_joints),
+        "output_joints": len(output_joints),
+    }
+    required_keys = {"name", "domain", "channels"}
+    for index, (spec, column) in enumerate(zip(specs, columns, strict=True)):
+        label = f"runtime_metadata.input_feature_specs[{index}]"
+        if not isinstance(spec, Mapping):
+            raise ValueError(f"{label} must be a mapping")
+        if set(spec) != required_keys:
+            raise ValueError(
+                f"{label} must contain exactly name, domain, and channels"
+            )
+
+        name = spec.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{label}.name must be a non-empty string")
+        names.append(name)
+        if name != column:
+            raise ValueError(
+                "runtime_metadata.input_feature_specs names must match "
+                "input_columns in order"
+            )
+
+        domain = spec.get("domain")
+        if not isinstance(domain, str) or domain not in _SUPPORTED_FEATURE_DOMAINS:
+            raise ValueError(
+                f"{label}.domain must be one of "
+                + ", ".join(sorted(_SUPPORTED_FEATURE_DOMAINS))
+            )
+
+        channels = spec.get("channels")
+        if not isinstance(channels, list) or not channels:
+            raise ValueError(f"{label}.channels must be a non-empty list")
+        if any(not isinstance(channel, str) or not channel for channel in channels):
+            raise ValueError(
+                f"{label}.channels entries must be non-empty strings"
+            )
+        if len(set(channels)) != len(channels):
+            raise ValueError(f"{label}.channels must not contain duplicates")
+        if name == "previous_torque" and (
+            domain != "output_joints" or channels != ["value"]
+        ):
+            raise ValueError(
+                "runtime_metadata.input_feature_specs previous_torque must use "
+                "domain='output_joints' and channels=['value']"
+            )
+        widths.append(axis_widths[domain] * len(channels))
+
+    if len(set(names)) != len(names):
+        raise ValueError(
+            "runtime_metadata.input_feature_specs names must not contain duplicates"
+        )
+    return widths
+
+
 def _metadata_axes(
     metadata: Mapping[str, Any],
     *,
     input_size: int,
     output_size: int,
-) -> tuple[list[str], list[str], list[str], str]:
+) -> tuple[list[str], list[str], list[str], list[int], str]:
     if metadata.get("schema_version") != 1 or metadata.get("model_type") != "gru":
         raise ValueError("runtime_metadata must describe a schema-version-1 GRU")
     input_joints = _name_list(metadata.get("joint_names"), "joint_names")
@@ -138,10 +218,13 @@ def _metadata_axes(
     targets = _name_list(metadata.get("target_columns"), "target_columns")
     if len(targets) != 1 or targets[0] not in {"torque", "torque_residual"}:
         raise ValueError("runtime_metadata.target_columns must contain one torque semantic")
-    expected_input_size = sum(
-        len(output_joints) if column == "previous_torque" else len(input_joints)
-        for column in columns
+    input_widths = _input_feature_widths(
+        metadata,
+        input_joints=input_joints,
+        output_joints=output_joints,
+        columns=columns,
     )
+    expected_input_size = sum(input_widths)
     if input_size != expected_input_size:
         raise ValueError(
             f"checkpoint input_size is {input_size}, metadata requires {expected_input_size}"
@@ -152,7 +235,7 @@ def _metadata_axes(
         )
     if _finite_number(metadata.get("sample_dt_s"), "sample_dt_s") <= 0.0:
         raise ValueError("runtime_metadata.sample_dt_s must be finite and positive")
-    return input_joints, output_joints, columns, targets[0]
+    return input_joints, output_joints, columns, input_widths, targets[0]
 
 
 def _validate_training_topology(
@@ -213,6 +296,7 @@ def _validate_normalization(
     input_joints: Sequence[str],
     output_joints: Sequence[str],
     columns: Sequence[str],
+    input_widths: Sequence[int],
     target: str,
 ) -> None:
     normalization = _mapping(metadata.get("normalization"), "normalization")
@@ -222,8 +306,7 @@ def _validate_normalization(
     target_values = _mapping(normalization.get("targets"), "normalization.targets")
     target_mean = _mapping(target_values.get("mean"), "normalization.targets.mean")
     target_std = _mapping(target_values.get("std"), "normalization.targets.std")
-    for column in columns:
-        width = len(output_joints) if column == "previous_torque" else len(input_joints)
+    for column, width in zip(columns, input_widths, strict=True):
         _finite_values(input_mean.get(column), width, f"normalization.inputs.mean.{column}")
         _finite_values(
             input_std.get(column),
@@ -333,7 +416,7 @@ def _validate_runtime_metadata(
     input_size: int,
     output_size: int,
 ) -> None:
-    input_joints, output_joints, columns, target = _metadata_axes(
+    input_joints, output_joints, columns, input_widths, target = _metadata_axes(
         metadata,
         input_size=input_size,
         output_size=output_size,
@@ -350,6 +433,7 @@ def _validate_runtime_metadata(
         input_joints=input_joints,
         output_joints=output_joints,
         columns=columns,
+        input_widths=input_widths,
         target=target,
     )
     _validate_delay(metadata)
@@ -369,6 +453,17 @@ def _validate_checkpoint_contract(
     checkpoint: Mapping[str, Any],
     metadata: Mapping[str, Any],
 ) -> None:
+    has_checkpoint_specs = "input_feature_specs" in checkpoint
+    has_metadata_specs = "input_feature_specs" in metadata
+    if has_checkpoint_specs != has_metadata_specs or (
+        has_checkpoint_specs
+        and checkpoint["input_feature_specs"] != metadata["input_feature_specs"]
+    ):
+        raise ValueError(
+            "checkpoint input_feature_specs does not match "
+            "runtime_metadata.input_feature_specs"
+        )
+
     pairs = (
         ("input_columns", "input_columns"),
         ("target_columns", "target_columns"),
@@ -418,6 +513,10 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
         checkpoint.get("output_size", len(target_columns)),
         "checkpoint output_size",
     )
+    if runtime_metadata is None and "input_feature_specs" in checkpoint:
+        raise ValueError(
+            "checkpoint input_feature_specs requires non-null runtime_metadata"
+        )
     if runtime_metadata is not None:
         metadata = _mapping(runtime_metadata, "runtime_metadata")
         _validate_runtime_metadata(metadata, input_size=input_size, output_size=output_size)

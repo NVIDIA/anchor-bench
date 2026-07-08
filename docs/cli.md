@@ -121,10 +121,21 @@ The resulting topologies are:
 | MIMO | More than 1 | More than 1 | One coupled network predicts an ordered torque vector |
 | Shared SISO | 1 per sequence | 1 per sequence | One scalar model shared across selected independent joints |
 
-For `I` input joints and `O` output joints, ordinary feature blocks have
-shape `[T, I]`, `previous_torque` has shape `[T, O]`, and the target has
-shape `[T, O]`. Blocks are flattened feature-first. The GRU input width is
-`I * ordinary_feature_count + O` when `previous_torque` is enabled.
+Each feature block declares a domain and ordered channels. Its canonical shape
+is `[T, A, C]`, where `A` is `I` for an input-joint block, `O` for an
+output-joint block, or `1` for a global block, and `C` is its channel count.
+For example, a three-channel velocity block is `[T, I, 3]`, while
+`previous_torque` is `[T, O, 1]`. The torque target remains `[T, O]`.
+
+Blocks are flattened in `input_columns` order, then axis-major/channel-minor
+within each block. The GRU input width is `D = sum(A * C)` across the selected
+features. Exported `input_feature_specs` records each domain and channel order.
+
+The built-in SAGE assembler currently emits scalar input-joint blocks only:
+`position`, `position_error`, `velocity`, and `dynamic_bias` use shape
+`[T, I, 1]` with the channel `value`. Vector-valued and global blocks are
+supported by the `TrainingEpisode` contract, but must be supplied by a data
+producer that defines those channels explicitly.
 
 ### Features, targets, and timing
 

@@ -177,6 +177,382 @@ class TrainingDataTests(unittest.TestCase):
             )
 
 
+class TrainingFeatureBlockTests(unittest.TestCase):
+    @staticmethod
+    def _job(
+        input_columns,
+        *,
+        model="gru",
+        residual_physics=None,
+        input_joints=("j0", "j1"),
+        output_joints=("j1",),
+    ):
+        from anchor_bench.training.trainer import TrainingJob
+
+        return TrainingJob(
+            model=model,
+            train_sources=[],
+            val_sources=[],
+            output_dir=Path("out"),
+            input_columns=list(input_columns),
+            target_columns=[
+                "torque_residual" if model == "hybrid_residual" else "torque"
+            ],
+            source_target_columns=["torque"],
+            seed=1,
+            final_epochs=1,
+            trial_epochs=1,
+            trials=1,
+            skip_optuna=True,
+            n_streams=1,
+            noise_std=0.0,
+            residual_physics=residual_physics,
+            input_joints=input_joints,
+            output_joints=output_joints,
+            sample_dt_s=0.01,
+        )
+
+    @staticmethod
+    def _episode(feature_blocks, target):
+        import numpy as np
+
+        from anchor_bench.training.data import TrainingEpisode
+
+        return TrainingEpisode(
+            timestamps=np.arange(len(target), dtype=np.float64) * 0.01,
+            input_joints=("j0", "j1"),
+            output_joints=("j1",),
+            feature_blocks=feature_blocks,
+            target_torque=np.asarray(target, dtype=np.float32),
+        )
+
+    def test_prepare_flattens_vector_joint_and_global_features(self):
+        import numpy as np
+
+        from anchor_bench.training.data import FeatureBlock
+        from anchor_bench.training.trainer import _feature_widths, _prepare_episode
+
+        job = self._job(["velocity", "position", "previous_torque"])
+        episode = self._episode(
+            {
+                "velocity": FeatureBlock(
+                    np.array(
+                        [
+                            [[1, 2, 3], [4, 5, 6]],
+                            [[11, 12, 13], [14, 15, 16]],
+                        ],
+                        dtype=np.float32,
+                    ),
+                    domain="input_joints",
+                    channels=("vx", "vy", "vz"),
+                ),
+                "position": FeatureBlock(
+                    np.array(
+                        [
+                            [[7, 8, 9]],
+                            [[17, 18, 19]],
+                        ],
+                        dtype=np.float32,
+                    ),
+                    domain="global",
+                    channels=("x", "y", "z"),
+                ),
+            },
+            [[10], [20]],
+        )
+
+        features, target = _prepare_episode(job, episode)
+
+        np.testing.assert_allclose(
+            features,
+            [
+                [1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
+                [11, 12, 13, 14, 15, 16, 17, 18, 19, 10],
+            ],
+        )
+        np.testing.assert_allclose(target, [[10], [20]])
+        self.assertEqual((6, 3, 1), _feature_widths(job))
+        self.assertEqual(
+            [
+                {
+                    "name": "velocity",
+                    "domain": "input_joints",
+                    "channels": ["vx", "vy", "vz"],
+                },
+                {
+                    "name": "position",
+                    "domain": "global",
+                    "channels": ["x", "y", "z"],
+                },
+                {
+                    "name": "previous_torque",
+                    "domain": "output_joints",
+                    "channels": ["value"],
+                },
+            ],
+            job.metadata["input_feature_specs"],
+        )
+
+    def test_scalar_feature_blocks_preserve_feature_major_layout(self):
+        import numpy as np
+
+        from anchor_bench.training.data import FeatureBlock
+        from anchor_bench.training.trainer import _prepare_episode
+
+        job = self._job(["position"])
+        episode = self._episode(
+            {
+                "position": FeatureBlock(
+                    np.array([[[1], [2]], [[3], [4]]], dtype=np.float32),
+                    domain="input_joints",
+                    channels=("value",),
+                )
+            },
+            [[10], [20]],
+        )
+
+        features, _ = _prepare_episode(job, episode)
+
+        np.testing.assert_allclose(features, [[1, 2], [3, 4]])
+        self.assertEqual(
+            [
+                {
+                    "name": "position",
+                    "domain": "input_joints",
+                    "channels": ["value"],
+                }
+            ],
+            job.metadata["input_feature_specs"],
+        )
+
+    def test_prepare_rejects_feature_layout_drift_between_episodes(self):
+        import numpy as np
+
+        from anchor_bench.training.data import FeatureBlock
+        from anchor_bench.training.trainer import _prepare_episode
+
+        job = self._job(["velocity"])
+        first = self._episode(
+            {
+                "velocity": FeatureBlock(
+                    np.zeros((2, 2, 2), dtype=np.float32),
+                    domain="input_joints",
+                    channels=("vx", "vy"),
+                )
+            },
+            [[10], [20]],
+        )
+        second = self._episode(
+            {
+                "velocity": FeatureBlock(
+                    np.zeros((2, 2, 2), dtype=np.float32),
+                    domain="input_joints",
+                    channels=("vy", "vx"),
+                )
+            },
+            [[30], [40]],
+        )
+
+        _prepare_episode(job, first, source_name="first")
+        with self.assertRaisesRegex(ValueError, "layout differs"):
+            _prepare_episode(job, second, source_name="second")
+
+    def test_vector_feature_normalization_and_metadata_use_expanded_widths(self):
+        import numpy as np
+
+        from anchor_bench.training.data import FeatureBlock
+        from anchor_bench.training.trainer import (
+            _feature_widths,
+            _normalization_stats,
+            _normalize_sequences,
+            _prepare_episode,
+            _runtime_metadata,
+            _training_stats_metadata,
+        )
+
+        job = self._job(["velocity", "position", "previous_torque"])
+        episode = self._episode(
+            {
+                "velocity": FeatureBlock(
+                    np.array(
+                        [
+                            [[1, 2, 3], [4, 5, 6]],
+                            [[11, 12, 13], [14, 15, 16]],
+                        ],
+                        dtype=np.float32,
+                    ),
+                    domain="input_joints",
+                    channels=("vx", "vy", "vz"),
+                ),
+                "position": FeatureBlock(
+                    np.array([[[7, 8, 9]], [[17, 18, 19]]], dtype=np.float32),
+                    domain="global",
+                    channels=("x", "y", "z"),
+                ),
+            },
+            [[10], [20]],
+        )
+        sequence = _prepare_episode(job, episode)
+        widths = _feature_widths(job)
+        stats = _normalization_stats(
+            [sequence],
+            input_columns=job.input_columns,
+            target_columns=job.target_columns,
+            metadata=_training_stats_metadata(job),
+            input_widths=widths,
+            target_width=1,
+        )
+        normalized = _normalize_sequences(
+            [sequence],
+            stats,
+            input_columns=job.input_columns,
+            target_columns=job.target_columns,
+            input_widths=widths,
+            target_width=1,
+        )
+        runtime = _runtime_metadata(job, stats)
+
+        self.assertEqual(
+            [6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+            stats["normalization"]["inputs"]["mean"]["velocity"],
+        )
+        self.assertEqual(
+            [12.0, 13.0, 14.0],
+            stats["normalization"]["inputs"]["mean"]["position"],
+        )
+        self.assertEqual(
+            5.0,
+            stats["normalization"]["inputs"]["mean"]["previous_torque"],
+        )
+        np.testing.assert_allclose(
+            normalized[0][0],
+            np.array([[-1.0] * 10, [1.0] * 10], dtype=np.float32),
+        )
+        np.testing.assert_allclose(normalized[0][1], [[-1.0], [1.0]])
+        self.assertEqual(
+            job.metadata["input_feature_specs"],
+            stats["input_feature_specs"],
+        )
+        self.assertEqual(
+            job.metadata["input_feature_specs"],
+            runtime["input_feature_specs"],
+        )
+
+    def test_runtime_metadata_requires_current_stats_feature_specs(self):
+        from anchor_bench.training.trainer import _runtime_metadata
+
+        job = self._job(["position"])
+        job.metadata["input_feature_specs"] = [
+            {
+                "name": "position",
+                "domain": "input_joints",
+                "channels": ["value"],
+            }
+        ]
+        normalization = {
+            "inputs": {
+                "mean": {"position": [0.0, 0.0]},
+                "std": {"position": [1.0, 1.0]},
+            },
+            "targets": {
+                "mean": {"torque": 0.0},
+                "std": {"torque": 1.0},
+            },
+        }
+        cases = [
+            (
+                "missing",
+                {"normalization": normalization},
+                "missing input_feature_specs",
+            ),
+            (
+                "null",
+                {
+                    "normalization": normalization,
+                    "input_feature_specs": None,
+                },
+                "must be a list",
+            ),
+            (
+                "mismatched",
+                {
+                    "normalization": normalization,
+                    "input_feature_specs": [
+                        {
+                            "name": "position",
+                            "domain": "global",
+                            "channels": ["value"],
+                        }
+                    ],
+                },
+                "do not match",
+            ),
+        ]
+        for label, stats, message in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(
+                ValueError,
+                message,
+            ):
+                _runtime_metadata(job, stats)
+
+    def test_feature_specs_reject_null_and_invalid_previous_torque_layout(self):
+        from anchor_bench.training.trainer import _feature_widths
+
+        null_job = self._job(["position"])
+        null_job.metadata["input_feature_specs"] = None
+        with self.assertRaisesRegex(ValueError, "must be a list"):
+            _feature_widths(null_job)
+
+        previous_job = self._job(["position", "previous_torque"])
+        previous_job.metadata["input_feature_specs"] = [
+            {
+                "name": "position",
+                "domain": "input_joints",
+                "channels": ["value"],
+            },
+            {
+                "name": "previous_torque",
+                "domain": "input_joints",
+                "channels": ["value"],
+            },
+        ]
+        with self.assertRaisesRegex(ValueError, "output_joints"):
+            _feature_widths(previous_job)
+
+    def test_physics_derivation_rejects_multichannel_inputs(self):
+        import numpy as np
+
+        from anchor_bench.training.data import FeatureBlock
+        from anchor_bench.training.trainer import (
+            ResidualPhysics,
+            _prepare_episode,
+        )
+
+        job = self._job(
+            ["solver_pd"],
+            model="hybrid_residual",
+            residual_physics=ResidualPhysics(stiffness=2.0, damping=0.5),
+        )
+        episode = self._episode(
+            {
+                "position_error": FeatureBlock(
+                    np.zeros((2, 2, 3), dtype=np.float32),
+                    domain="input_joints",
+                    channels=("x", "y", "z"),
+                ),
+                "velocity": FeatureBlock(
+                    np.zeros((2, 2, 1), dtype=np.float32),
+                    domain="input_joints",
+                    channels=("value",),
+                ),
+            },
+            [[10], [20]],
+        )
+
+        with self.assertRaisesRegex(ValueError, "one scalar channel"):
+            _prepare_episode(job, episode)
+
+
 class TrainingRunnerTests(unittest.TestCase):
     def test_training_config_resolves_run_yaml_defaults(self):
         from anchor_bench.core.schemas import TrainActuatorRunConfig
@@ -373,6 +749,15 @@ class TrainingRunnerTests(unittest.TestCase):
             "n_streams": 1,
             "noise_std": 0.0,
             "sample_dt_s": 0.01,
+            "metadata": {
+                "input_feature_specs": [
+                    {
+                        "name": "position",
+                        "domain": "input_joints",
+                        "channels": ["value"],
+                    }
+                ]
+            },
         }
         explicit = TrainingJob(**base, input_joints=["joint_a", "joint_b"])
         shared = TrainingJob(**base, shared_siso_joints=["joint_b", "joint_a"])

@@ -13,6 +13,8 @@ import numpy as np
 
 from anchor_bench.training.data import (
     EPSILON_STD,
+    FEATURE_DOMAINS,
+    FeatureBlock,
     TrainingSource,
     slice_training_episode_joint,
     write_stats_json,
@@ -223,11 +225,106 @@ def _sample_dt_s(job: TrainingJob) -> float:
     return result
 
 
+def _validated_input_feature_specs(
+    job: TrainingJob,
+    specs: Any,
+    *,
+    source: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(specs, list):
+        raise ValueError(f"{source} input_feature_specs must be a list")
+    if len(specs) != len(job.input_columns):
+        raise ValueError(f"{source} input_feature_specs must match input_columns")
+    result: list[dict[str, Any]] = []
+    for index, (column, raw) in enumerate(
+        zip(job.input_columns, specs, strict=True)
+    ):
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"{source} input_feature_specs[{index}] must be a mapping"
+            )
+        name = raw.get("name")
+        domain = raw.get("domain")
+        channels = raw.get("channels")
+        if name != column:
+            raise ValueError(
+                f"{source} input_feature_specs[{index}].name must be {column!r}"
+            )
+        if domain not in FEATURE_DOMAINS:
+            raise ValueError(
+                f"{source} feature {column!r} domain must be one of "
+                "input_joints, output_joints, global"
+            )
+        if (
+            not isinstance(channels, (list, tuple))
+            or not channels
+            or any(not isinstance(channel, str) or not channel for channel in channels)
+            or len(set(channels)) != len(channels)
+        ):
+            raise ValueError(
+                f"{source} feature {column!r} channels must be ordered, unique, "
+                "non-empty strings"
+            )
+        if column == "previous_torque" and (
+            domain != "output_joints" or list(channels) != ["value"]
+        ):
+            raise ValueError(
+                f"{source} feature 'previous_torque' must use domain "
+                "'output_joints' with channels ['value']"
+            )
+        result.append(
+            {
+                "name": name,
+                "domain": domain,
+                "channels": list(channels),
+            }
+        )
+    return result
+
+
+def _input_feature_specs(job: TrainingJob) -> list[dict[str, Any]]:
+    if "input_feature_specs" not in job.metadata:
+        raise ValueError(
+            "training metadata is missing input_feature_specs; "
+            "assemble at least one training episode first"
+        )
+    return _validated_input_feature_specs(
+        job,
+        job.metadata["input_feature_specs"],
+        source="training metadata",
+    )
+
+
+def _record_input_feature_specs(
+    job: TrainingJob,
+    specs: list[dict[str, Any]],
+    *,
+    source: str,
+) -> None:
+    candidate = _validated_input_feature_specs(job, specs, source=source)
+    if "input_feature_specs" in job.metadata:
+        configured = _validated_input_feature_specs(
+            job,
+            job.metadata["input_feature_specs"],
+            source="training metadata",
+        )
+        if configured != candidate:
+            raise ValueError(
+                f"{source} input feature layout differs from other training episodes"
+            )
+    job.metadata["input_feature_specs"] = candidate
+
+
 def _feature_widths(job: TrainingJob) -> tuple[int, ...]:
     inputs, outputs = _runtime_axes(job)
+    axis_widths = {
+        "input_joints": len(inputs),
+        "output_joints": len(outputs),
+        "global": 1,
+    }
     return tuple(
-        len(outputs) if column == "previous_torque" else len(inputs)
-        for column in job.input_columns
+        axis_widths[spec["domain"]] * len(spec["channels"])
+        for spec in _input_feature_specs(job)
     )
 
 
@@ -249,9 +346,49 @@ def _episode_array(
     return result
 
 
+def _episode_feature_block(
+    raw: Any,
+    *,
+    name: str,
+    rows: int,
+    input_width: int,
+    output_width: int,
+    source: str,
+) -> FeatureBlock:
+    if not isinstance(raw, FeatureBlock):
+        raise TypeError(f"{source} feature {name!r} must be a FeatureBlock")
+    axis_width = {
+        "input_joints": input_width,
+        "output_joints": output_width,
+        "global": 1,
+    }[raw.domain]
+    expected_shape = (rows, axis_width, len(raw.channels))
+    if raw.values.shape != expected_shape:
+        raise ValueError(
+            f"{source} feature {name!r} has shape {raw.values.shape}, "
+            f"expected {expected_shape} for domain {raw.domain!r}"
+        )
+    return raw
+
+
+def _physics_scalar_input(
+    blocks: Mapping[str, FeatureBlock],
+    name: str,
+    *,
+    source: str,
+) -> np.ndarray:
+    block = blocks[name]
+    if block.domain != "input_joints" or len(block.channels) != 1:
+        raise ValueError(
+            f"{source} physics feature {name!r} must use domain 'input_joints' "
+            "with one scalar channel"
+        )
+    return block.values[:, :, 0]
+
+
 def _apply_physics_baseline(
     job: TrainingJob,
-    blocks: dict[str, np.ndarray],
+    blocks: dict[str, FeatureBlock],
     target: np.ndarray,
     *,
     input_joints: Sequence[str],
@@ -263,22 +400,34 @@ def _apply_physics_baseline(
         return target
     physics = job.residual_physics
     if physics is None:
-        raise ValueError("residual and solver_pd training require residual physics parameters")
+        raise ValueError(
+            "residual and solver_pd training require residual physics parameters"
+        )
     missing = [name for name in ("position_error", "velocity") if name not in blocks]
     if missing:
         raise ValueError(
             f"{source} missing features required by the physics baseline: "
             + ", ".join(missing)
         )
-    blocks["solver_pd"] = (
-        physics.stiffness * blocks["position_error"]
-        - physics.damping * blocks["velocity"]
+    position_error = _physics_scalar_input(
+        blocks,
+        "position_error",
+        source=source,
+    )
+    velocity = _physics_scalar_input(blocks, "velocity", source=source)
+    solver_pd = (
+        physics.stiffness * position_error - physics.damping * velocity
     ).astype(np.float32)
+    blocks["solver_pd"] = FeatureBlock(
+        solver_pd[:, :, np.newaxis],
+        "input_joints",
+        ("value",),
+    )
     if job.model != "hybrid_residual":
         return target
     output_indices = [input_joints.index(name) for name in output_joints]
-    output_velocity = blocks["velocity"][:, output_indices]
-    output_solver_pd = blocks["solver_pd"][:, output_indices]
+    output_velocity = velocity[:, output_indices]
+    output_solver_pd = solver_pd[:, output_indices]
     friction = (
         physics.dry_friction * np.sign(output_velocity)
         + physics.viscous_friction * output_velocity
@@ -288,36 +437,57 @@ def _apply_physics_baseline(
 
 def _flatten_feature_blocks(
     job: TrainingJob,
-    blocks: dict[str, np.ndarray],
+    blocks: dict[str, FeatureBlock],
     target: np.ndarray,
     *,
     rows: int,
     input_width: int,
     output_width: int,
     source: str,
-) -> np.ndarray:
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
     if "previous_torque" in job.input_columns:
         previous_target = np.zeros_like(target, dtype=np.float32)
         previous_target[1:] = target[:-1]
-        blocks["previous_torque"] = previous_target
+        blocks["previous_torque"] = FeatureBlock(
+            previous_target[:, :, np.newaxis],
+            "output_joints",
+            ("value",),
+        )
     ordered: list[np.ndarray] = []
+    specs: list[dict[str, Any]] = []
+    axis_widths = {
+        "input_joints": input_width,
+        "output_joints": output_width,
+        "global": 1,
+    }
     for column in job.input_columns:
         if column not in blocks:
             raise ValueError(f"{source} missing required feature {column!r}")
-        expected_width = output_width if column == "previous_torque" else input_width
         block = blocks[column]
-        if block.shape != (rows, expected_width):
+        expected_shape = (
+            rows,
+            axis_widths[block.domain],
+            len(block.channels),
+        )
+        if block.values.shape != expected_shape:
             raise ValueError(
-                f"{source} feature {column!r} has shape {block.shape}, "
-                f"expected {(rows, expected_width)}"
+                f"{source} feature {column!r} has shape {block.values.shape}, "
+                f"expected {expected_shape}"
             )
-        ordered.append(block)
+        ordered.append(block.values.reshape(rows, -1))
+        specs.append(
+            {
+                "name": column,
+                "domain": block.domain,
+                "channels": list(block.channels),
+            }
+        )
     if not ordered:
         raise ValueError("GRU training requires at least one input feature")
     features = np.concatenate(ordered, axis=1).astype(np.float32, copy=False)
     if not np.isfinite(features).all():
         raise ValueError(f"{source} contains non-finite training values")
-    return features
+    return features, specs
 
 
 def _prepare_episode(
@@ -352,13 +522,16 @@ def _prepare_episode(
     if not isinstance(raw_blocks, Mapping):
         raise ValueError(f"{label} feature_blocks must be a mapping")
 
-    blocks: dict[str, np.ndarray] = {}
-    for name, values in raw_blocks.items():
-        blocks[name] = _episode_array(
-            values,
-            name=f"feature {name!r}",
+    blocks: dict[str, FeatureBlock] = {}
+    for name, raw in raw_blocks.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{label} feature names must be non-empty strings")
+        blocks[name] = _episode_feature_block(
+            raw,
+            name=name,
             rows=rows,
-            width=input_width,
+            input_width=input_width,
+            output_width=output_width,
             source=label,
         )
     target = _episode_array(
@@ -376,7 +549,7 @@ def _prepare_episode(
         output_joints=output_joints,
         source=label,
     )
-    features = _flatten_feature_blocks(
+    features, specs = _flatten_feature_blocks(
         job,
         blocks,
         target,
@@ -385,6 +558,7 @@ def _prepare_episode(
         output_width=output_width,
         source=label,
     )
+    _record_input_feature_specs(job, specs, source=label)
     return features, target
 
 
@@ -715,6 +889,18 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
     semantic_target = "torque_residual" if job.model == "hybrid_residual" else "torque"
     source_target = job.target_columns[0]
     normalization = stats["normalization"]
+    input_feature_specs = _input_feature_specs(job)
+    if "input_feature_specs" not in stats:
+        raise ValueError("training stats are missing input_feature_specs")
+    resolved_stats_specs = _validated_input_feature_specs(
+        job,
+        stats["input_feature_specs"],
+        source="training stats",
+    )
+    if resolved_stats_specs != input_feature_specs:
+        raise ValueError(
+            "training stats input_feature_specs do not match the training job"
+        )
     delay = job.metadata.get(
         "delay",
         {"handling": "learned", "training_delay_s": 0.0},
@@ -737,6 +923,7 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
         "joint_names": list(input_joints),
         "output_joint_names": list(output_joints),
         "input_columns": list(job.input_columns),
+        "input_feature_specs": input_feature_specs,
         "target_columns": [semantic_target],
         "sample_dt_s": _sample_dt_s(job),
         "normalization": {
@@ -870,6 +1057,7 @@ def _fit_once(
         ),
         "model_state_dict": model.state_dict(),
         "input_columns": job.input_columns,
+        "input_feature_specs": _input_feature_specs(job),
         "target_columns": job.target_columns,
         "input_size": input_size,
         "output_size": output_size,
@@ -938,6 +1126,7 @@ def _training_stats_metadata(job: TrainingJob) -> dict[str, Any]:
     return {
         **job.metadata,
         "model": job.model,
+        "input_feature_specs": _input_feature_specs(job),
         "training_topology": _training_topology(job),
         "shared_siso_joints": (
             list(job.shared_siso_joints)

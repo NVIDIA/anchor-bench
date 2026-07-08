@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
 
@@ -28,6 +28,11 @@ SUPPORTED_INPUT_COLUMNS = {
 MODEL_CHOICES = {"gru", "hybrid_residual"}
 EPSILON_STD = 1.0e-8
 
+FeatureDomain = Literal["input_joints", "output_joints", "global"]
+FEATURE_DOMAINS: frozenset[str] = frozenset(
+    {"input_joints", "output_joints", "global"}
+)
+
 
 @dataclass(frozen=True)
 class TrainingColumns:
@@ -43,18 +48,70 @@ class TrainingSource:
 
 
 @dataclass(frozen=True)
+class FeatureBlock:
+    """One time-aligned feature with explicit axes and channel semantics."""
+
+    values: np.ndarray
+    domain: FeatureDomain
+    channels: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        values = _readonly_array(
+            self.values,
+            dtype=np.float32,
+            ndim=3,
+            label="feature block values",
+        )
+        domain = self.domain
+        if not isinstance(domain, str) or domain not in FEATURE_DOMAINS:
+            choices = ", ".join(sorted(FEATURE_DOMAINS))
+            raise ValueError(f"feature block domain must be one of: {choices}")
+
+        if isinstance(self.channels, str) or not isinstance(
+            self.channels,
+            Sequence,
+        ):
+            raise ValueError("feature block channels must be an ordered sequence")
+        channels = tuple(self.channels)
+        if not channels:
+            raise ValueError("feature block channels must contain at least one channel")
+        if any(not isinstance(channel, str) or not channel for channel in channels):
+            raise ValueError(
+                "feature block channel names must be non-empty strings"
+            )
+        duplicates = sorted(
+            {channel for channel in channels if channels.count(channel) > 1}
+        )
+        if duplicates:
+            raise ValueError(
+                "duplicate feature block channels: " + ", ".join(duplicates)
+            )
+        if values.shape[2] != len(channels):
+            raise ValueError(
+                "feature block channel axis must match channels: "
+                f"got {values.shape[2]}, expected {len(channels)}"
+            )
+        if domain == "global" and values.shape[1] != 1:
+            raise ValueError("global feature block axis must have width 1")
+
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "domain", domain)
+        object.__setattr__(self, "channels", channels)
+
+
+@dataclass(frozen=True)
 class TrainingEpisode:
     """One ordered, time-aligned actuator-training episode.
 
-    Feature blocks remain two-dimensional so the trainer can derive residual
-    features before flattening them in feature-major order. Solver PD and
-    previous torque are intentionally assembled by the trainer.
+    Feature blocks retain explicit axis and channel dimensions so the trainer
+    can derive residual features before flattening them in feature-major order.
+    Solver PD and previous torque are intentionally assembled by the trainer.
     """
 
     timestamps: np.ndarray
     input_joints: tuple[str, ...]
     output_joints: tuple[str, ...]
-    feature_blocks: Mapping[str, np.ndarray]
+    feature_blocks: Mapping[str, FeatureBlock]
     target_torque: np.ndarray
     dynamic_bias_provenance: Mapping[str, Any] | None = field(default=None)
 
@@ -71,24 +128,40 @@ class TrainingEpisode:
             ndim=2,
             label="episode target torque",
         )
-        input_joints = tuple(str(name) for name in self.input_joints)
-        output_joints = tuple(str(name) for name in self.output_joints)
+        input_joints = _ordered_unique(self.input_joints, label="input_joints")
+        output_joints = _ordered_unique(self.output_joints, label="output_joints")
+        unknown_outputs = [name for name in output_joints if name not in input_joints]
+        if unknown_outputs:
+            raise ValueError(
+                "output_joints must be a subset of input_joints; not present: "
+                + ", ".join(unknown_outputs)
+            )
         if len(target_torque) != len(timestamps):
             raise ValueError("episode target torque must have one row per timestamp")
         if target_torque.shape[1] != len(output_joints):
             raise ValueError("episode target torque width must match output_joints")
 
-        blocks: dict[str, np.ndarray] = {}
-        for name, values in self.feature_blocks.items():
-            block = _readonly_array(
-                values,
-                dtype=np.float32,
-                ndim=2,
-                label=f"episode feature {name}",
-            )
-            if len(block) != len(timestamps):
-                raise ValueError(f"episode feature {name} must have one row per timestamp")
-            blocks[str(name)] = block
+        blocks: dict[str, FeatureBlock] = {}
+        for name, block in self.feature_blocks.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("episode feature names must be non-empty strings")
+            if not isinstance(block, FeatureBlock):
+                raise TypeError(f"episode feature {name} must be a FeatureBlock")
+            if len(block.values) != len(timestamps):
+                raise ValueError(
+                    f"episode feature {name} must have one row per timestamp"
+                )
+            expected_axis_width = {
+                "input_joints": len(input_joints),
+                "output_joints": len(output_joints),
+                "global": 1,
+            }[block.domain]
+            if block.values.shape[1] != expected_axis_width:
+                raise ValueError(
+                    f"episode feature {name} {block.domain} axis has width "
+                    f"{block.values.shape[1]}, expected {expected_axis_width}"
+                )
+            blocks[name] = block
 
         object.__setattr__(self, "timestamps", timestamps)
         object.__setattr__(self, "input_joints", input_joints)
@@ -107,7 +180,7 @@ def slice_training_episode_joint(
     episode: TrainingEpisode,
     joint: str,
 ) -> TrainingEpisode:
-    """Return one scalar joint view while retaining episode provenance."""
+    """Return one joint view while retaining all channels and provenance."""
 
     try:
         input_index = episode.input_joints.index(joint)
@@ -118,14 +191,20 @@ def slice_training_episode_joint(
     except ValueError as exc:
         raise ValueError(f"episode does not contain output joint {joint!r}") from exc
 
-    input_width = len(episode.input_joints)
-    feature_blocks: dict[str, np.ndarray] = {}
+    feature_blocks: dict[str, FeatureBlock] = {}
     for name, block in episode.feature_blocks.items():
-        if block.shape[1] != input_width:
-            raise ValueError(
-                f"episode feature {name!r} width must match input_joints"
-            )
-        feature_blocks[name] = block[:, input_index : input_index + 1]
+        if block.domain == "input_joints":
+            values = block.values[:, input_index : input_index + 1, :]
+        elif block.domain == "output_joints":
+            values = block.values[:, output_index : output_index + 1, :]
+        else:
+            feature_blocks[name] = block
+            continue
+        feature_blocks[name] = FeatureBlock(
+            values=values,
+            domain=block.domain,
+            channels=block.channels,
+        )
 
     return TrainingEpisode(
         timestamps=episode.timestamps,
@@ -148,15 +227,20 @@ def _readonly_array(
         raise ValueError(f"{label} must be a {ndim}-D array")
     if not np.all(np.isfinite(array)):
         raise ValueError(f"{label} contains non-finite values")
-    result = np.array(array, dtype=dtype, copy=True)
-    result.setflags(write=False)
-    return result
+    immutable_buffer = array.tobytes(order="C")
+    return np.frombuffer(immutable_buffer, dtype=array.dtype).reshape(array.shape)
 
 
 def _ordered_unique(values: Sequence[str], *, label: str) -> tuple[str, ...]:
-    names = tuple(str(value) for value in values)
+    if isinstance(values, str) or not isinstance(values, Sequence):
+        raise ValueError(
+            f"{label} must be an ordered sequence of joint names"
+        )
+    names = tuple(values)
     if not names:
         raise ValueError(f"{label} must contain at least one joint")
+    if any(not isinstance(name, str) or not name for name in names):
+        raise ValueError(f"{label} must contain non-empty strings")
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
@@ -229,9 +313,17 @@ def assemble_training_episode(
 
     command = motion.command_position.interpolate(state_time).values[:, input_indices]
     position = motion.position.values[:, input_indices]
-    feature_blocks: dict[str, np.ndarray] = {
-        "position": position,
-        "position_error": command - position,
+    feature_blocks: dict[str, FeatureBlock] = {
+        "position": FeatureBlock(
+            values=position[:, :, np.newaxis],
+            domain="input_joints",
+            channels=("value",),
+        ),
+        "position_error": FeatureBlock(
+            values=(command - position)[:, :, np.newaxis],
+            domain="input_joints",
+            channels=("value",),
+        ),
     }
 
     needs_velocity = bool(
@@ -240,7 +332,11 @@ def assemble_training_episode(
     velocity_all: np.ndarray | None = None
     if motion.velocity is not None:
         velocity_all = motion.velocity.interpolate(state_time).values
-        feature_blocks["velocity"] = velocity_all[:, input_indices]
+        feature_blocks["velocity"] = FeatureBlock(
+            values=velocity_all[:, input_indices, np.newaxis],
+            domain="input_joints",
+            channels=("value",),
+        )
     elif needs_velocity:
         raise ValueError(f"{motion.source} is missing required measured velocity")
 
@@ -264,7 +360,11 @@ def assemble_training_episode(
             )
         if not np.all(np.isfinite(dynamic_bias)):
             raise ValueError("dynamic-bias provider returned non-finite values")
-        feature_blocks["dynamic_bias"] = dynamic_bias
+        feature_blocks["dynamic_bias"] = FeatureBlock(
+            values=dynamic_bias[:, :, np.newaxis],
+            domain="input_joints",
+            channels=("value",),
+        )
         dynamic_bias_provenance = result.provenance
 
     target_torque = motion.effort.interpolate(state_time).values[:, output_indices]
