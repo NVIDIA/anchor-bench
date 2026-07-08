@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -95,6 +96,24 @@ def _fake_runtime():
 
 
 class DynamicBiasProviderTests(unittest.TestCase):
+    def test_training_data_import_keeps_newton_and_warp_lazy(self):
+        script = "\n".join(
+            (
+                "import sys",
+                "assert 'newton' not in sys.modules",
+                "assert 'warp' not in sys.modules",
+                "import anchor_bench.training.data",
+                "assert 'newton' not in sys.modules",
+                "assert 'warp' not in sys.modules",
+            )
+        )
+
+        subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+        )
+
     def test_constructor_is_lazy_and_validates_batch_size(self):
         bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
         with patch(

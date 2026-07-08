@@ -6,12 +6,13 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
 from anchor_bench.data.motion import MotionData
 from anchor_bench.data.sage import discover_sage_motions
+from anchor_bench.training.dynamic_bias import DynamicBiasProvider
 
 
 DEFAULT_INPUT_COLUMNS = ("position", "position_error", "velocity")
@@ -26,9 +27,6 @@ SUPPORTED_INPUT_COLUMNS = {
 }
 MODEL_CHOICES = {"gru", "hybrid_residual"}
 EPSILON_STD = 1.0e-8
-
-if TYPE_CHECKING:
-    from anchor_bench.training.dynamic_bias import DynamicBiasProvider
 
 
 @dataclass(frozen=True)

@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence
 
 import numpy as np
 
-from anchor_bench.runtime.assets import resolve_runtime_asset
-
 if TYPE_CHECKING:
     from anchor_bench.robots.registry import RobotBundle
 
@@ -48,6 +46,14 @@ class DynamicBiasProvider(Protocol):
         velocities: np.ndarray,
         requested_joint_names: Sequence[str],
     ) -> DynamicBiasResult: ...
+
+
+def resolve_runtime_asset(bundle: RobotBundle) -> Path:
+    """Resolve the runtime asset without importing runtime helpers at module load."""
+
+    from anchor_bench.runtime.assets import resolve_runtime_asset as resolve
+
+    return resolve(bundle)
 
 
 def _import_newton_runtime() -> tuple[Any, Any]:
