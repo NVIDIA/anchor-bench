@@ -6,17 +6,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from anchor_bench.core.config_model import GRU_INPUT_COLUMNS
 
-_SUPPORTED_INPUT_COLUMNS = {
-    "dynamic_bias",
-    "position",
-    "position_error",
-    "previous_torque",
-    "solver_pd",
-    "velocity",
-}
-
-_SUPPORTED_FEATURE_DOMAINS = {"global", "input_joints", "output_joints"}
+_SUPPORTED_FEATURE_DOMAINS = {"input_joints", "output_joints"}
 
 
 def _import_torch():
@@ -126,12 +118,7 @@ def _input_feature_widths(
     output_joints: Sequence[str],
     columns: Sequence[str],
 ) -> list[int]:
-    if "input_feature_specs" not in metadata:
-        return [
-            len(output_joints) if column == "previous_torque" else len(input_joints)
-            for column in columns
-        ]
-    specs = metadata["input_feature_specs"]
+    specs = metadata.get("input_feature_specs")
     if not isinstance(specs, list) or len(specs) != len(columns):
         raise ValueError(
             "runtime_metadata.input_feature_specs must be an ordered list "
@@ -139,9 +126,7 @@ def _input_feature_widths(
         )
 
     widths: list[int] = []
-    names: list[str] = []
     axis_widths = {
-        "global": 1,
         "input_joints": len(input_joints),
         "output_joints": len(output_joints),
     }
@@ -156,9 +141,6 @@ def _input_feature_widths(
             )
 
         name = spec.get("name")
-        if not isinstance(name, str) or not name:
-            raise ValueError(f"{label}.name must be a non-empty string")
-        names.append(name)
         if name != column:
             raise ValueError(
                 "runtime_metadata.input_feature_specs names must match "
@@ -190,10 +172,6 @@ def _input_feature_widths(
             )
         widths.append(axis_widths[domain] * len(channels))
 
-    if len(set(names)) != len(names):
-        raise ValueError(
-            "runtime_metadata.input_feature_specs names must not contain duplicates"
-        )
     return widths
 
 
@@ -210,7 +188,7 @@ def _metadata_axes(
     if any(name not in input_joints for name in output_joints):
         raise ValueError("runtime_metadata.output_joint_names must be a subset of joint_names")
     columns = _name_list(metadata.get("input_columns"), "input_columns")
-    unsupported = sorted(set(columns) - _SUPPORTED_INPUT_COLUMNS)
+    unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
     if unsupported:
         raise ValueError(
             "runtime_metadata contains unsupported input features: " + ", ".join(unsupported)
@@ -244,35 +222,24 @@ def _validate_training_topology(
     input_joints: Sequence[str],
     output_joints: Sequence[str],
 ) -> None:
-    topology = metadata.get("training_topology")
-    if topology is None:
-        return
-
-    allowed = {"siso", "miso", "mimo"}
-    if not isinstance(topology, str) or topology not in allowed:
-        raise ValueError(
-            "runtime_metadata.training_topology must be one of "
-            + ", ".join(sorted(allowed))
-        )
-
-    input_width = len(input_joints)
-    output_width = len(output_joints)
-    valid_dimensions = (
-        (topology == "siso" and input_width == 1 and output_width == 1)
-        or (topology == "miso" and input_width > 1 and output_width == 1)
-        or (topology == "mimo" and input_width > 1 and output_width > 1)
+    expected = (
+        "siso"
+        if len(input_joints) == 1
+        else "miso"
+        if len(output_joints) == 1
+        else "mimo"
     )
-    if not valid_dimensions:
+    if metadata.get("training_topology") != expected:
         raise ValueError(
-            f"runtime_metadata.training_topology={topology!r} is inconsistent "
-            f"with {input_width} input joint(s) and {output_width} output joint(s)"
+            "runtime_metadata.training_topology must be "
+            f"{expected!r} for {len(input_joints)} input joint(s) and "
+            f"{len(output_joints)} output joint(s)"
         )
 
 
 def _validate_normalization(
     metadata: Mapping[str, Any],
     *,
-    input_joints: Sequence[str],
     output_joints: Sequence[str],
     columns: Sequence[str],
     input_widths: Sequence[int],
@@ -397,7 +364,6 @@ def _validate_runtime_metadata(
 
     _validate_normalization(
         metadata,
-        input_joints=input_joints,
         output_joints=output_joints,
         columns=columns,
         input_widths=input_widths,
@@ -414,77 +380,46 @@ def _validate_runtime_metadata(
     _validate_baselines(metadata, columns=columns, target=target)
 
 
-def _validate_checkpoint_contract(
-    checkpoint: Mapping[str, Any],
-    metadata: Mapping[str, Any],
-) -> None:
-    has_checkpoint_specs = "input_feature_specs" in checkpoint
-    has_metadata_specs = "input_feature_specs" in metadata
-    if has_checkpoint_specs != has_metadata_specs or (
-        has_checkpoint_specs
-        and checkpoint["input_feature_specs"] != metadata["input_feature_specs"]
-    ):
-        raise ValueError(
-            "checkpoint input_feature_specs does not match "
-            "runtime_metadata.input_feature_specs"
-        )
-
-    pairs = (
-        ("input_columns", "input_columns"),
-        ("target_columns", "target_columns"),
-        ("training_topology", "training_topology"),
-    )
-    for checkpoint_key, metadata_key in pairs:
-        if checkpoint.get(checkpoint_key) != metadata.get(metadata_key):
-            raise ValueError(
-                f"checkpoint {checkpoint_key} does not match runtime_metadata.{metadata_key}"
-            )
-    optional_axes = (
-        ("input_joints", "joint_names"),
-        ("output_joints", "output_joint_names"),
-    )
-    for checkpoint_key, metadata_key in optional_axes:
-        value = checkpoint.get(checkpoint_key)
-        if value is not None and value != metadata.get(metadata_key):
-            raise ValueError(
-                f"checkpoint {checkpoint_key} does not match runtime_metadata.{metadata_key}"
-            )
-    normalization = checkpoint.get("normalization")
-    if normalization is None:
-        raise ValueError("checkpoint with runtime_metadata is missing normalization")
-    if normalization != metadata.get("normalization"):
-        raise ValueError("checkpoint normalization does not match runtime_metadata.normalization")
-
-
 def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path | None = None) -> Path:
     torch = _import_torch()
     source = Path(checkpoint_path)
     checkpoint: dict[str, Any] = torch.load(source, map_location="cpu")
     runtime_metadata = checkpoint.get("runtime_metadata")
     hparams = checkpoint.get("hyperparameters") or {}
-    input_columns = checkpoint.get("input_columns") or []
-    target_columns = checkpoint.get("target_columns") or []
-    if not input_columns:
-        raise ValueError(f"{source} checkpoint is missing input_columns")
-    if not target_columns:
-        raise ValueError(f"{source} checkpoint is missing target_columns")
-
-    input_size = _positive_int(
-        checkpoint.get("input_size", len(input_columns)),
-        "checkpoint input_size",
-    )
-    output_size = _positive_int(
-        checkpoint.get("output_size", len(target_columns)),
-        "checkpoint output_size",
-    )
-    if runtime_metadata is None and "input_feature_specs" in checkpoint:
-        raise ValueError(
-            "checkpoint input_feature_specs requires non-null runtime_metadata"
+    if runtime_metadata is None:
+        input_columns = checkpoint.get("input_columns") or []
+        target_columns = checkpoint.get("target_columns") or []
+        if not input_columns:
+            raise ValueError(f"{source} checkpoint is missing input_columns")
+        if not target_columns:
+            raise ValueError(f"{source} checkpoint is missing target_columns")
+        if "input_feature_specs" in checkpoint:
+            raise ValueError(
+                "checkpoint input_feature_specs requires non-null runtime_metadata"
+            )
+        input_size = _positive_int(
+            checkpoint.get("input_size", len(input_columns)),
+            "checkpoint input_size",
         )
-    if runtime_metadata is not None:
+        output_size = _positive_int(
+            checkpoint.get("output_size", len(target_columns)),
+            "checkpoint output_size",
+        )
+    else:
+        input_size = _positive_int(
+            checkpoint.get("input_size"),
+            "checkpoint input_size",
+        )
+        output_size = _positive_int(
+            checkpoint.get("output_size"),
+            "checkpoint output_size",
+        )
         metadata = _mapping(runtime_metadata, "runtime_metadata")
-        _validate_runtime_metadata(metadata, input_size=input_size, output_size=output_size)
-        _validate_checkpoint_contract(checkpoint, metadata)
+        _validate_runtime_metadata(
+            metadata,
+            input_size=input_size,
+            output_size=output_size,
+        )
     model = build_runtime_gru(
         input_size=input_size,
         output_size=output_size,

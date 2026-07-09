@@ -212,19 +212,6 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
                 )
             )
 
-    def test_all_topologies_reject_non_torque_source_targets(self):
-        with self.assertRaisesRegex(
-            ValueError,
-            "SAGE actuator training requires target_column='torque'",
-        ):
-            resolve_train_actuator_run_config(
-                TrainActuatorRunConfig(
-                    robot="so101",
-                    target_column="measured_torque",
-                    dry_run=True,
-                )
-            )
-
 
 class TrainingRunnerBaselineTests(unittest.TestCase):
     def setUp(self):
@@ -422,10 +409,6 @@ class TrainingRunnerExecutionTests(unittest.TestCase):
                 return_value=([source], []),
             ),
             patch(
-                "anchor_bench.training.runner.read_training_header",
-                return_value=["position", "torque"],
-            ),
-            patch(
                 "anchor_bench.training.dynamic_bias.NewtonMuJoCoDynamicBiasProvider",
                 return_value=provider,
             ) as provider_type,
@@ -445,8 +428,7 @@ class TrainingRunnerExecutionTests(unittest.TestCase):
         self.assertEqual(["right_elbow"], job.output_joints)
         self.assertEqual(0.002, job.sample_dt_s)
         self.assertIs(provider, job.dynamic_bias_provider)
-        self.assertEqual(["torque"], job.source_target_columns)
-        self.assertEqual("miso", job.metadata["training_topology"])
+        self.assertEqual(["position", "dynamic_bias", "previous_torque"], job.input_columns)
         self.assertFalse(plan.dry_run)
 
 

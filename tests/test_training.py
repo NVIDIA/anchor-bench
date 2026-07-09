@@ -11,8 +11,7 @@ def _write_sage_motion(root: Path, length: int = 8) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "joint_list.txt").write_text("Rotation\n", encoding="utf-8")
     (root / "metadata.yaml").write_text(
-        "schema: sage\ntime_unit: seconds\nposition_unit: rad\n"
-        "velocity_unit: rad/s\ntorque_unit: N*m\n",
+        "schema: sage\ntime_unit: seconds\nposition_unit: rad\nvelocity_unit: rad/s\ntorque_unit: N*m\n",
         encoding="utf-8",
     )
     control = ["type,timestamp,positions"]
@@ -24,20 +23,16 @@ def _write_sage_motion(root: Path, length: int = 8) -> None:
         velocity = 0.05 * index
         torque = 2.0 * (command - position) - 0.25 * velocity
         control.append(f'CONTROL,{timestamp},"[{command}]"')
-        state.append(
-            f'STATE_MOTOR,{timestamp},"[{position}]","[{velocity}]","[{torque}]"'
-        )
+        state.append(f'STATE_MOTOR,{timestamp},"[{position}]","[{velocity}]","[{torque}]"')
     (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
     (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
-
 
 
 def _write_two_joint_sage_motion(root: Path, length: int = 4) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
     (root / "metadata.yaml").write_text(
-        "schema: sage\ntime_unit: seconds\nposition_unit: rad\n"
-        "velocity_unit: rad/s\ntorque_unit: N*m\n",
+        "schema: sage\ntime_unit: seconds\nposition_unit: rad\nvelocity_unit: rad/s\ntorque_unit: N*m\n",
         encoding="utf-8",
     )
     control = ["type,timestamp,positions"]
@@ -51,6 +46,8 @@ def _write_two_joint_sage_motion(root: Path, length: int = 4) -> None:
         )
     (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
     (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
+
+
 class TrainingDataTests(unittest.TestCase):
     def test_sage_discovery_and_split_are_deterministic(self):
         from anchor_bench.training.data import (
@@ -64,109 +61,14 @@ class TrainingDataTests(unittest.TestCase):
                 _write_sage_motion(root / f"motion_{index}")
 
             sources = discover_training_sources(root)
-            train_a, val_a = split_training_sources(
-                sources, seed=123, val_fraction=0.4
-            )
-            train_b, val_b = split_training_sources(
-                sources, seed=123, val_fraction=0.4
-            )
+            train_a, val_a = split_training_sources(sources, seed=123, val_fraction=0.4)
+            train_b, val_b = split_training_sources(sources, seed=123, val_fraction=0.4)
 
         self.assertEqual(5, len(sources))
         self.assertEqual(train_a, train_b)
         self.assertEqual(val_a, val_b)
         self.assertEqual(3, len(train_a))
         self.assertEqual(2, len(val_a))
-
-    def test_sage_motion_is_one_training_source_with_derived_joint_columns(self):
-        import numpy as np
-
-        from anchor_bench.training.data import (
-            discover_training_sources,
-            load_training_table,
-            read_training_header,
-            split_training_sources,
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
-            (root / "metadata.yaml").write_text(
-                "schema: sage\ntime_unit: seconds\nposition_unit: rad\nvelocity_unit: rad/s\ntorque_unit: N*m\n",
-                encoding="utf-8",
-            )
-            (root / "control.csv").write_text(
-                'type,timestamp,positions\nCONTROL,0.0,"[1.0, 2.0]"\nCONTROL,1.0,"[1.5, 2.5]"\n',
-                encoding="utf-8",
-            )
-            (root / "state_motor.csv").write_text(
-                "type,timestamp,positions,velocities,torques\n"
-                'STATE_MOTOR,0.0,"[0.5, 1.5]","[0.1, 0.2]","[3.0, 4.0]"\n'
-                'STATE_MOTOR,1.0,"[1.0, 2.0]","[0.3, 0.4]","[5.0, 6.0]"\n',
-                encoding="utf-8",
-            )
-
-            sources = discover_training_sources(root)
-            train_sources, val_sources = split_training_sources(sources, seed=7)
-            header = read_training_header(sources[0], "Rotation")
-            table = load_training_table(
-                sources[0],
-                joint="Pitch",
-                columns=["position", "position_error", "velocity", "torque"],
-            )
-
-        self.assertEqual(1, len(sources))
-        self.assertEqual(sources, train_sources)
-        self.assertEqual([], val_sources)
-        self.assertIn("position_error", header)
-        np.testing.assert_allclose(table["position"], [1.5, 2.0])
-        np.testing.assert_allclose(table["position_error"], [0.5, 0.5])
-        np.testing.assert_allclose(table["velocity"], [0.2, 0.4])
-        np.testing.assert_allclose(table["torque"], [4.0, 6.0])
-
-    def test_column_resolution_uses_model_defaults_and_validates_headers(self):
-        from anchor_bench.training.data import resolve_training_columns
-
-        header = ["position", "position_error", "velocity", "torque"]
-        pure = resolve_training_columns(header, model="gru")
-        self.assertEqual(["position", "position_error", "velocity"], pure.input_columns)
-        self.assertEqual(["torque"], pure.target_columns)
-
-        hybrid = resolve_training_columns(header, model="hybrid_residual")
-        self.assertEqual(["position", "position_error", "velocity"], hybrid.input_columns)
-        self.assertEqual(["torque_residual"], hybrid.target_columns)
-
-        with self.assertRaisesRegex(ValueError, "missing required training signals: velocity"):
-            resolve_training_columns(["position", "position_error", "torque"], model="gru")
-
-    def test_column_resolution_accepts_custom_columns_and_rejects_unsupported_inputs(self):
-        from anchor_bench.training.data import resolve_training_columns
-
-        header = ["position", "position_error", "velocity", "solver_pd", "measured_torque"]
-        columns = resolve_training_columns(
-            header,
-            model="gru",
-            input_columns=["position", "solver_pd"],
-            target_column="measured_torque",
-        )
-
-        self.assertEqual(["position", "solver_pd"], columns.input_columns)
-        self.assertEqual(["measured_torque"], columns.target_columns)
-        self.assertEqual(["measured_torque"], columns.source_target_columns)
-
-        hybrid = resolve_training_columns(
-            ["position", "position_error", "velocity", "torque"],
-            model="hybrid_residual",
-            input_columns=["position", "position_error", "velocity", "solver_pd"],
-            derived_columns=["solver_pd"],
-        )
-        self.assertEqual(["torque_residual"], hybrid.target_columns)
-
-        with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: qfrc_bias"):
-            resolve_training_columns(
-                ["position", "position_error", "velocity", "torque"],
-                model="gru",
-                input_columns=["position", "qfrc_bias"],
-            )
 
 
 class TrainingFeatureBlockTests(unittest.TestCase):
@@ -187,10 +89,6 @@ class TrainingFeatureBlockTests(unittest.TestCase):
             val_sources=[],
             output_dir=Path("out"),
             input_columns=list(input_columns),
-            target_columns=[
-                "torque_residual" if model == "hybrid_residual" else "torque"
-            ],
-            source_target_columns=["torque"],
             seed=1,
             final_epochs=1,
             trial_epochs=1,
@@ -218,7 +116,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
             target_torque=np.asarray(target, dtype=np.float32),
         )
 
-    def test_prepare_flattens_vector_joint_and_global_features(self):
+    def test_prepare_flattens_vector_input_and_output_features(self):
         import numpy as np
 
         from anchor_bench.training.data import FeatureBlock
@@ -246,7 +144,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
                         ],
                         dtype=np.float32,
                     ),
-                    domain="global",
+                    domain="output_joints",
                     channels=("x", "y", "z"),
                 ),
             },
@@ -273,7 +171,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
                 },
                 {
                     "name": "position",
-                    "domain": "global",
+                    "domain": "output_joints",
                     "channels": ["x", "y", "z"],
                 },
                 {
@@ -378,7 +276,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
                 ),
                 "position": FeatureBlock(
                     np.array([[[7, 8, 9]], [[17, 18, 19]]], dtype=np.float32),
-                    domain="global",
+                    domain="output_joints",
                     channels=("x", "y", "z"),
                 ),
             },
@@ -389,7 +287,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
         stats = _normalization_stats(
             [sequence],
             input_columns=job.input_columns,
-            target_columns=job.target_columns,
+            target_column="torque",
             metadata=_training_stats_metadata(job),
             input_widths=widths,
             target_width=1,
@@ -398,7 +296,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
             [sequence],
             stats,
             input_columns=job.input_columns,
-            target_columns=job.target_columns,
+            target_column="torque",
             input_widths=widths,
             target_width=1,
         )
@@ -429,87 +327,6 @@ class TrainingFeatureBlockTests(unittest.TestCase):
             job.metadata["input_feature_specs"],
             runtime["input_feature_specs"],
         )
-
-    def test_runtime_metadata_requires_current_stats_feature_specs(self):
-        from anchor_bench.training.trainer import _runtime_metadata
-
-        job = self._job(["position"])
-        job.metadata["input_feature_specs"] = [
-            {
-                "name": "position",
-                "domain": "input_joints",
-                "channels": ["value"],
-            }
-        ]
-        normalization = {
-            "inputs": {
-                "mean": {"position": [0.0, 0.0]},
-                "std": {"position": [1.0, 1.0]},
-            },
-            "targets": {
-                "mean": {"torque": 0.0},
-                "std": {"torque": 1.0},
-            },
-        }
-        cases = [
-            (
-                "missing",
-                {"normalization": normalization},
-                "missing input_feature_specs",
-            ),
-            (
-                "null",
-                {
-                    "normalization": normalization,
-                    "input_feature_specs": None,
-                },
-                "must be a list",
-            ),
-            (
-                "mismatched",
-                {
-                    "normalization": normalization,
-                    "input_feature_specs": [
-                        {
-                            "name": "position",
-                            "domain": "global",
-                            "channels": ["value"],
-                        }
-                    ],
-                },
-                "do not match",
-            ),
-        ]
-        for label, stats, message in cases:
-            with self.subTest(label=label), self.assertRaisesRegex(
-                ValueError,
-                message,
-            ):
-                _runtime_metadata(job, stats)
-
-    def test_feature_specs_reject_null_and_invalid_previous_torque_layout(self):
-        from anchor_bench.training.trainer import _feature_widths
-
-        null_job = self._job(["position"])
-        null_job.metadata["input_feature_specs"] = None
-        with self.assertRaisesRegex(ValueError, "must be a list"):
-            _feature_widths(null_job)
-
-        previous_job = self._job(["position", "previous_torque"])
-        previous_job.metadata["input_feature_specs"] = [
-            {
-                "name": "position",
-                "domain": "input_joints",
-                "channels": ["value"],
-            },
-            {
-                "name": "previous_torque",
-                "domain": "input_joints",
-                "channels": ["value"],
-            },
-        ]
-        with self.assertRaisesRegex(ValueError, "output_joints"):
-            _feature_widths(previous_job)
 
     def test_physics_derivation_rejects_multichannel_inputs(self):
         import numpy as np
@@ -561,7 +378,6 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertTrue(resolved.skip_optuna)
         self.assertEqual(42, resolved.seed)
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
-        self.assertEqual("torque", resolved.target_column)
 
     def test_training_config_resolves_cli_column_overrides(self):
         from anchor_bench.core.schemas import TrainActuatorRunConfig
@@ -573,13 +389,11 @@ class TrainingRunnerTests(unittest.TestCase):
                 input_joints=["Rotation"],
                 data="inputs/datasets/so101/custom_figure8_with_camera",
                 input_columns=["position", "solver_pd"],
-                target_column="torque",
                 dry_run=True,
             )
         )
 
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
-        self.assertEqual("torque", resolved.target_column)
 
     def test_siso_dynamic_bias_loads_the_selected_joint_directly(self):
         import numpy as np
@@ -610,10 +424,7 @@ class TrainingRunnerTests(unittest.TestCase):
                     }
                 )
                 values = np.column_stack(
-                    [
-                        np.full(len(positions), 20.0 if joint == "Pitch" else 10.0)
-                        for joint in requested
-                    ]
+                    [np.full(len(positions), 20.0 if joint == "Pitch" else 10.0) for joint in requested]
                 )
                 return DynamicBiasResult(
                     values,
@@ -638,8 +449,6 @@ class TrainingRunnerTests(unittest.TestCase):
                 val_sources=[],
                 output_dir=Path(tmp) / "out",
                 input_columns=["dynamic_bias"],
-                target_columns=["torque"],
-                source_target_columns=["torque"],
                 seed=1,
                 final_epochs=1,
                 trial_epochs=1,
@@ -648,6 +457,7 @@ class TrainingRunnerTests(unittest.TestCase):
                 n_streams=1,
                 noise_std=0.0,
                 input_joints=["Pitch"],
+                output_joints=["Pitch"],
                 sample_dt_s=0.002,
                 dynamic_bias_provider=provider,
             )
@@ -668,16 +478,16 @@ class TrainingRunnerTests(unittest.TestCase):
         from anchor_bench.training.data import TrainingSource
         from anchor_bench.training.trainer import TrainingJob, _artifact_label
 
-        def job(**selection):
+        def job(*, input_joints, output_joints=None):
             return TrainingJob(
                 model="gru",
                 train_sources=[TrainingSource(Path("episode"))],
                 val_sources=[],
                 output_dir=Path("out"),
                 input_columns=["position"],
-                target_columns=["torque"],
-                source_target_columns=["torque"],
                 seed=1,
+                input_joints=input_joints,
+                output_joints=output_joints or input_joints,
                 final_epochs=1,
                 trial_epochs=1,
                 trials=1,
@@ -685,7 +495,6 @@ class TrainingRunnerTests(unittest.TestCase):
                 n_streams=1,
                 noise_std=0.0,
                 sample_dt_s=0.01,
-                **selection,
             )
 
         jobs = [
@@ -718,8 +527,6 @@ class TrainingRunnerTests(unittest.TestCase):
             "val_sources": [],
             "output_dir": Path("out"),
             "input_columns": ["position"],
-            "target_columns": ["torque"],
-            "source_target_columns": ["torque"],
             "seed": 1,
             "final_epochs": 1,
             "trial_epochs": 1,
@@ -738,7 +545,11 @@ class TrainingRunnerTests(unittest.TestCase):
                 ]
             },
         }
-        explicit = TrainingJob(**base, input_joints=["joint_a", "joint_b"])
+        explicit = TrainingJob(
+            **base,
+            input_joints=["joint_a", "joint_b"],
+            output_joints=["joint_a", "joint_b"],
+        )
         miso = TrainingJob(
             **base,
             input_joints=["joint_a", "joint_b"],
@@ -814,7 +625,25 @@ class TrainingRunnerTests(unittest.TestCase):
                 "model_type": "gru",
                 "joint_names": ["demo"],
                 "output_joint_names": ["demo"],
+                "training_topology": "siso",
                 "input_columns": ["position", "position_error", "velocity"],
+                "input_feature_specs": [
+                    {
+                        "name": "position",
+                        "domain": "input_joints",
+                        "channels": ["value"],
+                    },
+                    {
+                        "name": "position_error",
+                        "domain": "input_joints",
+                        "channels": ["value"],
+                    },
+                    {
+                        "name": "velocity",
+                        "domain": "input_joints",
+                        "channels": ["value"],
+                    },
+                ],
                 "target_columns": ["torque"],
                 "sample_dt_s": 0.002,
                 "normalization": {
@@ -845,11 +674,8 @@ class TrainingRunnerTests(unittest.TestCase):
                 {
                     "model": "gru",
                     "model_state_dict": model.state_dict(),
-                    "input_columns": ["position", "position_error", "velocity"],
-                    "target_columns": ["torque"],
                     "input_size": 3,
                     "output_size": 1,
-                    "normalization": runtime_metadata["normalization"],
                     "runtime_metadata": runtime_metadata,
                     "hyperparameters": {"hidden_size": 4, "num_layers": 1, "dropout": 0.0},
                 },

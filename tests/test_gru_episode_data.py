@@ -164,15 +164,24 @@ class FeatureBlockTests(unittest.TestCase):
                 domain="input_joints",
                 channels=(cast(str, 1),),
             )
-        with self.assertRaisesRegex(ValueError, "global.*width 1"):
-            FeatureBlock(
-                values=np.zeros((2, 2, 1), dtype=np.float32),
-                domain="global",
-                channels=("value",),
-            )
 
 
 class TrainingEpisodeContractTests(unittest.TestCase):
+    def test_rejects_empty_episode(self):
+        block = FeatureBlock(
+            values=np.zeros((0, 1, 1), dtype=np.float32),
+            domain="input_joints",
+            channels=("value",),
+        )
+        with self.assertRaisesRegex(ValueError, "timestamps must not be empty"):
+            TrainingEpisode(
+                timestamps=np.array([], dtype=np.float64),
+                input_joints=("j0",),
+                output_joints=("j0",),
+                feature_blocks={"position": block},
+                target_torque=np.zeros((0, 1), dtype=np.float32),
+            )
+
     def test_validates_joint_and_feature_axes_and_freezes_mapping(self):
         block = FeatureBlock(
             values=np.zeros((2, 2, 1), dtype=np.float32),
@@ -289,7 +298,6 @@ class TrainingEpisodeContractTests(unittest.TestCase):
                         feature_blocks=feature_blocks,
                         target_torque=np.zeros((1, 1), dtype=np.float32),
                     )
-
 
 
 class GRUEpisodeDataTests(unittest.TestCase):

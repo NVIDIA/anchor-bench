@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from anchor_bench.actuators.loader import load_actuator_file
+from anchor_bench.core.config_model import parse_gru_columns
 from anchor_bench.core.plan import CommandPlan
 from anchor_bench.core.run_config import (
     resolve_repo_path_text,
@@ -18,17 +19,14 @@ from anchor_bench.core.schemas import TrainActuatorRunConfig
 from anchor_bench.robots.registry import get_robot
 from anchor_bench.training.data import (
     DEFAULT_INPUT_COLUMNS,
-    DEFAULT_TARGET_COLUMN,
-    MODEL_CHOICES,
-    SUPPORTED_INPUT_COLUMNS,
     discover_training_sources,
-    read_training_header,
-    resolve_training_columns,
     split_training_sources,
 )
 
 
-_DERIVED_INPUT_COLUMNS = {"dynamic_bias", "previous_torque", "solver_pd"}
+
+
+_MODEL_CHOICES = {"gru", "hybrid_residual"}
 
 
 @dataclass(frozen=True)
@@ -53,7 +51,6 @@ class ResolvedTrainActuatorRunConfig:
     noise_std: float
     seed: int
     input_columns: list[str]
-    target_column: str
     config_sources: dict[str, str]
 
 
@@ -69,22 +66,6 @@ def _nonnegative_float(name: str, value: Any) -> float:
     if not math.isfinite(resolved) or resolved < 0.0:
         raise ValueError(f"{name} must be a finite value >= 0")
     return resolved
-
-
-def _column_list(value: Any) -> list[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        columns = [item.strip() for item in value.split(",")]
-    else:
-        columns = [str(item).strip() for item in value]
-    columns = [column for column in columns if column]
-    if not columns:
-        raise ValueError("input_columns must contain at least one column")
-    duplicates = sorted({column for column in columns if columns.count(column) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
-    return columns
 
 
 def _canonical_joint(bundle: Any, value: Any, *, label: str) -> str:
@@ -314,20 +295,19 @@ def resolve_train_actuator_run_config(
 ) -> ResolvedTrainActuatorRunConfig:
     bundle = get_robot(config.robot)
     training_cfg = bundle.run_config.training
-    values: dict[str, Any] = {}
     sources: dict[str, str] = {}
 
     def select(name: str, explicit: Any, fallback: Any) -> Any:
-        values[name], sources[name] = resolve_value_with_source(
+        value, sources[name] = resolve_value_with_source(
             explicit,
             getattr(training_cfg, name),
             fallback,
         )
-        return values[name]
+        return value
 
     model = str(select("model", config.model, "gru"))
-    if model not in MODEL_CHOICES:
-        raise ValueError(f"--model {model!r} must be one of {sorted(MODEL_CHOICES)}")
+    if model not in _MODEL_CHOICES:
+        raise ValueError(f"--model {model!r} must be one of {sorted(_MODEL_CHOICES)}")
 
     data = resolve_required_text(
         select("real_data_dir", config.data, None),
@@ -348,22 +328,9 @@ def resolve_train_actuator_run_config(
     )
     sources.update(joint_sources)
 
-    input_columns = _column_list(
+    input_columns = parse_gru_columns(
         select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS)
     )
-    if input_columns is None:
-        raise ValueError("input_columns must contain at least one column")
-    unsupported_columns = sorted(set(input_columns) - SUPPORTED_INPUT_COLUMNS)
-    if unsupported_columns:
-        raise ValueError(
-            f"unsupported GRU input columns: {', '.join(unsupported_columns)}"
-        )
-
-    target_column = str(
-        select("target_column", config.target_column, DEFAULT_TARGET_COLUMN)
-    )
-    if target_column != "torque":
-        raise ValueError("SAGE actuator training requires target_column='torque'")
 
     timing = resolve_simulation_timing(
         bundle.run_config.simulation,
@@ -378,10 +345,8 @@ def resolve_train_actuator_run_config(
 
     pd_required = model == "hybrid_residual" or "solver_pd" in input_columns
     friction_required = model == "hybrid_residual"
-    selected_inputs = list(input_joints)
-    selected_outputs = list(output_joints)
-    pd_joints = selected_inputs if "solver_pd" in input_columns else selected_outputs
-    friction_joints = selected_outputs
+    pd_joints = input_joints if "solver_pd" in input_columns else output_joints
+    friction_joints = output_joints
     actuator_spec: Any | None = None
 
     def infer(kind: str, joints: Sequence[str]) -> tuple[float, float]:
@@ -443,7 +408,6 @@ def resolve_train_actuator_run_config(
         ),
         seed=int(select("seed", config.seed, 42)),
         input_columns=input_columns,
-        target_column=target_column,
         config_sources=sources,
     )
 
@@ -479,8 +443,6 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
             str(resolved.seed),
             "--input-columns",
             ",".join(resolved.input_columns),
-            "--target-column",
-            resolved.target_column,
         )
     )
     if resolved.pd_kp is not None:
@@ -532,7 +494,6 @@ def build_resolved_train_actuator_command(
         "data": resolved.data,
         "output": resolved.output,
         "input_columns": resolved.input_columns,
-        "target_column": resolved.target_column,
         "skip_optuna": resolved.skip_optuna,
         "config_sources": resolved.config_sources,
         "artifact_convention": {
@@ -598,19 +559,6 @@ def run_resolved_train_actuator(
     sources = discover_training_sources(resolved.data)
     train_sources, val_sources = split_training_sources(sources, seed=resolved.seed)
 
-    header_joint = resolved.input_joints[0]
-    derived_columns = [
-        column
-        for column in resolved.input_columns
-        if column in _DERIVED_INPUT_COLUMNS
-    ]
-    columns = resolve_training_columns(
-        read_training_header(train_sources[0], header_joint),
-        model=resolved.model,
-        input_columns=resolved.input_columns,
-        target_column=resolved.target_column,
-        derived_columns=derived_columns,
-    )
     residual_physics = _residual_physics(resolved)
 
     dynamic_bias_provider: Any | None = None
@@ -622,12 +570,6 @@ def run_resolved_train_actuator(
         dynamic_bias_provider = NewtonMuJoCoDynamicBiasProvider(bundle)
 
     metadata: dict[str, Any] = {
-        "training_topology": _training_topology(
-            resolved.input_joints,
-            resolved.output_joints,
-        ),
-        "input_joints": resolved.input_joints,
-        "output_joints": resolved.output_joints,
         "robot": resolved.robot,
         "config_sources": resolved.config_sources,
         "skip_optuna": resolved.skip_optuna,
@@ -643,9 +585,7 @@ def run_resolved_train_actuator(
             train_sources=train_sources,
             val_sources=val_sources,
             output_dir=Path(resolved.output),
-            input_columns=columns.input_columns,
-            target_columns=columns.target_columns,
-            source_target_columns=columns.source_target_columns,
+            input_columns=resolved.input_columns,
             seed=resolved.seed,
             final_epochs=resolved.final_epochs,
             trial_epochs=resolved.trial_epochs,

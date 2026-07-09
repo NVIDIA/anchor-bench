@@ -120,8 +120,7 @@ class DynamicBiasProviderTests(unittest.TestCase):
             "anchor_bench.training.dynamic_bias._import_newton_runtime",
             side_effect=AssertionError("runtime import must be lazy"),
         ):
-            provider = NewtonMuJoCoDynamicBiasProvider(bundle)
-            self.assertEqual(64, provider.provenance["batch_size"])
+            NewtonMuJoCoDynamicBiasProvider(bundle)
 
         with self.assertRaisesRegex(ValueError, "batch_size must be >= 1"):
             NewtonMuJoCoDynamicBiasProvider(bundle, batch_size=0)

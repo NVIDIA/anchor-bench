@@ -190,14 +190,13 @@ class TrainActuatorRunConfig:
     model: str | None = None
     data: str | None = None
     output: str | None = None
-    input_joints: JointSelection | None = None
-    output_joints: JointSelection | None = None
+    input_joints: JointSelection | str | None = None
+    output_joints: JointSelection | str | None = None
     pd_kp: float | None = None
     pd_kd: float | None = None
     friction_dry: float | None = None
     friction_viscous: float | None = None
-    input_columns: list[str] | None = None
-    target_column: str | None = None
+    input_columns: list[str] | str | None = None
     dry_run: bool = True
     skip_optuna: bool | None = None
     trials: int | None = None
@@ -213,7 +212,11 @@ class TrainActuatorRunConfig:
             if value is not None:
                 object.__setattr__(self, field_name, parse_joint_selection(value))
         if self.input_columns is not None:
-            parse_gru_columns(self.input_columns)
+            object.__setattr__(
+                self,
+                "input_columns",
+                parse_gru_columns(self.input_columns),
+            )
         if self.output_joints is not None and self.input_joints is None:
             raise ValueError("input_joints is required when output_joints is configured")
 

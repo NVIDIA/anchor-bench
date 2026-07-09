@@ -90,9 +90,7 @@ class NewtonMuJoCoDynamicBiasProvider:
         self._batch_size = int(batch_size)
         self._initialized = False
         self._newton: Any = None
-        self._wp: Any = None
         self._template: Any = None
-        self._model: Any = None
         self._solver: Any = None
         self._state: Any = None
         self._bias: Any = None
@@ -110,10 +108,6 @@ class NewtonMuJoCoDynamicBiasProvider:
             "unrecorded_positions": "model_defaults",
             "unrecorded_velocities": "zero",
         }
-
-    @property
-    def provenance(self) -> dict[str, Any]:
-        return dict(self._provenance)
 
     def _initialize(self) -> None:
         if self._initialized:
@@ -147,9 +141,7 @@ class NewtonMuJoCoDynamicBiasProvider:
         )
 
         self._newton = newton
-        self._wp = wp
         self._template = template
-        self._model = model
         self._solver = solver
         self._state = model.state()
         self._bias = wp.empty(
@@ -241,19 +233,6 @@ class NewtonMuJoCoDynamicBiasProvider:
                 defaulted.append(_normalized_joint_name(label))
         return defaulted
 
-    @staticmethod
-    def _record_unique_model_joint(
-        mapped_model_names: dict[int, str],
-        joint_index: int,
-        name: str,
-    ) -> None:
-        existing_name = mapped_model_names.get(joint_index)
-        if existing_name is not None:
-            raise ValueError(
-                f"trajectory joints {existing_name!r} and {name!r} map to the same Newton scalar joint/DOF"
-            )
-        mapped_model_names[joint_index] = name
-
     def compute(
         self,
         *,
@@ -304,11 +283,12 @@ class NewtonMuJoCoDynamicBiasProvider:
                 continue
             joint_index = self._resolve_template_joint(name)
             assert joint_index is not None
-            self._record_unique_model_joint(
-                mapped_model_names,
-                joint_index,
-                name,
-            )
+            existing_name = mapped_model_names.get(joint_index)
+            if existing_name is not None:
+                raise ValueError(
+                    f"trajectory joints {existing_name!r} and {name!r} map to the same Newton scalar joint/DOF"
+                )
+            mapped_model_names[joint_index] = name
             mapped_model_indices.add(joint_index)
             mapped.append((column, name, indices[0], indices[1]))
 
@@ -328,22 +308,13 @@ class NewtonMuJoCoDynamicBiasProvider:
         for start in range(0, len(position_values), self._batch_size):
             end = min(start + self._batch_size, len(position_values))
             active = end - start
-            q_values = self._default_q.copy()
-            qd_values = self._default_qd.copy()
-            for world in range(active):
-                q_base = world * self._coords_per_world
-                qd_base = world * self._dofs_per_world
-                q_values[q_base + mapped_q_indices] = position_values[
-                    start + world,
-                    mapped_columns,
-                ]
-                qd_values[qd_base + mapped_qd_indices] = velocity_values[
-                    start + world,
-                    mapped_columns,
-                ]
+            q_values = self._default_q.copy().reshape(self._batch_size, self._coords_per_world)
+            qd_values = self._default_qd.copy().reshape(self._batch_size, self._dofs_per_world)
+            q_values[:active, mapped_q_indices] = position_values[start:end, mapped_columns]
+            qd_values[:active, mapped_qd_indices] = velocity_values[start:end, mapped_columns]
 
-            self._state.joint_q.assign(q_values)
-            self._state.joint_qd.assign(qd_values)
+            self._state.joint_q.assign(q_values.reshape(-1))
+            self._state.joint_qd.assign(qd_values.reshape(-1))
             self._solver.eval_dynamic_bias(self._state, self._bias)
             bias = self._bias.numpy().reshape(
                 self._batch_size,
@@ -362,5 +333,4 @@ class NewtonMuJoCoDynamicBiasProvider:
             "unmapped_trajectory_joint_names": unmapped_names,
             "defaulted_joint_names": self._defaulted_model_joints(mapped_model_indices),
         }
-        self._provenance = dict(provenance)
         return DynamicBiasResult(result, provenance)

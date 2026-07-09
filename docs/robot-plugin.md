@@ -198,7 +198,6 @@ training:
   output_dir: outputs/training/my_robot
   input_joints: [joint_1]
   input_columns: [position, position_error, velocity]
-  target_column: torque
   skip_optuna: true
   trials: 20
   trial_epochs: 5

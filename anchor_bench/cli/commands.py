@@ -4,7 +4,7 @@ import argparse
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 
 def _print_plan(plan: Any) -> int:
@@ -15,18 +15,6 @@ def _print_plan(plan: Any) -> int:
 def _require_existing_path(label: str, value: str | None, kind: str = "path") -> None:
     if value is not None and not Path(value).exists():
         raise FileNotFoundError(f"{label} {kind} does not exist: {value}")
-
-
-def _csv_columns(value: str | None) -> list[str] | None:
-    return None if value is None else [column.strip() for column in value.split(",") if column.strip()]
-
-
-def _joint_selection(value: str | None) -> Literal["all"] | list[str] | None:
-    if value is None:
-        return None
-    if value.strip() == "all":
-        return "all"
-    return _csv_columns(value)
 
 
 def _handle_robots(args: argparse.Namespace) -> int:
@@ -72,14 +60,13 @@ def _handle_train(args: argparse.Namespace) -> int:
         model=args.model,
         data=args.data,
         output=args.output,
-        input_joints=_joint_selection(args.input_joints),
-        output_joints=_joint_selection(args.output_joints),
+        input_joints=args.input_joints,
+        output_joints=args.output_joints,
         pd_kp=args.pd_kp,
         pd_kd=args.pd_kd,
         friction_dry=args.friction_dry,
         friction_viscous=args.friction_viscous,
-        input_columns=_csv_columns(args.input_columns),
-        target_column=args.target_column,
+        input_columns=args.input_columns,
         dry_run=args.dry_run,
         skip_optuna=args.skip_optuna,
         trials=args.trials,

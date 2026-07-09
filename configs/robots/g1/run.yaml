@@ -33,7 +33,6 @@ training:
   output_dir: outputs/training/g1/right_shoulder_pitch
   input_joints: [right_shoulder_pitch]
   input_columns: [position, position_error, velocity]
-  target_column: torque
   skip_optuna: true
   trials: 20
   trial_epochs: 5

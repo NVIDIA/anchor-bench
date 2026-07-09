@@ -97,7 +97,6 @@ class TrainingDefaults(ConfigModel):
     noise_std: float | None = Field(default=None, ge=0.0)
     seed: int | None = None
     input_columns: list[str] | None = None
-    target_column: str | None = None
 
     @field_validator("input_columns", mode="before")
     @classmethod

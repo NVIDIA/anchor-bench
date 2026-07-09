@@ -34,7 +34,6 @@ training:
   output_dir: outputs/training/so101
   input_joints: [Rotation]
   input_columns: [position, position_error, velocity]
-  target_column: torque
   skip_optuna: true
   trials: 20
   trial_epochs: 5

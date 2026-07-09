@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from anchor_bench.training.data import FeatureBlock
+from anchor_bench.training.data import FeatureBlock, TrainingEpisode
 from anchor_bench.training.trainer import (
     ResidualPhysics,
     TrainingJob,
@@ -35,8 +35,6 @@ def _job(
         val_sources=[],
         output_dir=Path("unused"),
         input_columns=list(input_columns),
-        target_columns=["torque_residual" if model == "hybrid_residual" else "torque"],
-        source_target_columns=["torque"],
         seed=1,
         final_epochs=1,
         trial_epochs=1,
@@ -46,7 +44,7 @@ def _job(
         noise_std=0.0,
         residual_physics=physics,
         input_joints=input_joints,
-        output_joints=output_joints,
+        output_joints=input_joints if output_joints is None else output_joints,
         sample_dt_s=0.01,
         metadata={
             "delay": {"handling": "learned", "training_delay_s": 0.0},
@@ -79,13 +77,12 @@ def _episode(
         )
         for name, values in blocks.items()
     }
-    return SimpleNamespace(
+    return TrainingEpisode(
         timestamps=np.arange(len(target), dtype=np.float64) * 0.01,
         input_joints=input_joints,
         output_joints=output_joints,
         feature_blocks=feature_blocks,
         target_torque=target,
-        dynamic_bias_provenance=None,
     )
 
 
@@ -208,7 +205,7 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
         stats = _normalization_stats(
             sequences,
             input_columns=["position", "previous_torque"],
-            target_columns=["torque"],
+            target_column="torque",
             metadata={},
             input_widths=(2, 1),
             target_width=1,
@@ -222,7 +219,7 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
             _normalization_stats(
                 sequences,
                 input_columns=["position", "previous_torque"],
-                target_columns=["torque"],
+                target_column="torque",
                 metadata={"normalization": {}},
                 input_widths=(2, 1),
                 target_width=1,
@@ -292,9 +289,22 @@ class GruExportContractTests(unittest.TestCase):
         return {
             "schema_version": 1,
             "model_type": "gru",
+            "training_topology": "miso",
             "joint_names": ["j0", "j1"],
             "output_joint_names": ["j1"],
             "input_columns": ["position", "previous_torque"],
+            "input_feature_specs": [
+                {
+                    "name": "position",
+                    "domain": "input_joints",
+                    "channels": ["value"],
+                },
+                {
+                    "name": "previous_torque",
+                    "domain": "output_joints",
+                    "channels": ["value"],
+                },
+            ],
             "target_columns": ["torque"],
             "sample_dt_s": 0.01,
             "normalization": {
@@ -325,7 +335,7 @@ class GruExportContractTests(unittest.TestCase):
             },
             {
                 "name": "position",
-                "domain": "global",
+                "domain": "output_joints",
                 "channels": ["x", "y", "z"],
             },
         ]
@@ -373,7 +383,7 @@ class GruExportContractTests(unittest.TestCase):
         raise ValueError(f"unsupported test topology {topology!r}")
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
-    def test_export_embeds_metadata_and_uses_explicit_dimensions(self):
+    def test_export_uses_authoritative_metadata_and_explicit_dimensions(self):
         import torch
 
         from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
@@ -387,11 +397,15 @@ class GruExportContractTests(unittest.TestCase):
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),
-                    "input_columns": ["position", "previous_torque"],
-                    "target_columns": ["torque"],
+                    "input_columns": ["ignored_top_level_input"],
+                    "target_columns": ["ignored_top_level_target"],
+                    "training_topology": "ignored_top_level_topology",
+                    "input_feature_specs": [{"ignored": True}],
+                    "input_joints": ["ignored_top_level_joint"],
+                    "output_joints": ["ignored_top_level_joint"],
+                    "normalization": {"ignored": True},
                     "input_size": 3,
                     "output_size": 1,
-                    "normalization": runtime_metadata["normalization"],
                     "runtime_metadata": runtime_metadata,
                     "hyperparameters": {"hidden_size": 4, "num_layers": 1, "dropout": 0.0},
                 },
@@ -407,6 +421,32 @@ class GruExportContractTests(unittest.TestCase):
         output, hidden = network(torch.zeros(2, 1, 3), torch.zeros(1, 2, 4))
         self.assertEqual((2, 1, 1), tuple(output.shape))
         self.assertEqual((1, 2, 4), tuple(hidden.shape))
+
+    def test_runtime_metadata_checkpoint_requires_explicit_dimensions(self):
+        from unittest.mock import patch
+
+        from anchor_bench.training.export import export_gru_checkpoint
+
+        metadata = self._metadata()
+        cases = {
+            "input_size": {"output_size": 1, "runtime_metadata": metadata},
+            "output_size": {"input_size": 3, "runtime_metadata": metadata},
+        }
+        fake_torch = SimpleNamespace(load=lambda *args, **kwargs: None)
+        for missing, checkpoint in cases.items():
+            fake_torch.load = lambda *args, checkpoint=checkpoint, **kwargs: checkpoint
+            with (
+                self.subTest(missing=missing),
+                patch(
+                    "anchor_bench.training.export._import_torch",
+                    return_value=fake_torch,
+                ),
+                self.assertRaisesRegex(
+                    ValueError,
+                    f"checkpoint {missing} must be a positive integer",
+                ),
+            ):
+                export_gru_checkpoint("model_best.pt")
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
     def test_siso_and_mimo_exports_have_deterministic_shapes(self):
@@ -426,8 +466,11 @@ class GruExportContractTests(unittest.TestCase):
                 },
             }
         )
+        siso["training_topology"] = "siso"
+        siso["input_feature_specs"] = [siso["input_feature_specs"][0]]
         siso.pop("previous_torque_derivation")
         mimo = self._metadata()
+        mimo["training_topology"] = "mimo"
         mimo["output_joint_names"] = ["j0", "j1"]
         mimo["normalization"] = {
             "inputs": {
@@ -459,11 +502,8 @@ class GruExportContractTests(unittest.TestCase):
                     torch.save(
                         {
                             "model_state_dict": model.state_dict(),
-                            "input_columns": metadata["input_columns"],
-                            "target_columns": ["torque"],
                             "input_size": input_size,
                             "output_size": output_size,
-                            "normalization": metadata["normalization"],
                             "runtime_metadata": metadata,
                             "hyperparameters": {
                                 "hidden_size": 4,
@@ -482,7 +522,41 @@ class GruExportContractTests(unittest.TestCase):
                     torch.testing.assert_close(first, second, rtol=0.0, atol=0.0)
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
-    def test_export_supports_vector_joint_and_global_feature_blocks(self):
+    def test_legacy_checkpoint_uses_top_level_columns_for_default_dimensions(self):
+        import torch
+
+        from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "legacy_best.pt"
+            model = build_runtime_gru(
+                input_size=2,
+                output_size=1,
+                hidden_size=4,
+                num_layers=1,
+                dropout=0.0,
+            )
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "input_columns": ["position", "velocity"],
+                    "target_columns": ["torque"],
+                    "hyperparameters": {
+                        "hidden_size": 4,
+                        "num_layers": 1,
+                        "dropout": 0.0,
+                    },
+                },
+                checkpoint_path,
+            )
+            network = torch.jit.load(str(export_gru_checkpoint(checkpoint_path)))
+
+        output, hidden = network(torch.zeros(2, 3, 2), torch.zeros(1, 2, 4))
+        self.assertEqual((2, 3, 1), tuple(output.shape))
+        self.assertEqual((1, 2, 4), tuple(hidden.shape))
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
+    def test_export_supports_multichannel_input_and_output_joint_blocks(self):
         import torch
 
         from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
@@ -502,12 +576,8 @@ class GruExportContractTests(unittest.TestCase):
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),
-                    "input_columns": metadata["input_columns"],
-                    "input_feature_specs": metadata["input_feature_specs"],
-                    "target_columns": metadata["target_columns"],
                     "input_size": input_size,
                     "output_size": 1,
-                    "normalization": metadata["normalization"],
                     "runtime_metadata": metadata,
                     "hyperparameters": {
                         "hidden_size": 4,
@@ -553,6 +623,8 @@ class GruExportContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must contain 6 value"):
             _validate_runtime_metadata(wrong_stats, input_size=9, output_size=1)
 
+        missing_specs = copy.deepcopy(valid)
+        missing_specs.pop("input_feature_specs")
         not_a_list = copy.deepcopy(valid)
         not_a_list["input_feature_specs"] = {}
         null_specs = copy.deepcopy(valid)
@@ -566,7 +638,7 @@ class GruExportContractTests(unittest.TestCase):
         wrong_order = copy.deepcopy(valid)
         wrong_order["input_feature_specs"].reverse()
         unknown_domain = copy.deepcopy(valid)
-        unknown_domain["input_feature_specs"][0]["domain"] = "links"
+        unknown_domain["input_feature_specs"][0]["domain"] = "global"
         empty_channels = copy.deepcopy(valid)
         empty_channels["input_feature_specs"][0]["channels"] = []
         duplicate_channels = copy.deepcopy(valid)
@@ -575,6 +647,7 @@ class GruExportContractTests(unittest.TestCase):
         invalid_channel["input_feature_specs"][0]["channels"] = ["vx", 3]
 
         cases = [
+            ("missing specs", missing_specs, "input_feature_specs"),
             ("not list", not_a_list, "ordered list"),
             ("null specs", null_specs, "ordered list"),
             ("wrong count", wrong_count, "matching input_columns"),
@@ -606,7 +679,7 @@ class GruExportContractTests(unittest.TestCase):
             },
             {
                 "name": "previous_torque",
-                "domain": "global",
+                "domain": "input_joints",
                 "channels": ["value"],
             },
         ]
@@ -616,41 +689,6 @@ class GruExportContractTests(unittest.TestCase):
                 input_size=3,
                 output_size=1,
             )
-
-    def test_checkpoint_contract_requires_matching_feature_specs(self):
-        from anchor_bench.training.export import _validate_checkpoint_contract
-
-        metadata = self._vector_metadata()
-        checkpoint = {
-            "input_columns": metadata["input_columns"],
-            "input_feature_specs": metadata["input_feature_specs"],
-            "target_columns": metadata["target_columns"],
-            "input_joints": metadata["joint_names"],
-            "output_joints": metadata["output_joint_names"],
-            "normalization": metadata["normalization"],
-        }
-        _validate_checkpoint_contract(checkpoint, metadata)
-
-        missing = copy.deepcopy(checkpoint)
-        missing.pop("input_feature_specs")
-        different = copy.deepcopy(checkpoint)
-        different["input_feature_specs"][0]["channels"] = ["vx", "vy"]
-        for label, candidate in (("missing", missing), ("different", different)):
-            with self.subTest(label=label), self.assertRaisesRegex(
-                ValueError,
-                "input_feature_specs",
-            ):
-                _validate_checkpoint_contract(candidate, metadata)
-
-        legacy_metadata = self._metadata()
-        legacy_checkpoint = {
-            "input_columns": legacy_metadata["input_columns"],
-            "target_columns": legacy_metadata["target_columns"],
-            "normalization": legacy_metadata["normalization"],
-            "input_feature_specs": None,
-        }
-        with self.assertRaisesRegex(ValueError, "input_feature_specs"):
-            _validate_checkpoint_contract(legacy_checkpoint, legacy_metadata)
 
     def test_export_rejects_feature_specs_without_runtime_metadata(self):
         from unittest.mock import patch
@@ -685,10 +723,13 @@ class GruExportContractTests(unittest.TestCase):
             ):
                 export_gru_checkpoint("model_best.pt")
 
-    def test_old_metadata_without_topology_remains_valid(self):
+    def test_runtime_metadata_requires_derived_topology(self):
         from anchor_bench.training.export import _validate_runtime_metadata
 
-        _validate_runtime_metadata(self._metadata(), input_size=3, output_size=1)
+        metadata = self._metadata()
+        metadata.pop("training_topology")
+        with self.assertRaisesRegex(ValueError, "training_topology must be 'miso'"):
+            _validate_runtime_metadata(metadata, input_size=3, output_size=1)
 
     def test_new_topology_metadata_accepts_all_supported_shapes(self):
         from anchor_bench.training.export import _validate_runtime_metadata
@@ -721,12 +762,12 @@ class GruExportContractTests(unittest.TestCase):
         invalid_type["training_topology"] = []
 
         cases = [
-            ("siso dimensions", siso_shape, 3, 1, "inconsistent"),
-            ("miso dimensions", miso_shape, 2, 1, "inconsistent"),
-            ("mimo dimensions", mimo_shape, 3, 1, "inconsistent"),
+            ("siso dimensions", siso_shape, 3, 1, "must be 'miso'"),
+            ("miso dimensions", miso_shape, 2, 1, "must be 'siso'"),
+            ("mimo dimensions", mimo_shape, 3, 1, "must be 'miso'"),
             ("output subset", output_outside_inputs, 3, 1, "must be a subset"),
-            ("invalid topology", invalid, 3, 1, "must be one of"),
-            ("invalid topology type", invalid_type, 3, 1, "must be one of"),
+            ("invalid topology", invalid, 3, 1, "must be 'miso'"),
+            ("invalid topology type", invalid_type, 3, 1, "must be 'miso'"),
         ]
         for label, metadata, input_size, output_size, message in cases:
             with self.subTest(label=label), self.assertRaisesRegex(
@@ -744,79 +785,6 @@ class GruExportContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "metadata requires 3"):
             _validate_runtime_metadata(self._metadata(), input_size=4, output_size=1)
-
-    def test_checkpoint_contract_rejects_topology_mismatches(self):
-        from anchor_bench.training.export import _validate_checkpoint_contract
-
-        metadata, _, _ = self._metadata_for_topology("miso")
-        base = {
-            "input_columns": metadata["input_columns"],
-            "target_columns": metadata["target_columns"],
-            "training_topology": metadata["training_topology"],
-            "input_joints": metadata["joint_names"],
-            "output_joints": metadata["output_joint_names"],
-            "normalization": metadata["normalization"],
-        }
-        _validate_checkpoint_contract(base, metadata)
-
-        cases = [
-            (
-                "missing topology",
-                {
-                    key: value
-                    for key, value in base.items()
-                    if key != "training_topology"
-                },
-            ),
-            ("wrong topology", {**base, "training_topology": "mimo"}),
-        ]
-        for label, checkpoint in cases:
-            with self.subTest(label=label), self.assertRaisesRegex(
-                ValueError,
-                "training_topology",
-            ):
-                _validate_checkpoint_contract(checkpoint, metadata)
-
-    def test_checkpoint_contract_rejects_same_width_semantic_mismatches(self):
-        from anchor_bench.training.export import _validate_checkpoint_contract
-
-        metadata = self._metadata()
-        base = {
-            "input_columns": metadata["input_columns"],
-            "target_columns": metadata["target_columns"],
-            "input_joints": metadata["joint_names"],
-            "output_joints": metadata["output_joint_names"],
-            "normalization": metadata["normalization"],
-        }
-        _validate_checkpoint_contract(base, metadata)
-
-        cases = [
-            (
-                "input_columns",
-                {**base, "input_columns": ["velocity", "previous_torque"]},
-            ),
-            (
-                "target_columns",
-                {**base, "target_columns": ["torque_residual"]},
-            ),
-            (
-                "input_joints",
-                {**base, "input_joints": ["j1", "j0"]},
-            ),
-            (
-                "normalization",
-                {
-                    **base,
-                    "normalization": {
-                        **base["normalization"],
-                        "targets": {"mean": {"torque": 1.0}, "std": {"torque": 1.0}},
-                    },
-                },
-            ),
-        ]
-        for label, checkpoint in cases:
-            with self.subTest(label=label), self.assertRaisesRegex(ValueError, label):
-                _validate_checkpoint_contract(checkpoint, metadata)
 
     def test_export_validation_rejects_unsupported_features_and_missing_baselines(self):
         from anchor_bench.training.export import _validate_runtime_metadata
@@ -855,6 +823,13 @@ class GruExportContractTests(unittest.TestCase):
 
         dynamic = self._metadata()
         dynamic["input_columns"] = ["dynamic_bias"]
+        dynamic["input_feature_specs"] = [
+            {
+                "name": "dynamic_bias",
+                "domain": "input_joints",
+                "channels": ["value"],
+            }
+        ]
         dynamic["normalization"]["inputs"] = {
             "mean": {"dynamic_bias": [0.0, 0.0]},
             "std": {"dynamic_bias": [1.0, 1.0]},

@@ -70,7 +70,6 @@ anchor-bench train-actuator \
   --input-joints Rotation \
   --output outputs/training/so101/rotation \
   --input-columns position,position_error,velocity \
-  --target-column torque \
   --skip-optuna \
   --dry-run
 ```
@@ -115,21 +114,16 @@ The resulting topologies are:
 | MISO | More than 1 | 1 | Joint context predicts one selected torque |
 | MIMO | More than 1 | More than 1 | One coupled network predicts an ordered torque vector |
 
-Each feature block declares a domain and ordered channels. Its canonical shape
-is `[T, A, C]`, where `A` is `I` for an input-joint block, `O` for an
-output-joint block, or `1` for a global block, and `C` is its channel count.
-For example, a three-channel velocity block is `[T, I, 3]`, while
-`previous_torque` is `[T, O, 1]`. The torque target remains `[T, O]`.
+Each feature block has shape `[T, A, C]`, where `A` is `I` for an
+input-joint block or `O` for an output-joint block, and `C` is its ordered
+channel count. For example, a three-channel velocity block is `[T, I, 3]`,
+while `previous_torque` is `[T, O, 1]`. The torque target is `[T, O]`.
 
 Blocks are flattened in `input_columns` order, then axis-major/channel-minor
-within each block. The GRU input width is `D = sum(A * C)` across the selected
-features. Exported `input_feature_specs` records each domain and channel order.
-
-The built-in SAGE assembler currently emits scalar input-joint blocks only:
-`position`, `position_error`, `velocity`, and `dynamic_bias` use shape
-`[T, I, 1]` with the channel `value`. Vector-valued and global blocks are
-supported by the `TrainingEpisode` contract, but must be supplied by a data
-producer that defines those channels explicitly.
+within each block. The GRU input width is `D = sum(A * C)`, and exported
+`input_feature_specs` records each feature domain and channel order. The built-in
+SAGE assembler emits scalar blocks with channel `value`; another data producer
+must define channels explicitly for vector-valued blocks.
 
 ### Features, targets, and timing
 

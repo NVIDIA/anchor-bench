@@ -91,8 +91,6 @@ class CliDryRunTests(unittest.TestCase):
                 str(training_root / "gru"),
                 "--input-columns",
                 "position,position_error,velocity",
-                "--target-column",
-                "torque",
                 "--skip-optuna",
                 "--dry-run",
             )
@@ -101,7 +99,6 @@ class CliDryRunTests(unittest.TestCase):
             self.assertIn("gru", result.stdout)
             self.assertIn("--input-columns", result.stdout)
             self.assertIn("position,position_error,velocity", result.stdout)
-            self.assertIn("--target-column", result.stdout)
             self.assertIn("outputs/training", result.stdout)
 
             result = run_cli(

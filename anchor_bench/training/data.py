@@ -6,39 +6,21 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Iterable, Literal, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
+from anchor_bench.core.config_model import GRU_INPUT_COLUMNS
 from anchor_bench.data.motion import MotionData
 from anchor_bench.data.sage import discover_sage_motions
 from anchor_bench.training.dynamic_bias import DynamicBiasProvider
 
 
 DEFAULT_INPUT_COLUMNS = ("position", "position_error", "velocity")
-DEFAULT_TARGET_COLUMN = "torque"
-SUPPORTED_INPUT_COLUMNS = {
-    "dynamic_bias",
-    "position",
-    "position_error",
-    "previous_torque",
-    "solver_pd",
-    "velocity",
-}
-MODEL_CHOICES = {"gru", "hybrid_residual"}
 EPSILON_STD = 1.0e-8
 
-FeatureDomain = Literal["input_joints", "output_joints", "global"]
-FEATURE_DOMAINS: frozenset[str] = frozenset(
-    {"input_joints", "output_joints", "global"}
-)
-
-
-@dataclass(frozen=True)
-class TrainingColumns:
-    input_columns: list[str]
-    target_columns: list[str]
-    source_target_columns: list[str]
+FeatureDomain = Literal["input_joints", "output_joints"]
+FEATURE_DOMAINS: frozenset[str] = frozenset({"input_joints", "output_joints"})
 
 
 @dataclass(frozen=True)
@@ -75,23 +57,14 @@ class FeatureBlock:
         if not channels:
             raise ValueError("feature block channels must contain at least one channel")
         if any(not isinstance(channel, str) or not channel for channel in channels):
-            raise ValueError(
-                "feature block channel names must be non-empty strings"
-            )
-        duplicates = sorted(
-            {channel for channel in channels if channels.count(channel) > 1}
-        )
+            raise ValueError("feature block channel names must be non-empty strings")
+        duplicates = sorted({channel for channel in channels if channels.count(channel) > 1})
         if duplicates:
-            raise ValueError(
-                "duplicate feature block channels: " + ", ".join(duplicates)
-            )
+            raise ValueError("duplicate feature block channels: " + ", ".join(duplicates))
         if values.shape[2] != len(channels):
             raise ValueError(
-                "feature block channel axis must match channels: "
-                f"got {values.shape[2]}, expected {len(channels)}"
+                f"feature block channel axis must match channels: got {values.shape[2]}, expected {len(channels)}"
             )
-        if domain == "global" and values.shape[1] != 1:
-            raise ValueError("global feature block axis must have width 1")
 
         object.__setattr__(self, "values", values)
         object.__setattr__(self, "domain", domain)
@@ -121,6 +94,8 @@ class TrainingEpisode:
             ndim=1,
             label="episode timestamps",
         )
+        if not len(timestamps):
+            raise ValueError("episode timestamps must not be empty")
         target_torque = _readonly_array(
             self.target_torque,
             dtype=np.float32,
@@ -132,8 +107,7 @@ class TrainingEpisode:
         unknown_outputs = [name for name in output_joints if name not in input_joints]
         if unknown_outputs:
             raise ValueError(
-                "output_joints must be a subset of input_joints; not present: "
-                + ", ".join(unknown_outputs)
+                "output_joints must be a subset of input_joints; not present: " + ", ".join(unknown_outputs)
             )
         if len(target_torque) != len(timestamps):
             raise ValueError("episode target torque must have one row per timestamp")
@@ -147,13 +121,10 @@ class TrainingEpisode:
             if not isinstance(block, FeatureBlock):
                 raise TypeError(f"episode feature {name} must be a FeatureBlock")
             if len(block.values) != len(timestamps):
-                raise ValueError(
-                    f"episode feature {name} must have one row per timestamp"
-                )
+                raise ValueError(f"episode feature {name} must have one row per timestamp")
             expected_axis_width = {
                 "input_joints": len(input_joints),
                 "output_joints": len(output_joints),
-                "global": 1,
             }[block.domain]
             if block.values.shape[1] != expected_axis_width:
                 raise ValueError(
@@ -193,9 +164,7 @@ def _readonly_array(
 
 def _ordered_unique(values: Sequence[str], *, label: str) -> tuple[str, ...]:
     if isinstance(values, str) or not isinstance(values, Sequence):
-        raise ValueError(
-            f"{label} must be an ordered sequence of joint names"
-        )
+        raise ValueError(f"{label} must be an ordered sequence of joint names")
     names = tuple(values)
     if not names:
         raise ValueError(f"{label} must contain at least one joint")
@@ -246,18 +215,13 @@ def assemble_training_episode(
     )
     unknown_outputs = [name for name in outputs if name not in inputs]
     if unknown_outputs:
-        raise ValueError(
-            "output_joints must be a subset of input_joints; not present: "
-            + ", ".join(unknown_outputs)
-        )
+        raise ValueError("output_joints must be a subset of input_joints; not present: " + ", ".join(unknown_outputs))
 
     requested_columns = tuple(str(column) for column in input_columns)
-    duplicate_columns = sorted(
-        {column for column in requested_columns if requested_columns.count(column) > 1}
-    )
+    duplicate_columns = sorted({column for column in requested_columns if requested_columns.count(column) > 1})
     if duplicate_columns:
         raise ValueError(f"duplicate GRU input columns: {', '.join(duplicate_columns)}")
-    unsupported = sorted(set(requested_columns) - SUPPORTED_INPUT_COLUMNS)
+    unsupported = sorted(set(requested_columns) - GRU_INPUT_COLUMNS)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
 
@@ -286,9 +250,7 @@ def assemble_training_episode(
         ),
     }
 
-    needs_velocity = bool(
-        {"velocity", "solver_pd", "dynamic_bias"}.intersection(requested_columns)
-    )
+    needs_velocity = bool({"velocity", "solver_pd", "dynamic_bias"}.intersection(requested_columns))
     velocity_all: np.ndarray | None = None
     if motion.velocity is not None:
         velocity_all = motion.velocity.interpolate(state_time).values
@@ -314,12 +276,7 @@ def assemble_training_episode(
         expected_shape = (len(state_time), len(inputs))
         dynamic_bias = np.asarray(result.values, dtype=np.float32)
         if dynamic_bias.shape != expected_shape:
-            raise ValueError(
-                f"dynamic-bias provider returned shape {dynamic_bias.shape}, "
-                f"expected {expected_shape}"
-            )
-        if not np.all(np.isfinite(dynamic_bias)):
-            raise ValueError("dynamic-bias provider returned non-finite values")
+            raise ValueError(f"dynamic-bias provider returned shape {dynamic_bias.shape}, expected {expected_shape}")
         feature_blocks["dynamic_bias"] = FeatureBlock(
             values=dynamic_bias[:, :, np.newaxis],
             domain="input_joints",
@@ -367,7 +324,6 @@ def discover_training_sources(root: str | Path) -> list[TrainingSource]:
     return [TrainingSource(motion) for motion in motions]
 
 
-
 def split_training_sources(
     sources: Sequence[TrainingSource],
     *,
@@ -376,14 +332,27 @@ def split_training_sources(
 ) -> tuple[list[TrainingSource], list[TrainingSource]]:
     if not sources:
         raise ValueError("cannot split an empty training source list")
-    shuffled = list(sources)
-    random.Random(seed).shuffle(shuffled)
-    if len(shuffled) == 1:
-        return shuffled, []
-    val_count = max(1, int(round(len(shuffled) * val_fraction)))
-    val_count = min(val_count, len(shuffled) - 1)
-    val = sorted(shuffled[:val_count], key=lambda source: str(source.path))
-    train = sorted(shuffled[val_count:], key=lambda source: str(source.path))
+    groups: dict[Path, list[TrainingSource]] = {}
+    for source in sources:
+        groups.setdefault(source.path, []).append(source)
+    paths = list(groups)
+    random.Random(seed).shuffle(paths)
+    if len(paths) == 1:
+        return list(groups[paths[0]]), []
+    val_count = max(1, int(round(len(paths) * val_fraction)))
+    val_count = min(val_count, len(paths) - 1)
+    val_paths = set(paths[:val_count])
+
+    train_paths = sorted(
+        (path for path in paths if path not in val_paths),
+        key=str,
+    )
+    val_paths_ordered = sorted(
+        (path for path in paths if path in val_paths),
+        key=str,
+    )
+    train = [source for path in train_paths for source in groups[path]]
+    val = [source for path in val_paths_ordered for source in groups[path]]
     return train, val
 
 
@@ -392,61 +361,6 @@ def _load_training_motion(path: Path) -> MotionData:
     from anchor_bench.data.sage import load_sage_motion
 
     return load_sage_motion(path)
-
-
-def read_training_header(source: TrainingSource, joint: str) -> list[str]:
-    return list(_load_training_motion(source.path).training_columns(joint))
-
-
-def load_training_table(
-    source: TrainingSource,
-    *,
-    joint: str,
-    columns: Sequence[str],
-) -> dict[str, np.ndarray]:
-    available = _load_training_motion(source.path).training_columns(joint)
-    missing = [column for column in columns if column not in available]
-    if missing:
-        raise ValueError(f"{source.path} missing required training signals: {', '.join(missing)}")
-    return {
-        column: np.asarray(available[column], dtype=np.float32)
-        for column in columns
-    }
-
-
-def resolve_training_columns(
-    header: Iterable[str],
-    *,
-    model: str,
-    input_columns: Sequence[str] | None = None,
-    target_column: str | None = None,
-    derived_columns: Sequence[str] | None = None,
-) -> TrainingColumns:
-    if model not in MODEL_CHOICES:
-        raise ValueError(f"model {model!r} must be one of {sorted(MODEL_CHOICES)}")
-    header_set = set(header)
-    inputs = list(input_columns or DEFAULT_INPUT_COLUMNS)
-    duplicates = sorted({column for column in inputs if inputs.count(column) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
-    unsupported = sorted(set(inputs) - SUPPORTED_INPUT_COLUMNS)
-    if unsupported:
-        raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
-    source_target = [target_column or DEFAULT_TARGET_COLUMN]
-    derived = set(derived_columns or ())
-    missing = [
-        column
-        for column in [*inputs, *source_target]
-        if column not in header_set and column not in derived
-    ]
-    if missing:
-        raise ValueError(f"missing required training signals: {', '.join(missing)}")
-    targets = ["torque_residual"] if model == "hybrid_residual" else source_target
-    return TrainingColumns(
-        input_columns=inputs,
-        target_columns=targets,
-        source_target_columns=source_target,
-    )
 
 
 def write_stats_json(path: str | Path, stats: dict[str, Any]) -> Path:
