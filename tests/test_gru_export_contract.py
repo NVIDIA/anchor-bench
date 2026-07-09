@@ -963,7 +963,7 @@ class GruExportContractTests(unittest.TestCase):
         }
         metadata.pop("previous_torque_derivation")
         metadata["dynamic_bias_derivation"] = {
-            "source": "newton.solvers.SolverMuJoCo.eval_dynamic_bias",
+            "source": "mujoco.mj_forward.qfrc_bias",
             "mapping_requests": [
                 {"mapping_index": 0, "requested_joint_names": ["j0", "j1"]},
                 {"mapping_index": 1, "requested_joint_names": ["j2", "j3"]},

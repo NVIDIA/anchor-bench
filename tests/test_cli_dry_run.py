@@ -95,6 +95,47 @@ class CliDryRunTests(unittest.TestCase):
         self.assertIn("name: pair", result.stdout)
         self.assertIn("training_topology: miso", result.stdout)
 
+    def test_malformed_groups_flag_reports_user_facing_errors(self):
+        invalid_json = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "anchor_bench.cli",
+                "train-actuator",
+                "--robot",
+                "so101",
+                "--groups",
+                "not json",
+                "--dry-run",
+            ],
+            cwd=REPO,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(invalid_json.returncode, 2)
+        self.assertIn("--groups must be valid JSON", invalid_json.stderr)
+
+        non_list = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "anchor_bench.cli",
+                "train-actuator",
+                "--robot",
+                "so101",
+                "--groups",
+                '{"a": 1}',
+                "--dry-run",
+            ],
+            cwd=REPO,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(non_list.returncode, 2)
+        self.assertIn("--groups must be a non-empty JSON list of group objects", non_list.stderr)
+
     def test_train_actuator_dry_runs_for_pure_and_hybrid_gru(self):
         data = "inputs/datasets/so101/custom_figure8_with_camera"
 
