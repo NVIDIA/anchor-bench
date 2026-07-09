@@ -628,7 +628,9 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
             "runtime_source": "previous_raw_network_output_pre_clamp",
             "initialization": "physical_zero",
             "reset_boundaries": ["recorded_episode", "joint_mapping"],
-            "value_space": "physical_torque",
+            "value_space": (
+                "residual_torque" if semantic_target == "torque_residual" else "physical_torque"
+            ),
         }
 
     needs_pd = semantic_target == "torque_residual" or "solver_pd" in job.input_columns

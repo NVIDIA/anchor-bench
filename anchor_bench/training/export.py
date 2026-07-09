@@ -310,6 +310,7 @@ def _validate_feature_derivations(
     *,
     columns: Sequence[str],
     joint_mappings: Sequence[tuple[Sequence[str], Sequence[str]]],
+    target: str,
 ) -> None:
     if "dynamic_bias" in columns:
         derivation = _mapping(
@@ -354,7 +355,7 @@ def _validate_feature_derivations(
             "runtime_source": "previous_raw_network_output_pre_clamp",
             "initialization": "physical_zero",
             "reset_boundaries": ["recorded_episode", "joint_mapping"],
-            "value_space": "physical_torque",
+            "value_space": ("residual_torque" if target == "torque_residual" else "physical_torque"),
         }
         if any(derivation.get(key) != value for key, value in expected.items()):
             raise ValueError("runtime_metadata.previous_torque_derivation is inconsistent")
@@ -414,6 +415,7 @@ def _validate_runtime_metadata(
         metadata,
         columns=columns,
         joint_mappings=joint_mappings,
+        target=target,
     )
 
     _validate_baselines(metadata, columns=columns, target=target)

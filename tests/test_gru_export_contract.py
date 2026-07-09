@@ -14,6 +14,7 @@ from anchor_bench.training.data import FeatureBlock, TrainingEpisode, TrainingMa
 from anchor_bench.training.trainer import (
     ResidualPhysics,
     TrainingJob,
+    _feature_widths,
     _merge_dynamic_bias_provenance,
     _normalization_stats,
     _prepare_episode,
@@ -265,6 +266,38 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
             metadata["previous_torque_derivation"]["runtime_source"],
         )
         self.assertEqual("learned", metadata["delay"]["handling"])
+
+    def test_hybrid_residual_previous_torque_is_residual_space(self):
+        physics = ResidualPhysics(stiffness=2.0, damping=1.0, dry_friction=0.5, viscous_friction=0.25)
+        job = _job(
+            model="hybrid_residual",
+            input_joints=("j0",),
+            output_joints=("j0",),
+            input_columns=("solver_pd", "previous_torque"),
+            physics=physics,
+        )
+        episode = _episode(
+            input_joints=("j0",),
+            output_joints=("j0",),
+            blocks={
+                "position_error": np.array([[1.0], [2.0]], dtype=np.float32),
+                "velocity": np.array([[0.1], [0.2]], dtype=np.float32),
+            },
+            target=np.array([[10.0], [20.0]], dtype=np.float32),
+        )
+        stats = _normalization_stats(
+            [_prepare_episode(job, episode)],
+            input_columns=list(job.input_columns),
+            target_column="torque_residual",
+            metadata=job.metadata,
+            input_widths=_feature_widths(job),
+            target_width=1,
+        )
+        metadata = _runtime_metadata(job, stats)
+        self.assertEqual(
+            "residual_torque",
+            metadata["previous_torque_derivation"]["value_space"],
+        )
 
     def test_dynamic_bias_provenance_unions_episode_joint_sets(self):
         first = _merge_dynamic_bias_provenance(
@@ -978,6 +1011,10 @@ class GruExportContractTests(unittest.TestCase):
             "mean": {"torque_residual": 0.0},
             "std": {"torque_residual": 1.0},
         }
+        residual["previous_torque_derivation"] = {
+            **residual["previous_torque_derivation"],
+            "value_space": "residual_torque",
+        }
         with self.assertRaisesRegex(ValueError, "pd_baseline"):
             _validate_runtime_metadata(residual, input_size=3, output_size=1)
 
@@ -1013,6 +1050,25 @@ class GruExportContractTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "previous_torque_derivation is inconsistent"):
             _validate_runtime_metadata(previous, input_size=3, output_size=1)
+
+    def test_export_validation_requires_target_consistent_value_space(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        metadata = self._metadata()
+        metadata["target_columns"] = ["torque_residual"]
+        metadata["normalization"]["targets"] = {
+            "mean": {"torque_residual": 0.0},
+            "std": {"torque_residual": 1.0},
+        }
+        metadata["pd_baseline"] = {"kp": 1.0, "kd": 0.1, "velocity_target": "zero"}
+        metadata["friction_baseline"] = {"dry": 0.0, "viscous": 0.0}
+        with self.assertRaisesRegex(ValueError, "previous_torque_derivation is inconsistent"):
+            _validate_runtime_metadata(metadata, input_size=3, output_size=1)
+        metadata["previous_torque_derivation"] = {
+            **metadata["previous_torque_derivation"],
+            "value_space": "residual_torque",
+        }
+        _validate_runtime_metadata(metadata, input_size=3, output_size=1)
 
 
 if __name__ == "__main__":
