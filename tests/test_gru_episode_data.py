@@ -81,6 +81,7 @@ class _FakeBiasProvider:
         positions,
         velocities,
         requested_joint_names,
+        cache_key=None,
     ) -> DynamicBiasResult:
         self.calls.append(
             {

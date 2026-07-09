@@ -70,6 +70,55 @@ class TrainingDataTests(unittest.TestCase):
         self.assertEqual(3, len(train_a))
         self.assertEqual(2, len(val_a))
 
+    def test_bias_provider_receives_source_path_cache_key(self):
+        from anchor_bench.training.data import (
+            TrainingMapping,
+            TrainingSource,
+            load_training_episode,
+        )
+        from anchor_bench.training.dynamic_bias import DynamicBiasResult
+
+        class _RecordingBiasProvider:
+            def __init__(self) -> None:
+                self.cache_keys: list[object] = []
+
+            def compute(
+                self,
+                *,
+                joint_names,
+                positions,
+                velocities,
+                requested_joint_names,
+                cache_key=None,
+            ) -> DynamicBiasResult:
+                # A real provider computes the expensive trajectory sweep once
+                # per key; here we only assert the loader passes the source path.
+                self.cache_keys.append(cache_key)
+                indices = [list(joint_names).index(name) for name in requested_joint_names]
+                values = positions[:, indices] + 10.0 * velocities[:, indices]
+                return DynamicBiasResult(
+                    values,
+                    {"provider": "fake", "requested_joint_names": list(requested_joint_names)},
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            episode_path = Path(tmp) / "episode"
+            _write_two_joint_sage_motion(episode_path)
+            provider = _RecordingBiasProvider()
+            for joint in ("Rotation", "Pitch"):
+                load_training_episode(
+                    TrainingSource(episode_path),
+                    mapping=TrainingMapping((joint,), (joint,)),
+                    input_columns=["dynamic_bias"],
+                    sample_dt_s=0.002,
+                    dynamic_bias_provider=provider,
+                )
+
+        self.assertEqual(
+            [str(episode_path), str(episode_path)],
+            provider.cache_keys,
+        )
+
 
 class TrainingRecurrenceTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("torch"), "torch unavailable")
@@ -534,6 +583,7 @@ class TrainingRunnerTests(unittest.TestCase):
                 positions,
                 velocities,
                 requested_joint_names,
+                cache_key=None,
             ):
                 requested = list(requested_joint_names)
                 self.calls.append(

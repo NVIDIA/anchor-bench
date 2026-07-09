@@ -230,15 +230,51 @@ def _validate_episode_cadence(
         )
 
 
-def assemble_training_episode(
+@dataclass(frozen=True)
+class _SourceArrays:
+    """Full-width source signals interpolated onto the recorded state grid."""
+
+    state_time: np.ndarray
+    position: np.ndarray
+    command: np.ndarray
+    velocity: np.ndarray | None
+    effort: np.ndarray
+
+
+def _prepare_source_arrays(motion: MotionData, sample_dt_s: float) -> _SourceArrays:
+    """Validate cadence and interpolate every source signal once per source."""
+
+    state_time = np.asarray(motion.position.time, dtype=float)
+    if not len(state_time):
+        raise ValueError(f"training source has no state rows: {motion.source}")
+    _validate_episode_cadence(state_time, float(sample_dt_s), source=motion.source)
+    if motion.effort is None:
+        raise ValueError(f"{motion.source} is missing required measured torque")
+    return _SourceArrays(
+        state_time=state_time,
+        position=np.asarray(motion.position.values, dtype=float),
+        command=motion.command_position.interpolate(state_time).values,
+        velocity=None if motion.velocity is None else motion.velocity.interpolate(state_time).values,
+        effort=motion.effort.interpolate(state_time).values,
+    )
+
+
+@lru_cache(maxsize=16)
+def _prepared_training_source(path: Path, sample_dt_s: float) -> tuple[MotionData, _SourceArrays]:
+    motion = _load_training_motion(path)
+    return motion, _prepare_source_arrays(motion, sample_dt_s)
+
+
+def _assemble_from_arrays(
     motion: MotionData,
+    arrays: _SourceArrays,
     *,
     mapping: TrainingMapping,
-    input_columns: Sequence[str] = DEFAULT_INPUT_COLUMNS,
-    sample_dt_s: float,
-    dynamic_bias_provider: DynamicBiasProvider | None = None,
+    input_columns: Sequence[str],
+    dynamic_bias_provider: DynamicBiasProvider | None,
+    cache_key: str | None = None,
 ) -> TrainingEpisode:
-    """Assemble one coupled episode without changing its recorded state grid."""
+    """Build one episode from prepared source arrays for a single mapping."""
 
     if not isinstance(mapping, TrainingMapping):
         raise TypeError("mapping must be a TrainingMapping")
@@ -255,16 +291,10 @@ def assemble_training_episode(
 
     input_indices = motion.joints.indices(inputs)
     output_indices = motion.joints.indices(outputs)
-    state_time = np.asarray(motion.position.time, dtype=float)
-    if not len(state_time):
-        raise ValueError(f"training source has no state rows: {motion.source}")
-    _validate_episode_cadence(state_time, float(sample_dt_s), source=motion.source)
+    state_time = arrays.state_time
 
-    if motion.effort is None:
-        raise ValueError(f"{motion.source} is missing required measured torque")
-
-    command = motion.command_position.interpolate(state_time).values[:, input_indices]
-    position = motion.position.values[:, input_indices]
+    command = arrays.command[:, input_indices]
+    position = arrays.position[:, input_indices]
     feature_blocks: dict[str, FeatureBlock] = {
         "position": FeatureBlock(
             values=position[:, :, np.newaxis],
@@ -279,9 +309,8 @@ def assemble_training_episode(
     }
 
     needs_velocity = bool({"velocity", "solver_pd", "dynamic_bias"}.intersection(requested_columns))
-    velocity_all: np.ndarray | None = None
-    if motion.velocity is not None:
-        velocity_all = motion.velocity.interpolate(state_time).values
+    velocity_all = arrays.velocity
+    if velocity_all is not None:
         feature_blocks["velocity"] = FeatureBlock(
             values=velocity_all[:, input_indices, np.newaxis],
             domain="input_joints",
@@ -297,9 +326,10 @@ def assemble_training_episode(
         assert velocity_all is not None
         result = dynamic_bias_provider.compute(
             joint_names=motion.joints.names,
-            positions=motion.position.values,
+            positions=arrays.position,
             velocities=velocity_all,
             requested_joint_names=inputs,
+            cache_key=cache_key,
         )
         expected_shape = (len(state_time), len(inputs))
         dynamic_bias = np.asarray(result.values, dtype=np.float32)
@@ -312,13 +342,33 @@ def assemble_training_episode(
         )
         dynamic_bias_provenance = result.provenance
 
-    target_torque = motion.effort.interpolate(state_time).values[:, output_indices]
+    target_torque = arrays.effort[:, output_indices]
     return TrainingEpisode(
         timestamps=state_time,
         mapping=mapping,
         feature_blocks=feature_blocks,
         target_torque=target_torque,
         dynamic_bias_provenance=dynamic_bias_provenance,
+    )
+
+
+def assemble_training_episode(
+    motion: MotionData,
+    *,
+    mapping: TrainingMapping,
+    input_columns: Sequence[str] = DEFAULT_INPUT_COLUMNS,
+    sample_dt_s: float,
+    dynamic_bias_provider: DynamicBiasProvider | None = None,
+) -> TrainingEpisode:
+    """Assemble one coupled episode without changing its recorded state grid."""
+
+    arrays = _prepare_source_arrays(motion, sample_dt_s)
+    return _assemble_from_arrays(
+        motion,
+        arrays,
+        mapping=mapping,
+        input_columns=input_columns,
+        dynamic_bias_provider=dynamic_bias_provider,
     )
 
 
@@ -332,12 +382,14 @@ def load_training_episode(
 ) -> TrainingEpisode:
     """Load one SAGE motion while preserving its episode boundary."""
 
-    return assemble_training_episode(
-        _load_training_motion(source.path),
+    motion, arrays = _prepared_training_source(source.path, float(sample_dt_s))
+    return _assemble_from_arrays(
+        motion,
+        arrays,
         mapping=mapping,
         input_columns=input_columns,
-        sample_dt_s=sample_dt_s,
         dynamic_bias_provider=dynamic_bias_provider,
+        cache_key=str(source.path),
     )
 
 

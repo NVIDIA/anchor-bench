@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,6 +124,50 @@ def _fake_runtime(solver_cls=_FakeSolver):
 
 
 class DynamicBiasProviderTests(unittest.TestCase):
+    def _provider_with_forward_counter(self):
+        calls = {"mj_forward": 0}
+        newton, mujoco = _fake_runtime()
+        base_forward = mujoco.mj_forward
+
+        def counting_forward(model, data) -> None:
+            calls["mj_forward"] += 1
+            base_forward(model, data)
+
+        mujoco.mj_forward = counting_forward
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        asset = tmp / "robot.usd"
+        asset.write_bytes(b"usd")
+        bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
+        provider = NewtonMuJoCoDynamicBiasProvider(bundle)
+        with (
+            patch(
+                "anchor_bench.training.dynamic_bias._import_newton_runtime",
+                return_value=(newton, mujoco),
+            ),
+            patch(
+                "anchor_bench.training.dynamic_bias.resolve_runtime_asset",
+                return_value=asset,
+            ),
+        ):
+            provider._initialize()
+        return provider, calls
+
+    def test_compute_with_cache_key_reuses_trajectory_evaluation(self):
+        provider, calls = self._provider_with_forward_counter()
+        kwargs = dict(
+            joint_names=("a", "b"),
+            positions=np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+            velocities=np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        )
+        first = provider.compute(requested_joint_names=("a",), cache_key="ep0", **kwargs)
+        second = provider.compute(requested_joint_names=("b",), cache_key="ep0", **kwargs)
+        self.assertEqual(len(kwargs["positions"]), calls["mj_forward"])
+        # Against the permuted-address fake solver (dof_ref, qpos.sum coupling):
+        # a maps to qvel addr 1, b to qvel addr 2 of the shared bias table.
+        np.testing.assert_allclose(first.values[:, 0], [14.55, 34.95], rtol=1e-6)
+        np.testing.assert_allclose(second.values[:, 0], [23.15, 43.75], rtol=1e-6)
+
     def test_training_data_import_keeps_newton_and_warp_lazy(self):
         script = "\n".join(
             (

@@ -45,6 +45,7 @@ class DynamicBiasProvider(Protocol):
         positions: np.ndarray,
         velocities: np.ndarray,
         requested_joint_names: Sequence[str],
+        cache_key: str | None = None,
     ) -> DynamicBiasResult: ...
 
 
@@ -95,6 +96,7 @@ class NewtonMuJoCoDynamicBiasProvider:
         self._dof_ref = np.empty(0, dtype=np.float64)
         self._default_qpos = np.empty(0, dtype=np.float64)
         self._mapping_cache: dict[str, int | None] = {}
+        self._trajectory_cache: dict[str, tuple[tuple[str, ...], tuple[int, ...], np.ndarray]] = {}
         self._provenance: dict[str, Any] = {
             "source": "mujoco.mj_forward.qfrc_bias",
             "model_source": "newton.solvers.SolverMuJoCo(use_mujoco_cpu=True)",
@@ -247,6 +249,45 @@ class NewtonMuJoCoDynamicBiasProvider:
                 defaulted.append(_normalized_joint_name(label))
         return defaulted
 
+    def _trajectory_bias_table(
+        self,
+        cache_key: str | None,
+        trajectory_names: tuple[str, ...],
+        position_values: np.ndarray,
+        velocity_values: np.ndarray,
+        *,
+        mapped_columns: np.ndarray,
+        mapped_q_adr: np.ndarray,
+        mapped_qd_adr: np.ndarray,
+        mapped_dof_ref: np.ndarray,
+    ) -> np.ndarray:
+        """Evaluate qfrc_bias for every mapped trajectory joint, once per key."""
+
+        shape = tuple(int(dim) for dim in position_values.shape)
+        if cache_key is not None:
+            cached = self._trajectory_cache.get(cache_key)
+            if cached is not None and cached[0] == trajectory_names and cached[1] == shape:
+                return cached[2]
+
+        mj_model = self._solver.mj_model
+        mj_data = self._solver.mj_data
+        mj_data.qpos[:] = self._default_qpos
+        mj_data.qvel[:] = 0.0
+        table = np.empty((len(position_values), len(mapped_columns)), dtype=np.float32)
+        for row in range(len(position_values)):
+            mj_data.qpos[mapped_q_adr] = position_values[row, mapped_columns] + mapped_dof_ref
+            mj_data.qvel[mapped_qd_adr] = velocity_values[row, mapped_columns]
+            self._mujoco.mj_forward(mj_model, mj_data)
+            table[row] = mj_data.qfrc_bias[mapped_qd_adr]
+
+        if not np.all(np.isfinite(table)):
+            raise ValueError("SolverMuJoCo produced non-finite dynamic_bias values")
+
+        if cache_key is not None:
+            table.setflags(write=False)
+            self._trajectory_cache[cache_key] = (trajectory_names, shape, table)
+        return table
+
     def compute(
         self,
         *,
@@ -254,6 +295,7 @@ class NewtonMuJoCoDynamicBiasProvider:
         positions: np.ndarray,
         velocities: np.ndarray,
         requested_joint_names: Sequence[str],
+        cache_key: str | None = None,
     ) -> DynamicBiasResult:
         trajectory_names = tuple(str(name) for name in joint_names)
         requested_names = tuple(str(name) for name in requested_joint_names)
@@ -306,33 +348,27 @@ class NewtonMuJoCoDynamicBiasProvider:
             mapped_model_indices.add(joint_index)
             mapped.append((column, name, indices[0], indices[1], indices[2]))
 
-        qd_by_name = {name: qd_adr for _, name, _, qd_adr, _ in mapped}
-        requested_qd_adr = np.asarray(
-            [qd_by_name[name] for name in requested_names],
+        # The full trajectory sweep depends only on the source's mapped joints,
+        # so evaluate every mapped joint once and slice the requested columns.
+        # requested_names are all required and therefore always present in mapped.
+        mapped_names = [item[1] for item in mapped]
+        table_column_by_name = {name: index for index, name in enumerate(mapped_names)}
+        requested_columns_in_table = np.asarray(
+            [table_column_by_name[name] for name in requested_names],
             dtype=np.int64,
         )
 
-        mapped_columns = np.asarray([item[0] for item in mapped], dtype=np.int64)
-        mapped_q_adr = np.asarray([item[2] for item in mapped], dtype=np.int64)
-        mapped_qd_adr = np.asarray([item[3] for item in mapped], dtype=np.int64)
-        mapped_dof_ref = self._dof_ref[np.asarray([item[4] for item in mapped], dtype=np.int64)]
-
-        mj_model = self._solver.mj_model
-        mj_data = self._solver.mj_data
-        mj_data.qpos[:] = self._default_qpos
-        mj_data.qvel[:] = 0.0
-        result = np.empty(
-            (len(position_values), len(requested_names)),
-            dtype=np.float32,
+        table = self._trajectory_bias_table(
+            cache_key,
+            trajectory_names,
+            position_values,
+            velocity_values,
+            mapped_columns=np.asarray([item[0] for item in mapped], dtype=np.int64),
+            mapped_q_adr=np.asarray([item[2] for item in mapped], dtype=np.int64),
+            mapped_qd_adr=np.asarray([item[3] for item in mapped], dtype=np.int64),
+            mapped_dof_ref=self._dof_ref[np.asarray([item[4] for item in mapped], dtype=np.int64)],
         )
-        for row in range(len(position_values)):
-            mj_data.qpos[mapped_q_adr] = position_values[row, mapped_columns] + mapped_dof_ref
-            mj_data.qvel[mapped_qd_adr] = velocity_values[row, mapped_columns]
-            self._mujoco.mj_forward(mj_model, mj_data)
-            result[row] = mj_data.qfrc_bias[requested_qd_adr]
-
-        if not np.all(np.isfinite(result)):
-            raise ValueError("SolverMuJoCo produced non-finite dynamic_bias values")
+        result = np.array(table[:, requested_columns_in_table], dtype=np.float32)
 
         provenance = {
             **self._provenance,
