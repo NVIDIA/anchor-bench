@@ -74,24 +74,56 @@ anchor-bench train-actuator \
   --dry-run
 ```
 
-Training consumes whole SAGE motion folders. It keeps episode boundaries and
-keeps all joints from one motion in the same training or validation split.
-Each SISO artifact is trained from one explicit input joint. Omit
-`--output-joints` to use that same joint as the output. To train SISO models
-for several joints, invoke the command once per joint. Artifact names include
-the resolved joint domains, so those runs can share an output directory without
-sharing network weights.
+Training consumes whole SAGE motion folders. Recorded episodes are split into
+training and validation sets before joint mappings are expanded, so different
+mappings of one recording cannot leak across the split.
 
-Artifact basenames now encode the topology and resolved joint domains and end
-with a stable digest; the former output-only and `full` names are not retained.
+### Groups and mappings
 
-### Joint domains
+One training group produces one artifact and owns one set of weights and
+normalization statistics. Each mapping in the group describes one simultaneous
+application of that model. All mappings in a group must have the same input and
+output widths; their physical joint names may differ.
 
-Use ordered joint lists for coupled models. Joint aliases are resolved through
-`robot.yaml`; output joints must be a subset of input joints. Use `all` to expand
-the input axis to every robot joint in declarative order, or the output axis to
-the resolved input domain. If `--output-joints` is omitted, it defaults to the
-input domain.
+For example, SO-101 shares one scalar model across all six joints:
+
+```yaml
+training:
+  groups:
+    - name: so101_actuator
+      mappings:
+        - input_joints: [Rotation]
+          output_joints: [Rotation]
+        - input_joints: [Pitch]
+          output_joints: [Pitch]
+        - input_joints: [Elbow]
+          output_joints: [Elbow]
+        - input_joints: [Wrist_Pitch]
+          output_joints: [Wrist_Pitch]
+        - input_joints: [Wrist_Roll]
+          output_joints: [Wrist_Roll]
+        - input_joints: [Jaw]
+          output_joints: [Jaw]
+```
+
+This is ordinary SISO at each mapping: the model still has one input-joint axis
+and one scalar output. The six source/mapping sequences share weights, and their
+samples are pooled into the same scalar normalization statistics. Separate
+groups produce separate artifacts and do not share weights or statistics.
+
+Top-level `input_joints` and `output_joints`, including the corresponding CLI
+flags, are shorthand for one default group containing one mapping. Omit outputs
+to use the same joints as inputs. Supplying CLI joint flags replaces the
+declarative group selection for that invocation.
+
+Use ordered joint lists for coupled mappings. Joint aliases are resolved through
+`robot.yaml`, and outputs must be a subset of inputs independently in every
+mapping. `input_joints: all` continues to mean one coupled all-joint input
+mapping; it never expands into several shared SISO mappings. `output_joints:
+all` means all inputs from that same mapping.
+
+Artifact basenames contain the group name and a digest of the complete ordered
+mapping contract.
 
 ```bash
 anchor-bench train-actuator \
@@ -106,18 +138,21 @@ anchor-bench train-actuator \
   --dry-run
 ```
 
-The resulting topologies are:
+Topology describes one mapping, not how many mappings share the artifact:
 
-| Topology | Input joints | Output joints | Artifact |
+| Topology | Input joints per mapping | Output joints per mapping | Application |
 | --- | ---: | ---: | --- |
-| SISO | 1 | 1 | One joint predicts its own torque |
+| SISO | 1 | 1 | One joint predicts one torque |
 | MISO | More than 1 | 1 | Joint context predicts one selected torque |
-| MIMO | More than 1 | More than 1 | One coupled network predicts an ordered torque vector |
+| MIMO | More than 1 | More than 1 | One coupled mapping predicts an ordered torque vector |
 
 Each feature block has shape `[T, A, C]`, where `A` is `I` for an
 input-joint block or `O` for an output-joint block, and `C` is its ordered
-channel count. For example, a three-channel velocity block is `[T, I, 3]`,
-while `previous_torque` is `[T, O, 1]`. The torque target is `[T, O]`.
+channel count. `I` and `O` come from one mapping, never from the total number
+of physical joints across the group. For example, a three-channel velocity
+block is `[T, I, 3]`, while `previous_torque` is `[T, O, 1]`. The torque
+target is `[T, O]`. Normalization is pooled across mappings by logical tensor
+coordinate.
 
 Blocks are flattened in `input_columns` order, then axis-major/channel-minor
 within each block. The GRU input width is `D = sum(A * C)`, and exported
@@ -151,17 +186,21 @@ For a full-torque `--model gru`, the target is measured torque. For
 and friction baselines. In a residual model, `previous_torque` therefore
 means the previous residual target. It means the previous measured torque in a
 full-torque model.
-Training uses that previous target as supervised recurrence. A runtime consumer
-feeds back the previous raw network output and resets it to physical zero with
-the recurrent hidden state at each episode boundary.
+Training uses that previous target as supervised recurrence. Each recorded
+episode/mapping pair is an independent recurrent sequence: previous torque and
+hidden state reset between mappings and episodes, while hidden state continues
+across TBPTT chunks. A runtime consumer feeds back the previous raw network
+output and keeps independent recurrent state for each physical mapping.
 
 PD values are required by residual training and whenever `solver_pd` is an
 input. Friction values are required by residual training. Supply a complete
 pair with `--pd-kp/--pd-kd` or
 `--friction-dry/--friction-viscous`. Resolution order is CLI, then
 `training:` in `run.yaml`, then uniform values inferred from
-`actuators.yaml`. Each artifact has one shared baseline; inference fails when
-selected actuator values differ.
+`actuators.yaml`. Each group/artifact has one shared baseline. Fallback
+inference considers every relevant joint across that group's mappings and fails
+when those actuator values differ. Separate groups may infer different
+baselines.
 
 The expected sample period is `1 / simulation.control_freq`. Every recorded
 state interval must match it or training fails. Training does not resample an
@@ -170,13 +209,14 @@ onto the recorded state timestamps.
 
 ### Artifacts
 
-A completed run writes a raw checkpoint, normalization stats JSON, and a
-TorchScript network under `outputs/training/<robot>/...`. The TorchScript
-archive embeds `metadata.json`, so a runtime consumer needs only that file.
-The metadata records ordered input and output joints, feature and target
-semantics, sample period, per-feature normalization, delay handling, applicable
-PD/friction baselines, and derivation provenance for dynamic bias and previous
-torque.
+Each group writes a raw checkpoint, normalization stats JSON, and a TorchScript
+network under `outputs/training/<robot>/...`. The TorchScript archive embeds
+schema-version-2 `metadata.json`, so a runtime consumer needs only that file.
+The metadata records the group name, every ordered physical joint mapping,
+feature and target semantics, sample period, group-pooled normalization, delay
+handling, applicable PD/friction baselines, and derivation provenance for
+dynamic bias and previous torque. Model dimensions are validated against one
+mapping's axes, not against the union of physical joint names.
 
 Anchor Bench training does not install or modify Newton. A runtime loading an
 enriched or coupled artifact must support this metadata contract; the legacy

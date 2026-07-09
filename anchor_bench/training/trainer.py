@@ -13,8 +13,9 @@ import numpy as np
 
 from anchor_bench.training.data import (
     EPSILON_STD,
-    TrainingEpisode,
     FeatureBlock,
+    TrainingEpisode,
+    TrainingMapping,
     TrainingSource,
     write_stats_json,
 )
@@ -47,8 +48,8 @@ class TrainingJob:
     val_sources: Sequence[TrainingSource]
     output_dir: Path
     input_columns: list[str]
-    input_joints: Sequence[str]
-    output_joints: Sequence[str]
+    group_name: str
+    mappings: Sequence[TrainingMapping]
     sample_dt_s: float
     seed: int
     final_epochs: int
@@ -60,6 +61,12 @@ class TrainingJob:
     residual_physics: ResidualPhysics | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     dynamic_bias_provider: Any | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.group_name, str) or not self.group_name.strip():
+            raise ValueError("TrainingJob group_name must be a non-empty string")
+        object.__setattr__(self, "group_name", self.group_name.strip())
+        object.__setattr__(self, "mappings", _validated_mappings(self.mappings))
 
 
 @dataclass(frozen=True)
@@ -85,56 +92,64 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "joint"
 
 
-def _validated_axes(
-    input_joints: Sequence[str],
-    output_joints: Sequence[str],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    inputs = tuple(input_joints)
-    outputs = tuple(output_joints)
-    if not inputs:
-        raise ValueError("GRU training requires at least one input joint")
-    if not outputs:
-        raise ValueError("GRU training requires at least one output joint")
-    if any(not isinstance(name, str) or not name for name in (*inputs, *outputs)):
-        raise ValueError("GRU joint names must be non-empty strings")
-    if len(set(inputs)) != len(inputs):
-        raise ValueError("input_joints must not contain duplicates")
-    if len(set(outputs)) != len(outputs):
-        raise ValueError("output_joints must not contain duplicates")
-    missing = [name for name in outputs if name not in inputs]
-    if missing:
-        raise ValueError("output_joints must be a subset of input_joints; missing: " + ", ".join(missing))
-    return inputs, outputs
+def _validated_mappings(
+    mappings: Sequence[TrainingMapping],
+) -> tuple[TrainingMapping, ...]:
+    if isinstance(mappings, (str, bytes)) or not isinstance(mappings, Sequence):
+        raise ValueError("TrainingJob mappings must be an ordered sequence")
+    result = tuple(mappings)
+    if not result:
+        raise ValueError("TrainingJob requires at least one mapping")
+    if any(not isinstance(mapping, TrainingMapping) for mapping in result):
+        raise TypeError("TrainingJob mappings must contain TrainingMapping values")
+    if len(set(result)) != len(result):
+        raise ValueError("TrainingJob mappings must not contain duplicates")
+    input_width = len(result[0].input_joints)
+    output_width = len(result[0].output_joints)
+    for index, mapping in enumerate(result[1:], start=1):
+        if len(mapping.input_joints) != input_width or len(mapping.output_joints) != output_width:
+            raise ValueError(
+                f"mapping {index} has dimensions "
+                f"{len(mapping.input_joints)}->{len(mapping.output_joints)}; "
+                f"expected {input_width}->{output_width}"
+            )
+    return result
 
 
-def _runtime_axes(job: TrainingJob) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    return _validated_axes(job.input_joints, job.output_joints)
+def _mapping_widths(job: TrainingJob) -> tuple[int, int]:
+    mapping = job.mappings[0]
+    return len(mapping.input_joints), len(mapping.output_joints)
 
 
 def _training_topology(job: TrainingJob) -> str:
-    inputs, outputs = _runtime_axes(job)
-    if len(inputs) == 1:
+    input_width, output_width = _mapping_widths(job)
+    if input_width == 1:
         return "siso"
-    if len(outputs) == 1:
+    if output_width == 1:
         return "miso"
     return "mimo"
 
 
-def _artifact_label(job: TrainingJob) -> str:
-    topology = _training_topology(job)
-    input_joints, output_joints = _runtime_axes(job)
-    identity = {
-        "topology": topology,
-        "input_joints": list(input_joints),
-        "output_joints": list(output_joints),
-    }
-    readable = f"{topology}__in__{'__'.join(input_joints)}__out__{'__'.join(output_joints)}"
+def _joint_mappings(job: TrainingJob) -> list[dict[str, list[str]]]:
+    return [
+        {
+            "input_joints": list(mapping.input_joints),
+            "output_joints": list(mapping.output_joints),
+        }
+        for mapping in job.mappings
+    ]
 
+
+def _artifact_label(job: TrainingJob) -> str:
+    identity = {
+        "group_name": job.group_name,
+        "joint_mappings": _joint_mappings(job),
+    }
     digest = hashlib.sha256(json.dumps(identity, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()[
         :10
     ]
     suffix = f"__{digest}"
-    prefix = _safe_name(readable)[: 96 - len(suffix)].rstrip("_.-")
+    prefix = _safe_name(job.group_name)[: 96 - len(suffix)].rstrip("_.-") or "group"
     return f"{prefix}{suffix}"
 
 
@@ -175,10 +190,10 @@ def _record_input_feature_specs(
 
 
 def _feature_widths(job: TrainingJob) -> tuple[int, ...]:
-    inputs, outputs = _runtime_axes(job)
+    input_width, output_width = _mapping_widths(job)
     axis_widths = {
-        "input_joints": len(inputs),
-        "output_joints": len(outputs),
+        "input_joints": input_width,
+        "output_joints": output_width,
     }
     return tuple(axis_widths[spec["domain"]] * len(spec["channels"]) for spec in _input_feature_specs(job))
 
@@ -256,6 +271,9 @@ def _flatten_feature_blocks(
         if column not in blocks:
             raise ValueError(f"{source} missing required feature {column!r}")
         block = blocks[column]
+        expected_domain = "output_joints" if column == "previous_torque" else "input_joints"
+        if block.domain != expected_domain:
+            raise ValueError(f"{source} feature {column!r} must use domain {expected_domain!r}")
         ordered.append(block.values.reshape(rows, -1))
         specs.append(
             {
@@ -279,14 +297,12 @@ def _prepare_episode(
     source: TrainingSource | None = None,
     source_name: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    input_joints, output_joints = _runtime_axes(job)
     label = source_name or (str(source.path) if source is not None else "training episode")
-    episode_inputs = tuple(episode.input_joints)
-    episode_outputs = tuple(episode.output_joints)
-    if episode_inputs != input_joints:
-        raise ValueError(f"{label} input joint order {episode_inputs} does not match {input_joints}")
-    if episode_outputs != output_joints:
-        raise ValueError(f"{label} output joint order {episode_outputs} does not match {output_joints}")
+    mapping = episode.mapping
+    if mapping not in job.mappings:
+        raise ValueError(f"{label} mapping is not configured for group {job.group_name!r}")
+    input_joints = mapping.input_joints
+    output_joints = mapping.output_joints
 
     rows = len(episode.timestamps)
     blocks = dict(episode.feature_blocks)
@@ -310,11 +326,8 @@ def _prepare_episode(
     return features, target
 
 
-_DYNAMIC_BIAS_ORDERED_JOINT_LIST_FIELDS = {"requested_joint_names"}
-
 _DYNAMIC_BIAS_JOINT_LIST_FIELDS = {
     "trajectory_joint_names",
-    "requested_joint_names",
     "mapped_joint_names",
     "unmapped_trajectory_joint_names",
     "defaulted_joint_names",
@@ -325,18 +338,17 @@ def _merge_dynamic_bias_provenance(
     accumulated: dict[str, Any] | None,
     episode: Mapping[str, Any],
 ) -> dict[str, Any]:
-    stable = {key: value for key, value in episode.items() if key not in _DYNAMIC_BIAS_JOINT_LIST_FIELDS}
+    excluded = _DYNAMIC_BIAS_JOINT_LIST_FIELDS | {"requested_joint_names", "mapping_requests"}
+    stable = {key: value for key, value in episode.items() if key not in excluded}
     if accumulated is None:
         result = dict(stable)
         for key in _DYNAMIC_BIAS_JOINT_LIST_FIELDS:
             values = episode.get(key, [])
             if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
                 raise ValueError(f"dynamic_bias provenance {key} must be a list of strings")
-            result[key] = (
-                list(dict.fromkeys(values)) if key in _DYNAMIC_BIAS_ORDERED_JOINT_LIST_FIELDS else sorted(set(values))
-            )
+            result[key] = sorted(set(values))
         return result
-    existing_stable = {key: value for key, value in accumulated.items() if key not in _DYNAMIC_BIAS_JOINT_LIST_FIELDS}
+    existing_stable = {key: value for key, value in accumulated.items() if key not in excluded}
     if existing_stable != stable:
         raise ValueError("stable dynamic_bias provenance differs between training episodes")
     result = dict(accumulated)
@@ -344,12 +356,7 @@ def _merge_dynamic_bias_provenance(
         values = episode.get(key, [])
         if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
             raise ValueError(f"dynamic_bias provenance {key} must be a list of strings")
-        if key in _DYNAMIC_BIAS_ORDERED_JOINT_LIST_FIELDS:
-            combined = list(result.get(key, ()))
-            combined.extend(value for value in values if value not in combined)
-            result[key] = combined
-        else:
-            result[key] = sorted(set(result.get(key, ())).union(values))
+        result[key] = sorted(set(result.get(key, ())).union(values))
     return result
 
 
@@ -368,35 +375,66 @@ def _load_sequences(
                 loader_columns.append(required)
 
     provenance: dict[str, Any] | None = None
+    mapping_requests = [
+        {
+            "mapping_index": index,
+            "requested_joint_names": list(mapping.input_joints),
+        }
+        for index, mapping in enumerate(job.mappings)
+    ]
 
-    def merge_provenance(source: TrainingSource, episode: TrainingEpisode) -> None:
+    def merge_provenance(
+        source: TrainingSource,
+        mapping_index: int,
+        mapping: TrainingMapping,
+        episode: TrainingEpisode,
+    ) -> None:
         nonlocal provenance
         if "dynamic_bias" not in job.input_columns:
             return
         episode_provenance = episode.dynamic_bias_provenance
         if not isinstance(episode_provenance, Mapping):
             raise ValueError(f"{source.path} dynamic_bias episode is missing derivation provenance")
-        provenance = _merge_dynamic_bias_provenance(
-            provenance,
-            dict(episode_provenance),
-        )
+        requested = episode_provenance.get("requested_joint_names")
+        expected = list(mapping.input_joints)
+        if requested != expected:
+            raise ValueError(
+                f"{source.path} mapping {mapping_index} dynamic_bias provenance "
+                f"requested_joint_names must equal {expected}"
+            )
+        provenance = _merge_dynamic_bias_provenance(provenance, dict(episode_provenance))
 
-    def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
-        input_joints, output_joints = _runtime_axes(job)
+    def load_one(
+        source: TrainingSource,
+        mapping_index: int,
+        mapping: TrainingMapping,
+    ) -> tuple[np.ndarray, np.ndarray]:
         episode = load_training_episode(
             source,
-            input_joints=input_joints,
-            output_joints=output_joints,
+            mapping=mapping,
             input_columns=loader_columns,
             sample_dt_s=_sample_dt_s(job),
             dynamic_bias_provider=job.dynamic_bias_provider,
         )
-        merge_provenance(source, episode)
-        return _prepare_episode(job, episode, source=source)
+        merge_provenance(source, mapping_index, mapping, episode)
+        return _prepare_episode(
+            job,
+            episode,
+            source_name=f"{source.path} mapping {mapping_index}",
+        )
 
-    train = [load_one(source) for source in job.train_sources]
-    val = [load_one(source) for source in job.val_sources]
+    train = [
+        load_one(source, mapping_index, mapping)
+        for source in job.train_sources
+        for mapping_index, mapping in enumerate(job.mappings)
+    ]
+    val = [
+        load_one(source, mapping_index, mapping)
+        for source in job.val_sources
+        for mapping_index, mapping in enumerate(job.mappings)
+    ]
     if provenance is not None:
+        provenance["mapping_requests"] = mapping_requests
         existing = job.metadata.get("dynamic_bias_derivation")
         if existing is not None and existing != provenance:
             raise ValueError("configured dynamic_bias provenance does not match episode provenance")
@@ -447,7 +485,7 @@ def _normalization_stats(
         for index, column in enumerate(input_columns)
     }
     stats = {
-        "schema_version": 1,
+        "schema_version": 2,
         "input_columns": list(input_columns),
         "target_columns": [target_column],
         "normalization": {
@@ -558,17 +596,16 @@ def _run_epoch(torch, model, optimizer, loss_fn, sequences, hparams, *, train: b
 
 
 def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]:
-    input_joints, output_joints = _runtime_axes(job)
     semantic_target = _target_column(job)
     normalization = stats["normalization"]
     input_feature_specs = _input_feature_specs(job)
 
     runtime: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "model_type": "gru",
+        "group_name": job.group_name,
         "training_topology": _training_topology(job),
-        "joint_names": list(input_joints),
-        "output_joint_names": list(output_joints),
+        "joint_mappings": _joint_mappings(job),
         "input_columns": list(job.input_columns),
         "input_feature_specs": input_feature_specs,
         "target_columns": [semantic_target],
@@ -590,7 +627,7 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
             "source": "previous_target",
             "runtime_source": "previous_raw_network_output_pre_clamp",
             "initialization": "physical_zero",
-            "reset": "episode",
+            "reset_boundaries": ["recorded_episode", "joint_mapping"],
             "value_space": "physical_torque",
         }
 
@@ -643,8 +680,8 @@ def _fit_once(
         if len(features) != len(targets):
             raise ValueError("GRU input and target sequences must have the same row count")
     expected_input_size = sum(_feature_widths(job))
-    _, output_joints = _runtime_axes(job)
-    if input_size != expected_input_size or output_size != len(output_joints):
+    _, expected_output_size = _mapping_widths(job)
+    if input_size != expected_input_size or output_size != expected_output_size:
         raise ValueError("assembled GRU tensor dimensions do not match the configured joint axes")
     model = build_runtime_gru(
         input_size=input_size,
@@ -766,17 +803,20 @@ def _select_hparams(
 
 
 def _training_stats_metadata(job: TrainingJob) -> dict[str, Any]:
-    input_joints, output_joints = _runtime_axes(job)
+    mapping_count = len(job.mappings)
     return {
         **job.metadata,
         "model": job.model,
+        "group_name": job.group_name,
         "input_feature_specs": _input_feature_specs(job),
         "training_topology": _training_topology(job),
-        "input_joints": list(input_joints),
-        "output_joints": list(output_joints),
+        "joint_mappings": _joint_mappings(job),
         "data": {
             "train_source_count": len(job.train_sources),
             "val_source_count": len(job.val_sources),
+            "mapping_count": mapping_count,
+            "train_sequence_count": len(job.train_sources) * mapping_count,
+            "val_sequence_count": len(job.val_sources) * mapping_count,
             "n_streams": job.n_streams,
         },
     }
@@ -785,7 +825,7 @@ def _training_stats_metadata(job: TrainingJob) -> dict[str, Any]:
 def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
     train_raw, val_raw = _load_sequences(job)
     input_widths = _feature_widths(job)
-    output_width = len(_runtime_axes(job)[1])
+    _, output_width = _mapping_widths(job)
     target_column = _target_column(job)
     stats = _normalization_stats(
         train_raw,

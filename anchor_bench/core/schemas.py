@@ -29,6 +29,8 @@ from anchor_bench.core.run_schema import (
     SysIdDefaults,
     TrainingDefaults,
     TrainingFrictionBaseline,
+    TrainingGroup,
+    TrainingJointMapping,
     TrainingPDBaseline,
 )
 
@@ -190,6 +192,7 @@ class TrainActuatorRunConfig:
     model: str | None = None
     data: str | None = None
     output: str | None = None
+    groups: list[TrainingGroup] | None = None
     input_joints: JointSelection | str | None = None
     output_joints: JointSelection | str | None = None
     pd_kp: float | None = None
@@ -207,18 +210,32 @@ class TrainActuatorRunConfig:
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        for field_name in ("input_joints", "output_joints"):
-            value = getattr(self, field_name)
-            if value is not None:
-                object.__setattr__(self, field_name, parse_joint_selection(value))
+        input_joints = None if self.input_joints is None else parse_joint_selection(self.input_joints)
+        output_joints = None if self.output_joints is None else parse_joint_selection(self.output_joints)
+        selection = TrainingDefaults(
+            groups=self.groups,
+            input_joints=input_joints,
+            output_joints=output_joints,
+        )
+        object.__setattr__(self, "groups", selection.groups)
+        object.__setattr__(self, "input_joints", selection.input_joints)
+        object.__setattr__(self, "output_joints", selection.output_joints)
         if self.input_columns is not None:
             object.__setattr__(
                 self,
                 "input_columns",
                 parse_gru_columns(self.input_columns),
             )
-        if self.output_joints is not None and self.input_joints is None:
-            raise ValueError("input_joints is required when output_joints is configured")
+
+    @property
+    def resolved_groups(self) -> list[TrainingGroup]:
+        input_joints = None if self.input_joints is None else parse_joint_selection(self.input_joints)
+        output_joints = None if self.output_joints is None else parse_joint_selection(self.output_joints)
+        return TrainingDefaults(
+            groups=self.groups,
+            input_joints=input_joints,
+            output_joints=output_joints,
+        ).resolved_groups
 
 
 @dataclass(frozen=True)
@@ -262,6 +279,8 @@ __all__ = [
     "SysIdRunConfig",
     "TrainingDefaults",
     "TrainingFrictionBaseline",
+    "TrainingGroup",
+    "TrainingJointMapping",
     "TrainingPDBaseline",
     "TrainActuatorRunConfig",
 ]

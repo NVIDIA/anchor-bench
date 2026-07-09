@@ -207,6 +207,26 @@ training:
   seed: 42
 ```
 
+The top-level joint fields above are shorthand for one default group with one
+mapping. Use named groups when one invocation should produce multiple artifacts
+or one artifact should share weights across physical mappings:
+
+```yaml
+training:
+  model: gru
+  groups:
+    - name: shared_actuator
+      mappings:
+        - input_joints: [joint_1]
+          output_joints: [joint_1]
+        - input_joints: [joint_2]
+          output_joints: [joint_2]
+```
+
+One group produces one artifact. All of its mappings must have identical input
+and output widths. `input_joints: all` inside one mapping means one coupled
+all-joint input; it does not create shared SISO mappings.
+
 Use paths under `inputs/` for datasets and paths under `outputs/` for generated
 results. Keep `training:` neural defaults separate from `sysid:` CMA-ES policy.
 CLI arguments override these workflow defaults for one run. SysID records the

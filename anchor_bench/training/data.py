@@ -29,6 +29,25 @@ class TrainingSource:
 
 
 @dataclass(frozen=True)
+class TrainingMapping:
+    """One logical application of a group's shared actuator model."""
+
+    input_joints: tuple[str, ...]
+    output_joints: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        inputs = _ordered_unique(self.input_joints, label="input_joints")
+        outputs = _ordered_unique(self.output_joints, label="output_joints")
+        unknown_outputs = [name for name in outputs if name not in inputs]
+        if unknown_outputs:
+            raise ValueError(
+                "output_joints must be a subset of input_joints; not present: " + ", ".join(unknown_outputs)
+            )
+        object.__setattr__(self, "input_joints", inputs)
+        object.__setattr__(self, "output_joints", outputs)
+
+
+@dataclass(frozen=True)
 class FeatureBlock:
     """One time-aligned feature with explicit axes and channel semantics."""
 
@@ -81,8 +100,7 @@ class TrainingEpisode:
     """
 
     timestamps: np.ndarray
-    input_joints: tuple[str, ...]
-    output_joints: tuple[str, ...]
+    mapping: TrainingMapping
     feature_blocks: Mapping[str, FeatureBlock]
     target_torque: np.ndarray
     dynamic_bias_provenance: Mapping[str, Any] | None = field(default=None)
@@ -102,13 +120,10 @@ class TrainingEpisode:
             ndim=2,
             label="episode target torque",
         )
-        input_joints = _ordered_unique(self.input_joints, label="input_joints")
-        output_joints = _ordered_unique(self.output_joints, label="output_joints")
-        unknown_outputs = [name for name in output_joints if name not in input_joints]
-        if unknown_outputs:
-            raise ValueError(
-                "output_joints must be a subset of input_joints; not present: " + ", ".join(unknown_outputs)
-            )
+        if not isinstance(self.mapping, TrainingMapping):
+            raise TypeError("episode mapping must be a TrainingMapping")
+        input_joints = self.mapping.input_joints
+        output_joints = self.mapping.output_joints
         if len(target_torque) != len(timestamps):
             raise ValueError("episode target torque must have one row per timestamp")
         if target_torque.shape[1] != len(output_joints):
@@ -134,8 +149,6 @@ class TrainingEpisode:
             blocks[name] = block
 
         object.__setattr__(self, "timestamps", timestamps)
-        object.__setattr__(self, "input_joints", input_joints)
-        object.__setattr__(self, "output_joints", output_joints)
         object.__setattr__(self, "feature_blocks", MappingProxyType(blocks))
         object.__setattr__(self, "target_torque", target_torque)
         if self.dynamic_bias_provenance is not None:
@@ -144,6 +157,14 @@ class TrainingEpisode:
                 "dynamic_bias_provenance",
                 MappingProxyType(dict(self.dynamic_bias_provenance)),
             )
+
+    @property
+    def input_joints(self) -> tuple[str, ...]:
+        return self.mapping.input_joints
+
+    @property
+    def output_joints(self) -> tuple[str, ...]:
+        return self.mapping.output_joints
 
 
 def _readonly_array(
@@ -200,22 +221,17 @@ def _validate_episode_cadence(
 def assemble_training_episode(
     motion: MotionData,
     *,
-    input_joints: Sequence[str],
-    output_joints: Sequence[str] | None = None,
+    mapping: TrainingMapping,
     input_columns: Sequence[str] = DEFAULT_INPUT_COLUMNS,
     sample_dt_s: float,
     dynamic_bias_provider: DynamicBiasProvider | None = None,
 ) -> TrainingEpisode:
     """Assemble one coupled episode without changing its recorded state grid."""
 
-    inputs = _ordered_unique(input_joints, label="input_joints")
-    outputs = _ordered_unique(
-        output_joints if output_joints is not None else inputs,
-        label="output_joints",
-    )
-    unknown_outputs = [name for name in outputs if name not in inputs]
-    if unknown_outputs:
-        raise ValueError("output_joints must be a subset of input_joints; not present: " + ", ".join(unknown_outputs))
+    if not isinstance(mapping, TrainingMapping):
+        raise TypeError("mapping must be a TrainingMapping")
+    inputs = mapping.input_joints
+    outputs = mapping.output_joints
 
     requested_columns = tuple(str(column) for column in input_columns)
     duplicate_columns = sorted({column for column in requested_columns if requested_columns.count(column) > 1})
@@ -287,8 +303,7 @@ def assemble_training_episode(
     target_torque = motion.effort.interpolate(state_time).values[:, output_indices]
     return TrainingEpisode(
         timestamps=state_time,
-        input_joints=inputs,
-        output_joints=outputs,
+        mapping=mapping,
         feature_blocks=feature_blocks,
         target_torque=target_torque,
         dynamic_bias_provenance=dynamic_bias_provenance,
@@ -298,8 +313,7 @@ def assemble_training_episode(
 def load_training_episode(
     source: TrainingSource,
     *,
-    input_joints: Sequence[str],
-    output_joints: Sequence[str] | None = None,
+    mapping: TrainingMapping,
     input_columns: Sequence[str] = DEFAULT_INPUT_COLUMNS,
     sample_dt_s: float,
     dynamic_bias_provider: DynamicBiasProvider | None = None,
@@ -308,8 +322,7 @@ def load_training_episode(
 
     return assemble_training_episode(
         _load_training_motion(source.path),
-        input_joints=input_joints,
-        output_joints=output_joints,
+        mapping=mapping,
         input_columns=input_columns,
         sample_dt_s=sample_dt_s,
         dynamic_bias_provider=dynamic_bias_provider,

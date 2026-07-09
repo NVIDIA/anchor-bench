@@ -13,6 +13,7 @@ from anchor_bench.training.data import (
     FeatureBlock,
     FeatureDomain,
     TrainingEpisode,
+    TrainingMapping,
     assemble_training_episode,
 )
 from anchor_bench.training.dynamic_bias import DynamicBiasResult
@@ -176,8 +177,7 @@ class TrainingEpisodeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "timestamps must not be empty"):
             TrainingEpisode(
                 timestamps=np.array([], dtype=np.float64),
-                input_joints=("j0",),
-                output_joints=("j0",),
+                mapping=TrainingMapping(("j0",), ("j0",)),
                 feature_blocks={"position": block},
                 target_torque=np.zeros((0, 1), dtype=np.float32),
             )
@@ -190,8 +190,7 @@ class TrainingEpisodeContractTests(unittest.TestCase):
         )
         episode = TrainingEpisode(
             timestamps=np.array([0.0, 1.0]),
-            input_joints=("j0", "j1"),
-            output_joints=("j1",),
+            mapping=TrainingMapping(("j0", "j1"), ("j1",)),
             feature_blocks={"position": block},
             target_torque=np.zeros((2, 1), dtype=np.float32),
         )
@@ -207,26 +206,13 @@ class TrainingEpisodeContractTests(unittest.TestCase):
                 block,
             )
         with self.assertRaisesRegex(ValueError, "duplicate input_joints"):
-            TrainingEpisode(
-                timestamps=np.array([0.0, 1.0]),
-                input_joints=("j0", "j0"),
-                output_joints=("j0",),
-                feature_blocks={"position": block},
-                target_torque=np.zeros((2, 1), dtype=np.float32),
-            )
+            TrainingMapping(("j0", "j0"), ("j0",))
         with self.assertRaisesRegex(ValueError, "subset of input_joints"):
-            TrainingEpisode(
-                timestamps=np.array([0.0, 1.0]),
-                input_joints=("j0", "j1"),
-                output_joints=("missing",),
-                feature_blocks={"position": block},
-                target_torque=np.zeros((2, 1), dtype=np.float32),
-            )
+            TrainingMapping(("j0", "j1"), ("missing",))
         with self.assertRaisesRegex(ValueError, "input_joints axis has width"):
             TrainingEpisode(
                 timestamps=np.array([0.0, 1.0]),
-                input_joints=("j0",),
-                output_joints=("j0",),
+                mapping=TrainingMapping(("j0",), ("j0",)),
                 feature_blocks={"position": block},
                 target_torque=np.zeros((2, 1), dtype=np.float32),
             )
@@ -238,8 +224,7 @@ class TrainingEpisodeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one row per timestamp"):
             TrainingEpisode(
                 timestamps=np.array([0.0, 1.0]),
-                input_joints=("j0", "j1"),
-                output_joints=("j1",),
+                mapping=TrainingMapping(("j0", "j1"), ("j1",)),
                 feature_blocks={"position": short_block},
                 target_torque=np.zeros((2, 1), dtype=np.float32),
             )
@@ -262,13 +247,7 @@ class TrainingEpisodeContractTests(unittest.TestCase):
                     ValueError,
                     f"{label}.*non-empty strings",
                 ):
-                    TrainingEpisode(
-                        timestamps=np.array([0.0]),
-                        input_joints=input_joints,
-                        output_joints=output_joints,
-                        feature_blocks={"position": block},
-                        target_torque=np.zeros((1, 1), dtype=np.float32),
-                    )
+                    TrainingMapping(input_joints, output_joints)
         invalid_joint_collections = (
             cast(tuple[str, ...], "j0"),
             cast(tuple[str, ...], 1),
@@ -276,13 +255,7 @@ class TrainingEpisodeContractTests(unittest.TestCase):
         for input_joints in invalid_joint_collections:
             with self.subTest(input_joints=input_joints):
                 with self.assertRaisesRegex(ValueError, "ordered sequence"):
-                    TrainingEpisode(
-                        timestamps=np.array([0.0]),
-                        input_joints=input_joints,
-                        output_joints=("j0",),
-                        feature_blocks={"position": block},
-                        target_torque=np.zeros((1, 1), dtype=np.float32),
-                    )
+                    TrainingMapping(input_joints, ("j0",))
 
         invalid_feature_maps = (
             {"": block},
@@ -293,8 +266,7 @@ class TrainingEpisodeContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "feature names.*non-empty"):
                     TrainingEpisode(
                         timestamps=np.array([0.0]),
-                        input_joints=("j0",),
-                        output_joints=("j0",),
+                        mapping=TrainingMapping(("j0",), ("j0",)),
                         feature_blocks=feature_blocks,
                         target_torque=np.zeros((1, 1), dtype=np.float32),
                     )
@@ -305,8 +277,7 @@ class GRUEpisodeDataTests(unittest.TestCase):
         provider = _FakeBiasProvider()
         episode = assemble_training_episode(
             _motion(),
-            input_joints=["output", "context"],
-            output_joints=["output"],
+            mapping=TrainingMapping(("output", "context"), ("output",)),
             input_columns=[
                 "position",
                 "position_error",
@@ -370,14 +341,13 @@ class GRUEpisodeDataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "joints not found.*missing"):
             assemble_training_episode(
                 _motion(),
-                input_joints=["output", "missing"],
+                mapping=TrainingMapping(("output", "missing"), ("output",)),
                 sample_dt_s=1.0,
             )
         with self.assertRaisesRegex(ValueError, "subset of input_joints"):
             assemble_training_episode(
                 _motion(),
-                input_joints=["context"],
-                output_joints=["output"],
+                mapping=TrainingMapping(("context",), ("output",)),
                 sample_dt_s=1.0,
             )
 
@@ -385,13 +355,13 @@ class GRUEpisodeDataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "state cadence does not match"):
             assemble_training_episode(
                 _motion(state_time=[0.0, 1.0, 2.1]),
-                input_joints=["output"],
+                mapping=TrainingMapping(("output",), ("output",)),
                 sample_dt_s=1.0,
             )
         with self.assertRaisesRegex(ValueError, "requires a DynamicBiasProvider"):
             assemble_training_episode(
                 _motion(),
-                input_joints=["output"],
+                mapping=TrainingMapping(("output",), ("output",)),
                 input_columns=["dynamic_bias"],
                 sample_dt_s=1.0,
             )

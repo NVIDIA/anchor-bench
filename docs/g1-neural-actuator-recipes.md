@@ -47,6 +47,20 @@ anchor-bench train-actuator \
   --dry-run
 ```
 
+The CLI joint flags above are shorthand for one default group containing this
+one four-joint mapping. The equivalent declarative selection is:
+
+```yaml
+training:
+  groups:
+    - name: right_arm
+      mappings:
+        - input_joints:
+            [right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+          output_joints:
+            [right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+```
+
 A full-torque artifact predicts total effort. A consumer must apply full-torque
 actuator semantics rather than adding that output to an implicit PD result.
 

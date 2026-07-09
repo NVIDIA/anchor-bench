@@ -1,4 +1,3 @@
-
 import subprocess
 import sys
 import tempfile
@@ -71,6 +70,23 @@ class CliDryRunTests(unittest.TestCase):
         self.assertIn("--motion", result.stdout)
         self.assertIn("custom_figure8_with_camera", result.stdout)
 
+    def test_so101_default_training_plan_reports_shared_siso_group(self):
+        result = run_cli("train-actuator", "--robot", "so101", "--dry-run")
+
+        self.assertIn("name: so101_actuator", result.stdout)
+        self.assertIn("training_topology: siso", result.stdout)
+        self.assertIn("mapping_count: 6", result.stdout)
+        for joint in (
+            "Rotation",
+            "Pitch",
+            "Elbow",
+            "Wrist_Pitch",
+            "Wrist_Roll",
+            "Jaw",
+        ):
+            with self.subTest(joint=joint):
+                self.assertIn(f"- {joint}", result.stdout)
+        self.assertNotIn("- --input-joints", result.stdout)
 
     def test_train_actuator_dry_runs_for_pure_and_hybrid_gru(self):
         data = "inputs/datasets/so101/custom_figure8_with_camera"

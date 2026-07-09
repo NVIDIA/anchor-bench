@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,7 +24,22 @@ class RobotRegistryTests(unittest.TestCase):
         self.assertEqual(robot.spec.joint_names, ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"])
         self.assertTrue(robot.paths.actuators.exists())
         self.assertTrue(robot.paths.bounds.exists())
-        self.assertEqual(robot.run_config.training.input_joints, ["Rotation"])
+        self.assertIsNone(robot.run_config.training.input_joints)
+        groups = robot.run_config.training.groups
+        self.assertIsNotNone(groups)
+        assert groups is not None
+        self.assertEqual(["so101_actuator"], [group.name for group in groups])
+        self.assertEqual(
+            [
+                (["Rotation"], ["Rotation"]),
+                (["Pitch"], ["Pitch"]),
+                (["Elbow"], ["Elbow"]),
+                (["Wrist_Pitch"], ["Wrist_Pitch"]),
+                (["Wrist_Roll"], ["Wrist_Roll"]),
+                (["Jaw"], ["Jaw"]),
+            ],
+            [(mapping.input_joints, mapping.output_joints) for mapping in groups[0].mappings],
+        )
         self.assertEqual(validate_robot("so101"), [])
 
     def test_g1_resolves_right_arm_training_defaults(self):

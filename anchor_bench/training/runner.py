@@ -19,14 +19,24 @@ from anchor_bench.core.schemas import TrainActuatorRunConfig
 from anchor_bench.robots.registry import get_robot
 from anchor_bench.training.data import (
     DEFAULT_INPUT_COLUMNS,
+    TrainingMapping,
     discover_training_sources,
     split_training_sources,
 )
 
 
-
-
 _MODEL_CHOICES = {"gru", "hybrid_residual"}
+
+
+@dataclass(frozen=True)
+class ResolvedTrainingGroup:
+    name: str
+    mappings: tuple[TrainingMapping, ...]
+    pd_kp: float | None
+    pd_kd: float | None
+    friction_dry: float | None
+    friction_viscous: float | None
+    config_sources: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -35,13 +45,9 @@ class ResolvedTrainActuatorRunConfig:
     model: str
     data: str
     output: str
-    input_joints: list[str]
-    output_joints: list[str]
+    groups: tuple[ResolvedTrainingGroup, ...]
+    joint_selection_mode: str
     sample_dt_s: float
-    pd_kp: float | None
-    pd_kd: float | None
-    friction_dry: float | None
-    friction_viscous: float | None
     dry_run: bool
     skip_optuna: bool
     trials: int
@@ -84,10 +90,7 @@ def _canonical_joint_list(bundle: Any, values: Sequence[Any], *, label: str) -> 
         raise ValueError(f"{label} must contain at least one joint")
     duplicates = sorted({joint for joint in joints if joints.count(joint) > 1})
     if duplicates:
-        raise ValueError(
-            f"{label} contains duplicate joints after alias resolution: "
-            + ", ".join(duplicates)
-        )
+        raise ValueError(f"{label} contains duplicate joints after alias resolution: " + ", ".join(duplicates))
     return joints
 
 
@@ -108,55 +111,145 @@ def _resolved_joint_list(
     return _canonical_joint_list(bundle, value, label=label)
 
 
-def _resolve_joint_selection(
-    config: TrainActuatorRunConfig,
-    training_cfg: Any,
+def _resolve_mapping_values(
     bundle: Any,
-) -> tuple[list[str], list[str], dict[str, str]]:
-    sources: dict[str, str] = {}
-    cli_selection = config.input_joints is not None or config.output_joints is not None
-    owner = config if cli_selection else training_cfg
-    source = "cli" if cli_selection else "run.yaml"
-    raw_inputs = owner.input_joints
-    raw_outputs = owner.output_joints
-
-    if raw_inputs is None:
-        raise ValueError("training requires input_joints")
-    input_joints = _resolved_joint_list(bundle, raw_inputs, label="input_joints")
+    raw_inputs: Any,
+    raw_outputs: Any,
+    *,
+    label: str,
+) -> TrainingMapping:
+    input_joints = _resolved_joint_list(
+        bundle,
+        raw_inputs,
+        label=f"{label}.input_joints",
+    )
     output_joints = (
         list(input_joints)
         if raw_outputs is None
         else _resolved_joint_list(
             bundle,
             raw_outputs,
-            label="output_joints",
+            label=f"{label}.output_joints",
             all_joints=input_joints,
         )
     )
     missing = [joint for joint in output_joints if joint not in input_joints]
     if missing:
-        raise ValueError(
-            "output_joints must be a subset of input_joints; missing: "
-            + ", ".join(missing)
-        )
-    sources.update(
-        {
-            "input_joints": source,
-            "output_joints": source if raw_outputs is not None else "input_joints",
-        }
+        raise ValueError(f"{label}.output_joints must be a subset of input_joints; missing: " + ", ".join(missing))
+    return TrainingMapping(
+        input_joints=tuple(input_joints),
+        output_joints=tuple(output_joints),
     )
-    return input_joints, output_joints, sources
 
 
-def _training_topology(
-    input_joints: Sequence[str],
-    output_joints: Sequence[str],
-) -> str:
-    if len(input_joints) == 1:
+def _validate_resolved_group(
+    name: str,
+    mappings: Sequence[TrainingMapping],
+) -> tuple[TrainingMapping, ...]:
+    if not mappings:
+        raise ValueError(f"training group {name!r} requires at least one mapping")
+    input_width = len(mappings[0].input_joints)
+    output_width = len(mappings[0].output_joints)
+    for index, mapping in enumerate(mappings[1:], start=1):
+        if len(mapping.input_joints) != input_width or len(mapping.output_joints) != output_width:
+            raise ValueError(
+                f"training group {name!r} mapping {index} has shape "
+                f"{len(mapping.input_joints)}->{len(mapping.output_joints)}; "
+                f"expected {input_width}->{output_width}"
+            )
+    identities = [(mapping.input_joints, mapping.output_joints) for mapping in mappings]
+    duplicates = sorted({identity for identity in identities if identities.count(identity) > 1})
+    if duplicates:
+        raise ValueError(f"training group {name!r} contains duplicate mappings")
+    return tuple(mappings)
+
+
+def _resolve_joint_groups(
+    config: TrainActuatorRunConfig,
+    training_cfg: Any,
+    bundle: Any,
+) -> tuple[list[tuple[str, tuple[TrainingMapping, ...]]], str, dict[str, str]]:
+    sources: dict[str, str] = {}
+    cli_selection = config.input_joints is not None or config.output_joints is not None
+    programmatic_groups = getattr(config, "groups", None)
+    if cli_selection and programmatic_groups:
+        raise ValueError("groups cannot be combined with input_joints or output_joints")
+
+    if cli_selection:
+        if config.input_joints is None:
+            raise ValueError("input_joints is required when output_joints is configured")
+        mapping = _resolve_mapping_values(
+            bundle,
+            config.input_joints,
+            config.output_joints,
+            label="training.groups[0].mappings[0]",
+        )
+        sources.update(
+            {
+                "groups": "cli",
+                "input_joints": "cli",
+                "output_joints": ("cli" if config.output_joints is not None else "input_joints"),
+            }
+        )
+        return [("default", (mapping,))], "shorthand", sources
+
+    if programmatic_groups:
+        raw_groups = programmatic_groups
+        source = "api"
+        mode = "groups"
+    else:
+        raw_groups = training_cfg.resolved_groups
+        source = "run.yaml"
+        mode = "groups" if training_cfg.groups is not None else "shorthand"
+
+    if not raw_groups:
+        raise ValueError("training requires groups or input_joints")
+
+    resolved: list[tuple[str, tuple[TrainingMapping, ...]]] = []
+    names: set[str] = set()
+    for group_index, raw_group in enumerate(raw_groups):
+        name = str(raw_group.name)
+        if name in names:
+            raise ValueError(f"duplicate training group name {name!r}")
+        names.add(name)
+        mappings = [
+            _resolve_mapping_values(
+                bundle,
+                raw_mapping.input_joints,
+                raw_mapping.output_joints,
+                label=f"training.groups[{group_index}].mappings[{mapping_index}]",
+            )
+            for mapping_index, raw_mapping in enumerate(raw_group.mappings)
+        ]
+        resolved.append((name, _validate_resolved_group(name, mappings)))
+
+    sources["groups"] = source
+    if mode == "shorthand":
+        sources["input_joints"] = source
+        raw_output = raw_groups[0].mappings[0].output_joints
+        sources["output_joints"] = source if raw_output is not None else "input_joints"
+    return resolved, mode, sources
+
+
+def _training_topology(mapping: TrainingMapping) -> str:
+    if len(mapping.input_joints) == 1:
         return "siso"
-    if len(output_joints) == 1:
+    if len(mapping.output_joints) == 1:
         return "miso"
     return "mimo"
+
+
+def _ordered_mapping_joints(
+    mappings: Sequence[TrainingMapping],
+    *,
+    domain: str,
+) -> list[str]:
+    joints: list[str] = []
+    for mapping in mappings:
+        values = mapping.input_joints if domain == "input_joints" else mapping.output_joints
+        joints.extend(joint for joint in values if joint not in joints)
+    return joints
+
 
 def _actuator_for_joint(spec: Any, joint: str) -> Any:
     matches = [actuator for actuator in spec.actuators if joint in actuator.joints]
@@ -164,9 +257,7 @@ def _actuator_for_joint(spec: Any, joint: str) -> Any:
         raise ValueError(f"actuator YAML has no actuator covering joint {joint!r}")
     if len(matches) > 1:
         names = ", ".join(actuator.name for actuator in matches)
-        raise ValueError(
-            f"actuator YAML has multiple actuators covering joint {joint!r}: {names}"
-        )
+        raise ValueError(f"actuator YAML has multiple actuators covering joint {joint!r}: {names}")
     return matches[0]
 
 
@@ -208,11 +299,7 @@ def _infer_uniform_baseline(
 
     for joint in joints:
         actuator = _actuator_for_joint(spec, joint)
-        values = (
-            actuator.controller.parameters
-            if kind == "pd"
-            else actuator.physical_parameters
-        )
+        values = actuator.controller.parameters if kind == "pd" else actuator.physical_parameters
         first_values.append(
             (
                 joint,
@@ -236,14 +323,9 @@ def _infer_uniform_baseline(
 
     def uniform(label: str, values: list[tuple[str, float]]) -> float:
         first = values[0][1]
-        if any(
-            not math.isclose(value, first, rel_tol=1.0e-9, abs_tol=1.0e-12)
-            for _, value in values[1:]
-        ):
+        if any(not math.isclose(value, first, rel_tol=1.0e-9, abs_tol=1.0e-12) for _, value in values[1:]):
             details = ", ".join(f"{joint}={value}" for joint, value in values)
-            raise ValueError(
-                f"actuator YAML {label} is nonuniform across selected joints: {details}"
-            )
+            raise ValueError(f"actuator YAML {label} is nonuniform across selected joints: {details}")
         return first
 
     return uniform(first_label, first_values), uniform(second_label, second_values)
@@ -263,9 +345,7 @@ def _resolve_baseline_pair(
     has_first = explicit_first is not None
     has_second = explicit_second is not None
     if has_first != has_second:
-        raise ValueError(
-            f"{explicit_flags[0]} and {explicit_flags[1]} must be provided together"
-        )
+        raise ValueError(f"{explicit_flags[0]} and {explicit_flags[1]} must be provided together")
     if has_first:
         return (
             _nonnegative_float(explicit_flags[0], explicit_first),
@@ -321,32 +401,24 @@ def resolve_train_actuator_run_config(
         None,
         "--output",
     )
-    input_joints, output_joints, joint_sources = _resolve_joint_selection(
+    raw_groups, joint_selection_mode, joint_sources = _resolve_joint_groups(
         config,
         training_cfg,
         bundle,
     )
     sources.update(joint_sources)
 
-    input_columns = parse_gru_columns(
-        select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS)
-    )
+    input_columns = parse_gru_columns(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
 
     timing = resolve_simulation_timing(
         bundle.run_config.simulation,
         f"{bundle.paths.run}.simulation",
     )
     sample_dt_s = timing.control_dt
-    sources["sample_dt_s"] = (
-        "run.yaml"
-        if bundle.run_config.simulation.control_freq is not None
-        else "fallback"
-    )
+    sources["sample_dt_s"] = "run.yaml" if bundle.run_config.simulation.control_freq is not None else "fallback"
 
     pd_required = model == "hybrid_residual" or "solver_pd" in input_columns
     friction_required = model == "hybrid_residual"
-    pd_joints = input_joints if "solver_pd" in input_columns else output_joints
-    friction_joints = output_joints
     actuator_spec: Any | None = None
 
     def infer(kind: str, joints: Sequence[str]) -> tuple[float, float]:
@@ -355,41 +427,57 @@ def resolve_train_actuator_run_config(
             actuator_spec = load_actuator_file(bundle.paths.actuators)
         return _infer_uniform_baseline(actuator_spec, joints, kind=kind)
 
-    pd_kp, pd_kd, pd_source = _resolve_baseline_pair(
-        label="pd_baseline",
-        explicit_first=config.pd_kp,
-        explicit_second=config.pd_kd,
-        explicit_flags=("--pd-kp", "--pd-kd"),
-        configured=training_cfg.pd_baseline,
-        configured_fields=("kp", "kd"),
-        required=pd_required,
-        infer=lambda: infer("pd", pd_joints),
-    )
-    friction_dry, friction_viscous, friction_source = _resolve_baseline_pair(
-        label="friction_baseline",
-        explicit_first=config.friction_dry,
-        explicit_second=config.friction_viscous,
-        explicit_flags=("--friction-dry", "--friction-viscous"),
-        configured=training_cfg.friction_baseline,
-        configured_fields=("dry", "viscous"),
-        required=friction_required,
-        infer=lambda: infer("friction", friction_joints),
-    )
-    sources["pd_baseline"] = pd_source
-    sources["friction_baseline"] = friction_source
+    groups: list[ResolvedTrainingGroup] = []
+    for group_name, mappings in raw_groups:
+        pd_domain = "input_joints" if "solver_pd" in input_columns else "output_joints"
+        pd_joints = _ordered_mapping_joints(mappings, domain=pd_domain)
+        friction_joints = _ordered_mapping_joints(
+            mappings,
+            domain="output_joints",
+        )
+        pd_kp, pd_kd, pd_source = _resolve_baseline_pair(
+            label="pd_baseline",
+            explicit_first=config.pd_kp,
+            explicit_second=config.pd_kd,
+            explicit_flags=("--pd-kp", "--pd-kd"),
+            configured=training_cfg.pd_baseline,
+            configured_fields=("kp", "kd"),
+            required=pd_required,
+            infer=lambda joints=pd_joints: infer("pd", joints),
+        )
+        friction_dry, friction_viscous, friction_source = _resolve_baseline_pair(
+            label="friction_baseline",
+            explicit_first=config.friction_dry,
+            explicit_second=config.friction_viscous,
+            explicit_flags=("--friction-dry", "--friction-viscous"),
+            configured=training_cfg.friction_baseline,
+            configured_fields=("dry", "viscous"),
+            required=friction_required,
+            infer=lambda joints=friction_joints: infer("friction", joints),
+        )
+        groups.append(
+            ResolvedTrainingGroup(
+                name=group_name,
+                mappings=mappings,
+                pd_kp=pd_kp,
+                pd_kd=pd_kd,
+                friction_dry=friction_dry,
+                friction_viscous=friction_viscous,
+                config_sources={
+                    "pd_baseline": pd_source,
+                    "friction_baseline": friction_source,
+                },
+            )
+        )
 
     return ResolvedTrainActuatorRunConfig(
         robot=config.robot,
         model=model,
         data=resolve_repo_path_text(data),
         output=resolve_repo_path_text(output),
-        input_joints=input_joints,
-        output_joints=output_joints,
+        groups=tuple(groups),
+        joint_selection_mode=joint_selection_mode,
         sample_dt_s=sample_dt_s,
-        pd_kp=pd_kp,
-        pd_kd=pd_kd,
-        friction_dry=friction_dry,
-        friction_viscous=friction_viscous,
         dry_run=config.dry_run,
         skip_optuna=bool(select("skip_optuna", config.skip_optuna, True)),
         trials=_positive_int("trials", select("trials", config.trials, 20)),
@@ -423,8 +511,10 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         "--data",
         resolved.data,
     ]
-    command.extend(("--input-joints", ",".join(resolved.input_joints)))
-    command.extend(("--output-joints", ",".join(resolved.output_joints)))
+    if resolved.joint_selection_mode == "shorthand":
+        mapping = resolved.groups[0].mappings[0]
+        command.extend(("--input-joints", ",".join(mapping.input_joints)))
+        command.extend(("--output-joints", ",".join(mapping.output_joints)))
     command.extend(
         (
             "--output",
@@ -445,19 +535,34 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
             ",".join(resolved.input_columns),
         )
     )
-    if resolved.pd_kp is not None:
-        assert resolved.pd_kd is not None
-        command.extend(("--pd-kp", str(resolved.pd_kp), "--pd-kd", str(resolved.pd_kd)))
-    if resolved.friction_dry is not None:
-        assert resolved.friction_viscous is not None
-        command.extend(
-            (
-                "--friction-dry",
-                str(resolved.friction_dry),
-                "--friction-viscous",
-                str(resolved.friction_viscous),
-            )
-        )
+    emit_pd = resolved.joint_selection_mode == "shorthand" or all(
+        group.config_sources["pd_baseline"] == "cli" for group in resolved.groups
+    )
+    if emit_pd:
+        pd_pairs = {(group.pd_kp, group.pd_kd) for group in resolved.groups}
+        if len(pd_pairs) == 1:
+            pd_kp, pd_kd = pd_pairs.pop()
+            if pd_kp is not None:
+                assert pd_kd is not None
+                command.extend(("--pd-kp", str(pd_kp), "--pd-kd", str(pd_kd)))
+
+    emit_friction = resolved.joint_selection_mode == "shorthand" or all(
+        group.config_sources["friction_baseline"] == "cli" for group in resolved.groups
+    )
+    if emit_friction:
+        friction_pairs = {(group.friction_dry, group.friction_viscous) for group in resolved.groups}
+        if len(friction_pairs) == 1:
+            friction_dry, friction_viscous = friction_pairs.pop()
+            if friction_dry is not None:
+                assert friction_viscous is not None
+                command.extend(
+                    (
+                        "--friction-dry",
+                        str(friction_dry),
+                        "--friction-viscous",
+                        str(friction_viscous),
+                    )
+                )
     if resolved.skip_optuna:
         command.append("--skip-optuna")
     if resolved.dry_run:
@@ -474,22 +579,40 @@ def build_resolved_train_actuator_command(
         "promote only non-weight metadata into inputs/actuator_models/<robot>/ when needed",
     ]
     if resolved.model == "hybrid_residual":
-        notes.append(
-            "hybrid_residual trains residual torque after subtracting native PD and friction terms"
-        )
+        notes.append("hybrid_residual trains residual torque after subtracting native PD and friction terms")
     if "dynamic_bias" in resolved.input_columns:
-        notes.append(
-            "dynamic_bias is evaluated lazily with Newton SolverMuJoCo only during training execution"
-        )
+        notes.append("dynamic_bias is evaluated lazily with Newton SolverMuJoCo only during training execution")
+
+    group_metadata: list[dict[str, Any]] = []
+    for group in resolved.groups:
+        payload: dict[str, Any] = {
+            "name": group.name,
+            "training_topology": _training_topology(group.mappings[0]),
+            "mapping_count": len(group.mappings),
+            "mappings": [
+                {
+                    "input_joints": list(mapping.input_joints),
+                    "output_joints": list(mapping.output_joints),
+                }
+                for mapping in group.mappings
+            ],
+            "config_sources": group.config_sources,
+        }
+        if group.pd_kp is not None:
+            payload["pd_baseline"] = {
+                "kp": group.pd_kp,
+                "kd": group.pd_kd,
+            }
+        if group.friction_dry is not None:
+            payload["friction_baseline"] = {
+                "dry": group.friction_dry,
+                "viscous": group.friction_viscous,
+            }
+        group_metadata.append(payload)
 
     metadata: dict[str, Any] = {
         "model": resolved.model,
-        "training_topology": _training_topology(
-            resolved.input_joints,
-            resolved.output_joints,
-        ),
-        "input_joints": resolved.input_joints,
-        "output_joints": resolved.output_joints,
+        "groups": group_metadata,
         "sample_dt_s": resolved.sample_dt_s,
         "data": resolved.data,
         "output": resolved.output,
@@ -502,16 +625,6 @@ def build_resolved_train_actuator_command(
             "ignored_weight_patterns": ["*.pt", "*.pth", "*.onnx"],
         },
     }
-    if resolved.pd_kp is not None:
-        metadata["pd_baseline"] = {
-            "kp": resolved.pd_kp,
-            "kd": resolved.pd_kd,
-        }
-    if resolved.friction_dry is not None:
-        metadata["friction_baseline"] = {
-            "dry": resolved.friction_dry,
-            "viscous": resolved.friction_viscous,
-        }
     return CommandPlan(
         workflow="train-actuator",
         robot=resolved.robot,
@@ -522,27 +635,25 @@ def build_resolved_train_actuator_command(
     )
 
 
-def _residual_physics(resolved: ResolvedTrainActuatorRunConfig) -> Any | None:
-    needs_physics = (
-        resolved.model == "hybrid_residual"
-        or "solver_pd" in resolved.input_columns
-    )
+def _residual_physics(
+    resolved: ResolvedTrainActuatorRunConfig,
+    group: ResolvedTrainingGroup,
+) -> Any | None:
+    needs_physics = resolved.model == "hybrid_residual" or "solver_pd" in resolved.input_columns
     if not needs_physics:
         return None
-    if resolved.pd_kp is None or resolved.pd_kd is None:
+    if group.pd_kp is None or group.pd_kd is None:
         raise ValueError("residual and solver_pd training require a PD baseline")
-    if resolved.model == "hybrid_residual" and (
-        resolved.friction_dry is None or resolved.friction_viscous is None
-    ):
+    if resolved.model == "hybrid_residual" and (group.friction_dry is None or group.friction_viscous is None):
         raise ValueError("hybrid residual training requires a friction baseline")
 
     from anchor_bench.training.trainer import ResidualPhysics
 
     return ResidualPhysics(
-        stiffness=resolved.pd_kp,
-        damping=resolved.pd_kd,
-        dry_friction=resolved.friction_dry or 0.0,
-        viscous_friction=resolved.friction_viscous or 0.0,
+        stiffness=group.pd_kp,
+        damping=group.pd_kd,
+        dry_friction=group.friction_dry or 0.0,
+        viscous_friction=group.friction_viscous or 0.0,
     )
 
 
@@ -559,8 +670,6 @@ def run_resolved_train_actuator(
     sources = discover_training_sources(resolved.data)
     train_sources, val_sources = split_training_sources(sources, seed=resolved.seed)
 
-    residual_physics = _residual_physics(resolved)
-
     dynamic_bias_provider: Any | None = None
     if "dynamic_bias" in resolved.input_columns:
         from anchor_bench.training.dynamic_bias import (
@@ -569,45 +678,53 @@ def run_resolved_train_actuator(
 
         dynamic_bias_provider = NewtonMuJoCoDynamicBiasProvider(bundle)
 
-    metadata: dict[str, Any] = {
-        "robot": resolved.robot,
-        "config_sources": resolved.config_sources,
-        "skip_optuna": resolved.skip_optuna,
-        "noise_std": resolved.noise_std,
-        "sample_dt_s": resolved.sample_dt_s,
-    }
-    if residual_physics is not None:
-        metadata["physics_params"] = residual_physics.__dict__
+    artifact_metadata: dict[str, Any] = {}
+    for group in resolved.groups:
+        residual_physics = _residual_physics(resolved, group)
+        metadata: dict[str, Any] = {
+            "robot": resolved.robot,
+            "config_sources": {
+                **resolved.config_sources,
+                **group.config_sources,
+            },
+            "skip_optuna": resolved.skip_optuna,
+            "noise_std": resolved.noise_std,
+            "sample_dt_s": resolved.sample_dt_s,
+        }
+        if residual_physics is not None:
+            metadata["physics_params"] = residual_physics.__dict__
 
-    artifacts = train_stateful_gru(
-        TrainingJob(
-            model=resolved.model,
-            train_sources=train_sources,
-            val_sources=val_sources,
-            output_dir=Path(resolved.output),
-            input_columns=resolved.input_columns,
-            seed=resolved.seed,
-            final_epochs=resolved.final_epochs,
-            trial_epochs=resolved.trial_epochs,
-            trials=resolved.trials,
-            skip_optuna=resolved.skip_optuna,
-            n_streams=resolved.n_streams,
-            noise_std=resolved.noise_std,
-            residual_physics=residual_physics,
-            metadata=metadata,
-            input_joints=resolved.input_joints,
-            output_joints=resolved.output_joints,
-            sample_dt_s=resolved.sample_dt_s,
-            dynamic_bias_provider=dynamic_bias_provider,
+        artifacts = train_stateful_gru(
+            TrainingJob(
+                model=resolved.model,
+                group_name=group.name,
+                mappings=group.mappings,
+                train_sources=train_sources,
+                val_sources=val_sources,
+                output_dir=Path(resolved.output),
+                input_columns=resolved.input_columns,
+                seed=resolved.seed,
+                final_epochs=resolved.final_epochs,
+                trial_epochs=resolved.trial_epochs,
+                trials=resolved.trials,
+                skip_optuna=resolved.skip_optuna,
+                n_streams=resolved.n_streams,
+                noise_std=resolved.noise_std,
+                residual_physics=residual_physics,
+                metadata=metadata,
+                sample_dt_s=resolved.sample_dt_s,
+                dynamic_bias_provider=dynamic_bias_provider,
+            )
         )
-    )
+        artifact_metadata[group.name] = {
+            "checkpoint": str(artifacts.checkpoint_path),
+            "stats": str(artifacts.stats_path),
+            "network": str(artifacts.network_path),
+            "metrics": artifacts.metrics,
+        }
+
     extra_metadata = dict(plan.metadata or {})
-    extra_metadata["artifacts"] = {
-        "checkpoint": str(artifacts.checkpoint_path),
-        "stats": str(artifacts.stats_path),
-        "network": str(artifacts.network_path),
-        "metrics": artifacts.metrics,
-    }
+    extra_metadata["artifacts"] = artifact_metadata
     return CommandPlan(
         workflow=plan.workflow,
         robot=plan.robot,

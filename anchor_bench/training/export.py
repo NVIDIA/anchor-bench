@@ -15,9 +15,7 @@ def _import_torch():
     try:
         import torch
     except Exception as exc:  # pragma: no cover - environment-specific
-        raise RuntimeError(
-            "PyTorch is required to export GRU actuator checkpoints."
-        ) from exc
+        raise RuntimeError("PyTorch is required to export GRU actuator checkpoints.") from exc
     return torch
 
 
@@ -66,7 +64,7 @@ def _positive_int(value: Any, name: str) -> int:
 def _name_list(value: Any, name: str) -> list[str]:
     if not isinstance(value, list) or not value:
         raise ValueError(f"runtime_metadata.{name} must be a non-empty list")
-    if any(not isinstance(item, str) or not item for item in value):
+    if any(not isinstance(item, str) or not item.strip() for item in value):
         raise ValueError(f"runtime_metadata.{name} entries must be non-empty strings")
     if len(set(value)) != len(value):
         raise ValueError(f"runtime_metadata.{name} must not contain duplicates")
@@ -114,21 +112,18 @@ def _finite_number(value: Any, name: str, *, nonnegative: bool = False) -> float
 def _input_feature_widths(
     metadata: Mapping[str, Any],
     *,
-    input_joints: Sequence[str],
-    output_joints: Sequence[str],
+    input_width: int,
+    output_width: int,
     columns: Sequence[str],
 ) -> list[int]:
     specs = metadata.get("input_feature_specs")
     if not isinstance(specs, list) or len(specs) != len(columns):
-        raise ValueError(
-            "runtime_metadata.input_feature_specs must be an ordered list "
-            "matching input_columns"
-        )
+        raise ValueError("runtime_metadata.input_feature_specs must be an ordered list matching input_columns")
 
     widths: list[int] = []
     axis_widths = {
-        "input_joints": len(input_joints),
-        "output_joints": len(output_joints),
+        "input_joints": input_width,
+        "output_joints": output_width,
     }
     required_keys = {"name", "domain", "channels"}
     for index, (spec, column) in enumerate(zip(specs, columns, strict=True)):
@@ -136,43 +131,74 @@ def _input_feature_widths(
         if not isinstance(spec, Mapping):
             raise ValueError(f"{label} must be a mapping")
         if set(spec) != required_keys:
-            raise ValueError(
-                f"{label} must contain exactly name, domain, and channels"
-            )
+            raise ValueError(f"{label} must contain exactly name, domain, and channels")
 
         name = spec.get("name")
         if name != column:
-            raise ValueError(
-                "runtime_metadata.input_feature_specs names must match "
-                "input_columns in order"
-            )
+            raise ValueError("runtime_metadata.input_feature_specs names must match input_columns in order")
 
         domain = spec.get("domain")
         if not isinstance(domain, str) or domain not in _SUPPORTED_FEATURE_DOMAINS:
-            raise ValueError(
-                f"{label}.domain must be one of "
-                + ", ".join(sorted(_SUPPORTED_FEATURE_DOMAINS))
-            )
+            raise ValueError(f"{label}.domain must be one of " + ", ".join(sorted(_SUPPORTED_FEATURE_DOMAINS)))
 
         channels = spec.get("channels")
         if not isinstance(channels, list) or not channels:
             raise ValueError(f"{label}.channels must be a non-empty list")
         if any(not isinstance(channel, str) or not channel for channel in channels):
-            raise ValueError(
-                f"{label}.channels entries must be non-empty strings"
-            )
+            raise ValueError(f"{label}.channels entries must be non-empty strings")
         if len(set(channels)) != len(channels):
             raise ValueError(f"{label}.channels must not contain duplicates")
-        if name == "previous_torque" and (
-            domain != "output_joints" or channels != ["value"]
-        ):
+        if name == "previous_torque" and (domain != "output_joints" or channels != ["value"]):
             raise ValueError(
                 "runtime_metadata.input_feature_specs previous_torque must use "
                 "domain='output_joints' and channels=['value']"
             )
+        if name != "previous_torque" and domain != "input_joints":
+            raise ValueError(f"runtime_metadata.input_feature_specs {name} must use domain='input_joints'")
         widths.append(axis_widths[domain] * len(channels))
 
     return widths
+
+
+def _joint_mappings(
+    metadata: Mapping[str, Any],
+) -> list[tuple[list[str], list[str]]]:
+    group_name = metadata.get("group_name")
+    if not isinstance(group_name, str) or not group_name.strip():
+        raise ValueError("runtime_metadata.group_name must be a non-empty string")
+
+    values = metadata.get("joint_mappings")
+    if not isinstance(values, list) or not values:
+        raise ValueError("runtime_metadata.joint_mappings must be a non-empty list")
+
+    mappings: list[tuple[list[str], list[str]]] = []
+    seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
+    input_width: int | None = None
+    output_width: int | None = None
+    required_keys = {"input_joints", "output_joints"}
+    for index, value in enumerate(values):
+        label = f"joint_mappings[{index}]"
+        if not isinstance(value, Mapping):
+            raise ValueError(f"runtime_metadata.{label} must be a mapping")
+        if set(value) != required_keys:
+            raise ValueError(f"runtime_metadata.{label} must contain exactly input_joints and output_joints")
+        inputs = _name_list(value.get("input_joints"), f"{label}.input_joints")
+        outputs = _name_list(value.get("output_joints"), f"{label}.output_joints")
+        if any(name not in inputs for name in outputs):
+            raise ValueError(f"runtime_metadata.{label}.output_joints must be a subset of input_joints")
+
+        if input_width is None:
+            input_width = len(inputs)
+            output_width = len(outputs)
+        elif len(inputs) != input_width or len(outputs) != output_width:
+            raise ValueError("runtime_metadata.joint_mappings must have identical input and output widths")
+
+        identity = (tuple(inputs), tuple(outputs))
+        if identity in seen:
+            raise ValueError("runtime_metadata.joint_mappings must not contain duplicates")
+        seen.add(identity)
+        mappings.append((inputs, outputs))
+    return mappings
 
 
 def _metadata_axes(
@@ -180,40 +206,38 @@ def _metadata_axes(
     *,
     input_size: int,
     output_size: int,
-) -> tuple[list[str], list[str], list[str], list[int], str]:
-    if metadata.get("schema_version") != 1 or metadata.get("model_type") != "gru":
-        raise ValueError("runtime_metadata must describe a schema-version-1 GRU")
-    input_joints = _name_list(metadata.get("joint_names"), "joint_names")
-    output_joints = _name_list(metadata.get("output_joint_names"), "output_joint_names")
-    if any(name not in input_joints for name in output_joints):
-        raise ValueError("runtime_metadata.output_joint_names must be a subset of joint_names")
+) -> tuple[list[tuple[list[str], list[str]]], list[str], list[int], str]:
+    if metadata.get("schema_version") != 2 or metadata.get("model_type") != "gru":
+        raise ValueError("runtime_metadata must describe a schema-version-2 GRU")
+    legacy_aliases = sorted({"joint_names", "output_joint_names"}.intersection(metadata))
+    if legacy_aliases:
+        raise ValueError(
+            "runtime_metadata schema-version-2 GRU must not contain legacy axis aliases: " + ", ".join(legacy_aliases)
+        )
+    mappings = _joint_mappings(metadata)
+    input_width = len(mappings[0][0])
+    output_width = len(mappings[0][1])
     columns = _name_list(metadata.get("input_columns"), "input_columns")
     unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
     if unsupported:
-        raise ValueError(
-            "runtime_metadata contains unsupported input features: " + ", ".join(unsupported)
-        )
+        raise ValueError("runtime_metadata contains unsupported input features: " + ", ".join(unsupported))
     targets = _name_list(metadata.get("target_columns"), "target_columns")
     if len(targets) != 1 or targets[0] not in {"torque", "torque_residual"}:
         raise ValueError("runtime_metadata.target_columns must contain one torque semantic")
     input_widths = _input_feature_widths(
         metadata,
-        input_joints=input_joints,
-        output_joints=output_joints,
+        input_width=input_width,
+        output_width=output_width,
         columns=columns,
     )
     expected_input_size = sum(input_widths)
     if input_size != expected_input_size:
-        raise ValueError(
-            f"checkpoint input_size is {input_size}, metadata requires {expected_input_size}"
-        )
-    if output_size != len(output_joints):
-        raise ValueError(
-            f"checkpoint output_size is {output_size}, metadata requires {len(output_joints)}"
-        )
+        raise ValueError(f"checkpoint input_size is {input_size}, metadata requires {expected_input_size}")
+    if output_size != output_width:
+        raise ValueError(f"checkpoint output_size is {output_size}, metadata requires {output_width}")
     if _finite_number(metadata.get("sample_dt_s"), "sample_dt_s") <= 0.0:
         raise ValueError("runtime_metadata.sample_dt_s must be finite and positive")
-    return input_joints, output_joints, columns, input_widths, targets[0]
+    return mappings, columns, input_widths, targets[0]
 
 
 def _validate_training_topology(
@@ -222,13 +246,7 @@ def _validate_training_topology(
     input_joints: Sequence[str],
     output_joints: Sequence[str],
 ) -> None:
-    expected = (
-        "siso"
-        if len(input_joints) == 1
-        else "miso"
-        if len(output_joints) == 1
-        else "mimo"
-    )
+    expected = "siso" if len(input_joints) == 1 else "miso" if len(output_joints) == 1 else "mimo"
     if metadata.get("training_topology") != expected:
         raise ValueError(
             "runtime_metadata.training_topology must be "
@@ -240,7 +258,7 @@ def _validate_training_topology(
 def _validate_normalization(
     metadata: Mapping[str, Any],
     *,
-    output_joints: Sequence[str],
+    output_width: int,
     columns: Sequence[str],
     input_widths: Sequence[int],
     target: str,
@@ -262,12 +280,12 @@ def _validate_normalization(
         )
     _finite_values(
         target_mean.get(target),
-        len(output_joints),
+        output_width,
         f"normalization.targets.mean.{target}",
     )
     _finite_values(
         target_std.get(target),
-        len(output_joints),
+        output_width,
         f"normalization.targets.std.{target}",
         positive=True,
     )
@@ -291,21 +309,41 @@ def _validate_feature_derivations(
     metadata: Mapping[str, Any],
     *,
     columns: Sequence[str],
-    input_joints: Sequence[str],
+    joint_mappings: Sequence[tuple[Sequence[str], Sequence[str]]],
 ) -> None:
     if "dynamic_bias" in columns:
-        derivation = _mapping(metadata.get("dynamic_bias_derivation"), "dynamic_bias_derivation")
-        if not isinstance(derivation.get("source"), str) or not derivation["source"]:
-            raise ValueError("runtime_metadata.dynamic_bias_derivation.source is required")
-        requested = _name_list(
-            derivation.get("requested_joint_names"),
-            "dynamic_bias_derivation.requested_joint_names",
+        derivation = _mapping(
+            metadata.get("dynamic_bias_derivation"),
+            "dynamic_bias_derivation",
         )
-        if set(requested) != set(input_joints):
+        source = derivation.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("runtime_metadata.dynamic_bias_derivation.source is required")
+        requests = derivation.get("mapping_requests")
+        if not isinstance(requests, list) or len(requests) != len(joint_mappings):
             raise ValueError(
-                "runtime_metadata.dynamic_bias_derivation.requested_joint_names "
-                "must match joint_names"
+                "runtime_metadata.dynamic_bias_derivation.mapping_requests must contain one entry per joint mapping"
             )
+        for index, (request, (input_joints, _)) in enumerate(zip(requests, joint_mappings, strict=True)):
+            label = f"dynamic_bias_derivation.mapping_requests[{index}]"
+            if not isinstance(request, Mapping):
+                raise ValueError(f"runtime_metadata.{label} must be a mapping")
+            if set(request) != {"mapping_index", "requested_joint_names"}:
+                raise ValueError(
+                    f"runtime_metadata.{label} must contain exactly mapping_index and requested_joint_names"
+                )
+            mapping_index = request.get("mapping_index")
+            if isinstance(mapping_index, bool) or mapping_index != index:
+                raise ValueError(f"runtime_metadata.{label}.mapping_index must be {index}")
+            requested = _name_list(
+                request.get("requested_joint_names"),
+                f"{label}.requested_joint_names",
+            )
+            if requested != list(input_joints):
+                raise ValueError(
+                    f"runtime_metadata.{label}.requested_joint_names must match "
+                    f"joint_mappings[{index}].input_joints in order"
+                )
     if "previous_torque" in columns:
         derivation = _mapping(
             metadata.get("previous_torque_derivation"),
@@ -315,7 +353,7 @@ def _validate_feature_derivations(
             "source": "previous_target",
             "runtime_source": "previous_raw_network_output_pre_clamp",
             "initialization": "physical_zero",
-            "reset": "episode",
+            "reset_boundaries": ["recorded_episode", "joint_mapping"],
             "value_space": "physical_torque",
         }
         if any(derivation.get(key) != value for key, value in expected.items()):
@@ -350,11 +388,12 @@ def _validate_runtime_metadata(
     input_size: int,
     output_size: int,
 ) -> None:
-    input_joints, output_joints, columns, input_widths, target = _metadata_axes(
+    joint_mappings, columns, input_widths, target = _metadata_axes(
         metadata,
         input_size=input_size,
         output_size=output_size,
     )
+    input_joints, output_joints = joint_mappings[0]
 
     _validate_training_topology(
         metadata,
@@ -364,7 +403,7 @@ def _validate_runtime_metadata(
 
     _validate_normalization(
         metadata,
-        output_joints=output_joints,
+        output_width=len(output_joints),
         columns=columns,
         input_widths=input_widths,
         target=target,
@@ -374,7 +413,7 @@ def _validate_runtime_metadata(
     _validate_feature_derivations(
         metadata,
         columns=columns,
-        input_joints=input_joints,
+        joint_mappings=joint_mappings,
     )
 
     _validate_baselines(metadata, columns=columns, target=target)
@@ -394,9 +433,7 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
         if not target_columns:
             raise ValueError(f"{source} checkpoint is missing target_columns")
         if "input_feature_specs" in checkpoint:
-            raise ValueError(
-                "checkpoint input_feature_specs requires non-null runtime_metadata"
-            )
+            raise ValueError("checkpoint input_feature_specs requires non-null runtime_metadata")
         input_size = _positive_int(
             checkpoint.get("input_size", len(input_columns)),
             "checkpoint input_size",
@@ -431,7 +468,11 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
     model.eval()
     scripted = torch.jit.script(model)
 
-    destination = Path(output_path) if output_path is not None else source.with_name(source.name.replace("_best.pt", "_network.pt"))
+    destination = (
+        Path(output_path)
+        if output_path is not None
+        else source.with_name(source.name.replace("_best.pt", "_network.pt"))
+    )
     if destination == source:
         destination = source.with_name(f"{source.stem}_network.pt")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -441,8 +482,6 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
         torch.jit.save(
             scripted,
             str(destination),
-            _extra_files={
-                "metadata.json": json.dumps(runtime_metadata, sort_keys=True, allow_nan=False)
-            },
+            _extra_files={"metadata.json": json.dumps(runtime_metadata, sort_keys=True, allow_nan=False)},
         )
     return destination

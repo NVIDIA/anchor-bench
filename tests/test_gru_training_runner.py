@@ -5,7 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from anchor_bench.core.run_schema import SimulationDefaults, TrainingDefaults
+from anchor_bench.core.run_schema import (
+    SimulationDefaults,
+    TrainingDefaults,
+    TrainingGroup,
+    TrainingJointMapping,
+)
 from anchor_bench.core.schemas import TrainActuatorRunConfig
 from anchor_bench.training.data import TrainingSource
 from anchor_bench.training.runner import (
@@ -36,6 +41,17 @@ def _bundle(training: TrainingDefaults) -> SimpleNamespace:
     )
 
 
+def _only_group(resolved):
+    assert len(resolved.groups) == 1
+    return resolved.groups[0]
+
+
+def _only_mapping(resolved):
+    group = _only_group(resolved)
+    assert len(group.mappings) == 1
+    return group.mappings[0]
+
+
 class TrainingRunnerResolutionTests(unittest.TestCase):
     def test_cli_joint_lists_resolve_aliases_and_override_run_defaults(self):
         resolved = resolve_train_actuator_run_config(
@@ -48,11 +64,12 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
             )
         )
 
+        mapping = _only_mapping(resolved)
         self.assertEqual(
-            ["right_shoulder_pitch", "right_elbow"],
-            resolved.input_joints,
+            ("right_shoulder_pitch", "right_elbow"),
+            mapping.input_joints,
         )
-        self.assertEqual(["right_elbow"], resolved.output_joints)
+        self.assertEqual(("right_elbow",), mapping.output_joints)
         self.assertEqual(0.002, resolved.sample_dt_s)
         self.assertEqual("cli", resolved.config_sources["input_joints"])
 
@@ -61,8 +78,7 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
         self.assertIn("--input-joints", plan.command)
         self.assertIn("right_shoulder_pitch,right_elbow", plan.command)
         self.assertIn("--output-joints", plan.command)
-        self.assertEqual("miso", plan.metadata["training_topology"])
-
+        self.assertEqual("miso", plan.metadata["groups"][0]["training_topology"])
 
     def test_cli_input_list_defaults_outputs_without_inheriting_run_outputs(self):
         training = TrainingDefaults(
@@ -82,8 +98,9 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(["joint_a"], resolved.input_joints)
-        self.assertEqual(["joint_a"], resolved.output_joints)
+        mapping = _only_mapping(resolved)
+        self.assertEqual(("joint_a",), mapping.input_joints)
+        self.assertEqual(("joint_a",), mapping.output_joints)
         self.assertEqual("input_joints", resolved.config_sources["output_joints"])
 
     def test_output_defaults_to_inputs_and_must_be_a_subset(self):
@@ -95,7 +112,8 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
                 dry_run=True,
             )
         )
-        self.assertEqual(resolved.input_joints, resolved.output_joints)
+        mapping = _only_mapping(resolved)
+        self.assertEqual(mapping.input_joints, mapping.output_joints)
 
         with self.assertRaisesRegex(ValueError, "must be a subset"):
             resolve_train_actuator_run_config(
@@ -143,33 +161,42 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(["joint_a", "joint_b"], all_outputs.input_joints)
-        self.assertEqual(["joint_a", "joint_b"], all_outputs.output_joints)
-        self.assertEqual(["joint_b"], subset.output_joints)
-        self.assertEqual(["joint_b"], subset_all_outputs.input_joints)
-        self.assertEqual(["joint_b"], subset_all_outputs.output_joints)
+        all_mapping = _only_mapping(all_outputs)
+        subset_mapping = _only_mapping(subset)
+        subset_all_mapping = _only_mapping(subset_all_outputs)
+        self.assertEqual(("joint_a", "joint_b"), all_mapping.input_joints)
+        self.assertEqual(("joint_a", "joint_b"), all_mapping.output_joints)
+        self.assertEqual(("joint_b",), subset_mapping.output_joints)
+        self.assertEqual(("joint_b",), subset_all_mapping.input_joints)
+        self.assertEqual(("joint_b",), subset_all_mapping.output_joints)
+        group_metadata = build_resolved_train_actuator_command(all_outputs).metadata["groups"][0]
         self.assertEqual(
             ["joint_a", "joint_b"],
-            build_resolved_train_actuator_command(all_outputs).metadata["input_joints"],
+            group_metadata["mappings"][0]["input_joints"],
         )
-        self.assertEqual(
-            "mimo",
-            build_resolved_train_actuator_command(all_outputs).metadata[
-                "training_topology"
-            ],
-        )
+        self.assertEqual("mimo", group_metadata["training_topology"])
 
-    def test_so101_defaults_to_explicit_rotation_siso(self):
-        resolved = resolve_train_actuator_run_config(
-            TrainActuatorRunConfig(robot="so101", dry_run=True)
-        )
+    def test_so101_defaults_to_one_shared_siso_group(self):
+        resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="so101", dry_run=True))
         plan = build_resolved_train_actuator_command(resolved)
 
-        self.assertEqual(["Rotation"], resolved.input_joints)
-        self.assertEqual(["Rotation"], resolved.output_joints)
-        selector_index = plan.command.index("--input-joints")
-        self.assertEqual("Rotation", plan.command[selector_index + 1])
-        self.assertEqual("siso", plan.metadata["training_topology"])
+        group = _only_group(resolved)
+        self.assertEqual("so101_actuator", group.name)
+        self.assertEqual(
+            [
+                ("Rotation",),
+                ("Pitch",),
+                ("Elbow",),
+                ("Wrist_Pitch",),
+                ("Wrist_Roll",),
+                ("Jaw",),
+            ],
+            [mapping.input_joints for mapping in group.mappings],
+        )
+        self.assertTrue(all(mapping.input_joints == mapping.output_joints for mapping in group.mappings))
+        self.assertNotIn("--input-joints", plan.command)
+        self.assertEqual("siso", plan.metadata["groups"][0]["training_topology"])
+        self.assertEqual(6, plan.metadata["groups"][0]["mapping_count"])
 
     def test_no_implicit_joint_selection_fallback(self):
         training = TrainingDefaults(
@@ -182,12 +209,10 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
             patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)),
             self.assertRaisesRegex(
                 ValueError,
-                "training requires input_joints",
+                "training requires groups or input_joints",
             ),
         ):
-            resolve_train_actuator_run_config(
-                TrainActuatorRunConfig(robot="demo", dry_run=True)
-            )
+            resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=True))
 
     def test_alias_resolution_rejects_duplicates_after_canonicalization(self):
         training = TrainingDefaults(
@@ -211,6 +236,107 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
                     dry_run=True,
                 )
             )
+
+    def test_declared_group_resolves_each_mapping_independently(self):
+        training = TrainingDefaults(
+            model="gru",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            groups=[
+                TrainingGroup(
+                    name="shared",
+                    mappings=[
+                        TrainingJointMapping(
+                            input_joints=["a"],
+                            output_joints=["a"],
+                        ),
+                        TrainingJointMapping(
+                            input_joints=["b"],
+                            output_joints=["b"],
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        with patch(
+            "anchor_bench.training.runner.get_robot",
+            return_value=_bundle(training),
+        ):
+            resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=True))
+
+        group = _only_group(resolved)
+        self.assertEqual("shared", group.name)
+        self.assertEqual(
+            [
+                (("joint_a",), ("joint_a",)),
+                (("joint_b",), ("joint_b",)),
+            ],
+            [(mapping.input_joints, mapping.output_joints) for mapping in group.mappings],
+        )
+        plan = build_resolved_train_actuator_command(resolved)
+        self.assertNotIn("--input-joints", plan.command)
+        self.assertEqual(2, plan.metadata["groups"][0]["mapping_count"])
+
+    def test_group_mappings_must_have_identical_tensor_widths(self):
+        training = TrainingDefaults(
+            model="gru",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            groups=[
+                TrainingGroup(
+                    name="bad",
+                    mappings=[
+                        TrainingJointMapping(input_joints=["a"]),
+                        TrainingJointMapping(
+                            input_joints=["a", "b"],
+                            output_joints=["b"],
+                        ),
+                    ],
+                )
+            ],
+        )
+
+        with (
+            patch(
+                "anchor_bench.training.runner.get_robot",
+                return_value=_bundle(training),
+            ),
+            self.assertRaisesRegex(ValueError, "mapping 1 has shape 2->1"),
+        ):
+            resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=True))
+
+    def test_cli_shorthand_replaces_declared_groups(self):
+        training = TrainingDefaults(
+            model="gru",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            groups=[
+                TrainingGroup(
+                    name="shared",
+                    mappings=[
+                        TrainingJointMapping(input_joints=["a"]),
+                        TrainingJointMapping(input_joints=["b"]),
+                    ],
+                )
+            ],
+        )
+
+        with patch(
+            "anchor_bench.training.runner.get_robot",
+            return_value=_bundle(training),
+        ):
+            resolved = resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(
+                    robot="demo",
+                    input_joints=["b"],
+                    dry_run=True,
+                )
+            )
+
+        self.assertEqual("default", _only_group(resolved).name)
+        self.assertEqual(("joint_b",), _only_mapping(resolved).input_joints)
+        self.assertEqual("cli", resolved.config_sources["groups"])
 
 
 class TrainingRunnerBaselineTests(unittest.TestCase):
@@ -239,13 +365,49 @@ class TrainingRunnerBaselineTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual((20.0, 2.0), (resolved.pd_kp, resolved.pd_kd))
+        group = _only_group(resolved)
+        self.assertEqual((20.0, 2.0), (group.pd_kp, group.pd_kd))
         self.assertEqual(
             (0.4, 0.05),
-            (resolved.friction_dry, resolved.friction_viscous),
+            (group.friction_dry, group.friction_viscous),
         )
-        self.assertEqual("cli", resolved.config_sources["pd_baseline"])
-        self.assertEqual("cli", resolved.config_sources["friction_baseline"])
+        self.assertEqual("cli", group.config_sources["pd_baseline"])
+        self.assertEqual("cli", group.config_sources["friction_baseline"])
+
+        command = build_resolved_train_actuator_command(resolved).command
+        self.assertEqual("20.0", command[command.index("--pd-kp") + 1])
+        self.assertEqual("0.4", command[command.index("--friction-dry") + 1])
+
+    def test_cli_baselines_are_rendered_for_declared_groups(self):
+        training = TrainingDefaults(
+            model="hybrid_residual",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            groups=[
+                TrainingGroup(
+                    name="shared",
+                    mappings=[
+                        TrainingJointMapping(input_joints=["a"]),
+                        TrainingJointMapping(input_joints=["b"]),
+                    ],
+                )
+            ],
+        )
+
+        with patch(
+            "anchor_bench.training.runner.get_robot",
+            return_value=_bundle(training),
+        ):
+            resolved = resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(
+                    robot="demo",
+                    pd_kp=20.0,
+                    pd_kd=2.0,
+                    friction_dry=0.4,
+                    friction_viscous=0.05,
+                    dry_run=True,
+                )
+            )
 
         command = build_resolved_train_actuator_command(resolved).command
         self.assertEqual("20.0", command[command.index("--pd-kp") + 1])
@@ -256,17 +418,16 @@ class TrainingRunnerBaselineTests(unittest.TestCase):
             patch("anchor_bench.training.runner.get_robot", return_value=self.bundle),
             patch("anchor_bench.training.runner.load_actuator_file") as load_actuators,
         ):
-            resolved = resolve_train_actuator_run_config(
-                TrainActuatorRunConfig(robot="demo", dry_run=True)
-            )
+            resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=True))
 
         load_actuators.assert_not_called()
-        self.assertEqual((10.0, 1.0), (resolved.pd_kp, resolved.pd_kd))
+        group = _only_group(resolved)
+        self.assertEqual((10.0, 1.0), (group.pd_kp, group.pd_kd))
         self.assertEqual(
             (0.2, 0.03),
-            (resolved.friction_dry, resolved.friction_viscous),
+            (group.friction_dry, group.friction_viscous),
         )
-        self.assertEqual("run.yaml", resolved.config_sources["pd_baseline"])
+        self.assertEqual("run.yaml", group.config_sources["pd_baseline"])
 
     def test_partial_cli_pair_fails_even_when_run_yaml_has_a_pair(self):
         with (
@@ -282,15 +443,17 @@ class TrainingRunnerBaselineTests(unittest.TestCase):
             )
 
     def test_baseline_inference_uses_the_feature_domain(self):
-        single = resolve_train_actuator_run_config(
-            TrainActuatorRunConfig(robot="g1", dry_run=True)
-        )
-        self.assertEqual((30.0, 0.71), (single.pd_kp, single.pd_kd))
+        single = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="g1", dry_run=True))
+        single_group = _only_group(single)
+        self.assertEqual((30.0, 0.71), (single_group.pd_kp, single_group.pd_kd))
         self.assertEqual(
             (0.462, 0.037),
-            (single.friction_dry, single.friction_viscous),
+            (single_group.friction_dry, single_group.friction_viscous),
         )
-        self.assertEqual("actuators.yaml", single.config_sources["pd_baseline"])
+        self.assertEqual(
+            "actuators.yaml",
+            single_group.config_sources["pd_baseline"],
+        )
 
         residual = resolve_train_actuator_run_config(
             TrainActuatorRunConfig(
@@ -301,10 +464,17 @@ class TrainingRunnerBaselineTests(unittest.TestCase):
                 dry_run=True,
             )
         )
-        self.assertEqual((27.47, 0.572), (residual.pd_kp, residual.pd_kd))
+        residual_group = _only_group(residual)
+        self.assertEqual(
+            (27.47, 0.572),
+            (residual_group.pd_kp, residual_group.pd_kd),
+        )
         self.assertEqual(
             (0.270, 0.079),
-            (residual.friction_dry, residual.friction_viscous),
+            (
+                residual_group.friction_dry,
+                residual_group.friction_viscous,
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "nonuniform"):
@@ -318,7 +488,6 @@ class TrainingRunnerBaselineTests(unittest.TestCase):
                     dry_run=True,
                 )
             )
-
 
     def test_uniform_inference_uses_numeric_closeness(self):
         training = TrainingDefaults(
@@ -354,11 +523,11 @@ class TrainingRunnerBaselineTests(unittest.TestCase):
                 return_value=SimpleNamespace(actuators=[actuator]),
             ),
         ):
-            resolved = resolve_train_actuator_run_config(
-                TrainActuatorRunConfig(robot="demo", dry_run=True)
-            )
+            resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=True))
 
-        self.assertEqual((10.0, 1.0), (resolved.pd_kp, resolved.pd_kd))
+        group = _only_group(resolved)
+        self.assertEqual((10.0, 1.0), (group.pd_kp, group.pd_kd))
+
 
 class TrainingRunnerExecutionTests(unittest.TestCase):
     def test_dynamic_bias_dry_run_does_not_discover_data_or_construct_provider(self):
@@ -421,16 +590,68 @@ class TrainingRunnerExecutionTests(unittest.TestCase):
 
         provider_type.assert_called_once()
         job = train.call_args.args[0]
+        self.assertEqual("default", job.group_name)
         self.assertEqual(
-            ["right_shoulder_pitch", "right_elbow"],
-            job.input_joints,
+            ("right_shoulder_pitch", "right_elbow"),
+            job.mappings[0].input_joints,
         )
-        self.assertEqual(["right_elbow"], job.output_joints)
+        self.assertEqual(("right_elbow",), job.mappings[0].output_joints)
         self.assertEqual(0.002, job.sample_dt_s)
         self.assertIs(provider, job.dynamic_bias_provider)
         self.assertEqual(["position", "dynamic_bias", "previous_torque"], job.input_columns)
         self.assertFalse(plan.dry_run)
 
+    def test_one_training_job_per_group_uses_one_source_split(self):
+        training = TrainingDefaults(
+            model="gru",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            groups=[
+                TrainingGroup(
+                    name="first",
+                    mappings=[TrainingJointMapping(input_joints=["a"])],
+                ),
+                TrainingGroup(
+                    name="second",
+                    mappings=[TrainingJointMapping(input_joints=["b"])],
+                ),
+            ],
+        )
+        bundle = _bundle(training)
+        source = TrainingSource(Path("/tmp/episode"))
+        artifacts = SimpleNamespace(
+            checkpoint_path=Path("/tmp/model.pt"),
+            stats_path=Path("/tmp/stats.json"),
+            network_path=Path("/tmp/network.pt"),
+            metrics={"loss": 0.1},
+        )
+
+        with (
+            patch("anchor_bench.training.runner.get_robot", return_value=bundle),
+            patch(
+                "anchor_bench.training.runner.discover_training_sources",
+                return_value=[source],
+            ),
+            patch(
+                "anchor_bench.training.runner.split_training_sources",
+                return_value=([source], []),
+            ) as split,
+            patch(
+                "anchor_bench.training.trainer.train_stateful_gru",
+                return_value=artifacts,
+            ) as train,
+        ):
+            resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=False))
+            plan = run_resolved_train_actuator(resolved)
+
+        split.assert_called_once_with([source], seed=42)
+        self.assertEqual(2, train.call_count)
+        self.assertEqual(
+            ["first", "second"],
+            [call.args[0].group_name for call in train.call_args_list],
+        )
+        self.assertTrue(all(call.args[0].train_sources == [source] for call in train.call_args_list))
+        self.assertEqual({"first", "second"}, set(plan.metadata["artifacts"]))
 
 
 if __name__ == "__main__":

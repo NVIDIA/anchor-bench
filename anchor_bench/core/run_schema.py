@@ -81,10 +81,47 @@ class TrainingFrictionBaseline(ConfigModel):
     viscous: float = Field(ge=0.0)
 
 
+class TrainingJointMapping(ConfigModel):
+    input_joints: JointSelection
+    output_joints: JointSelection | None = None
+
+    @field_validator("input_joints", "output_joints", mode="before")
+    @classmethod
+    def _parse_joint_selection(cls, value: Any) -> JointSelection | None:
+        return None if value is None else parse_joint_selection(value)
+
+
+class TrainingGroup(ConfigModel):
+    name: str
+    mappings: list[TrainingJointMapping] = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("must not be empty")
+        return name
+
+    @model_validator(mode="after")
+    def _reject_duplicate_mappings(self) -> "TrainingGroup":
+        seen: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
+        for index, mapping in enumerate(self.mappings):
+            inputs = ("all",) if mapping.input_joints == "all" else tuple(mapping.input_joints)
+            outputs = mapping.output_joints or mapping.input_joints
+            output_key = ("all",) if outputs == "all" else tuple(outputs)
+            key = (inputs, output_key)
+            if key in seen:
+                raise ValueError(f"contains duplicate mappings at indices {seen[key]} and {index}")
+            seen[key] = index
+        return self
+
+
 class TrainingDefaults(ConfigModel):
     model: Literal["gru", "hybrid_residual"] | None = None
     real_data_dir: str | None = None
     output_dir: str | None = None
+    groups: list[TrainingGroup] | None = Field(default=None, min_length=1)
     input_joints: JointSelection | None = None
     output_joints: JointSelection | None = None
     pd_baseline: TrainingPDBaseline | None = None
@@ -110,9 +147,34 @@ class TrainingDefaults(ConfigModel):
 
     @model_validator(mode="after")
     def _validate_joint_selection(self) -> "TrainingDefaults":
+        if self.groups is not None and (self.input_joints is not None or self.output_joints is not None):
+            raise ValueError("groups cannot be combined with input_joints or output_joints")
         if self.output_joints is not None and self.input_joints is None:
             raise ValueError("input_joints is required when output_joints is configured")
+        if self.groups is not None:
+            names = [group.name for group in self.groups]
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                raise ValueError(f"duplicate training group names: {', '.join(duplicates)}")
         return self
+
+    @property
+    def resolved_groups(self) -> list[TrainingGroup]:
+        if self.groups is not None:
+            return self.groups
+        if self.input_joints is None:
+            return []
+        return [
+            TrainingGroup(
+                name="default",
+                mappings=[
+                    TrainingJointMapping(
+                        input_joints=self.input_joints,
+                        output_joints=self.output_joints,
+                    )
+                ],
+            )
+        ]
 
 
 class RobotRunFile(ConfigModel):
@@ -134,8 +196,4 @@ class RobotRunFile(ConfigModel):
             "sysid": self.sysid,
             "training": self.training,
         }
-        return {
-            name: payload
-            for name, section in sections.items()
-            if (payload := section.to_dict())
-        }
+        return {name: payload for name, section in sections.items() if (payload := section.to_dict())}

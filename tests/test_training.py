@@ -71,6 +71,60 @@ class TrainingDataTests(unittest.TestCase):
         self.assertEqual(2, len(val_a))
 
 
+class TrainingRecurrenceTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "torch unavailable")
+    def test_hidden_state_resets_between_sequences_but_not_chunks(self):
+        import numpy as np
+        import torch
+
+        from anchor_bench.training.trainer import (
+            TrainingHyperParameters,
+            _run_epoch,
+        )
+
+        class RecordingModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.hidden_was_none = []
+
+            def forward(self, values, hidden):
+                self.hidden_was_none.append(hidden is None)
+                next_hidden = torch.ones(
+                    1,
+                    values.shape[0],
+                    1,
+                    dtype=values.dtype,
+                    device=values.device,
+                )
+                return values[..., :1], next_hidden
+
+        model = RecordingModel()
+        sequences = [
+            (
+                np.ones((3, 1), dtype=np.float32),
+                np.ones((3, 1), dtype=np.float32),
+            ),
+            (
+                np.ones((3, 1), dtype=np.float32),
+                np.ones((3, 1), dtype=np.float32),
+            ),
+        ]
+        loss = _run_epoch(
+            torch,
+            model,
+            optimizer=None,
+            loss_fn=torch.nn.MSELoss(),
+            sequences=sequences,
+            hparams=TrainingHyperParameters(chunk_length=2),
+            train=False,
+            device=torch.device("cpu"),
+            noise_std=0.0,
+        )
+
+        self.assertEqual(0.0, loss)
+        self.assertEqual([True, False, True, False], model.hidden_was_none)
+
+
 class TrainingFeatureBlockTests(unittest.TestCase):
     @staticmethod
     def _job(
@@ -80,7 +134,9 @@ class TrainingFeatureBlockTests(unittest.TestCase):
         residual_physics=None,
         input_joints=("j0", "j1"),
         output_joints=("j1",),
+        mappings=None,
     ):
+        from anchor_bench.training.data import TrainingMapping
         from anchor_bench.training.trainer import TrainingJob
 
         return TrainingJob(
@@ -97,8 +153,12 @@ class TrainingFeatureBlockTests(unittest.TestCase):
             n_streams=1,
             noise_std=0.0,
             residual_physics=residual_physics,
-            input_joints=input_joints,
-            output_joints=output_joints,
+            group_name="test_group",
+            mappings=(
+                tuple(mappings)
+                if mappings is not None
+                else (TrainingMapping(tuple(input_joints), tuple(output_joints)),)
+            ),
             sample_dt_s=0.01,
         )
 
@@ -106,17 +166,28 @@ class TrainingFeatureBlockTests(unittest.TestCase):
     def _episode(feature_blocks, target):
         import numpy as np
 
-        from anchor_bench.training.data import TrainingEpisode
+        from anchor_bench.training.data import TrainingEpisode, TrainingMapping
 
         return TrainingEpisode(
             timestamps=np.arange(len(target), dtype=np.float64) * 0.01,
-            input_joints=("j0", "j1"),
-            output_joints=("j1",),
+            mapping=TrainingMapping(("j0", "j1"), ("j1",)),
             feature_blocks=feature_blocks,
             target_torque=np.asarray(target, dtype=np.float32),
         )
 
-    def test_prepare_flattens_vector_input_and_output_features(self):
+    def test_training_job_rejects_mixed_width_and_duplicate_mappings(self):
+        from anchor_bench.training.data import TrainingMapping
+
+        first = TrainingMapping(("j0",), ("j0",))
+        with self.assertRaisesRegex(ValueError, "mapping 1 has dimensions"):
+            self._job(
+                ["position"],
+                mappings=(first, TrainingMapping(("j1", "j2"), ("j1",))),
+            )
+        with self.assertRaisesRegex(ValueError, "must not contain duplicates"):
+            self._job(["position"], mappings=(first, first))
+
+    def test_prepare_flattens_vector_input_features_and_output_previous_torque(self):
         import numpy as np
 
         from anchor_bench.training.data import FeatureBlock
@@ -139,12 +210,12 @@ class TrainingFeatureBlockTests(unittest.TestCase):
                 "position": FeatureBlock(
                     np.array(
                         [
-                            [[7, 8, 9]],
-                            [[17, 18, 19]],
+                            [[7, 8, 9], [10, 11, 12]],
+                            [[17, 18, 19], [20, 21, 22]],
                         ],
                         dtype=np.float32,
                     ),
-                    domain="output_joints",
+                    domain="input_joints",
                     channels=("x", "y", "z"),
                 ),
             },
@@ -156,12 +227,12 @@ class TrainingFeatureBlockTests(unittest.TestCase):
         np.testing.assert_allclose(
             features,
             [
-                [1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
-                [11, 12, 13, 14, 15, 16, 17, 18, 19, 10],
+                [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0],
+                [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 10],
             ],
         )
         np.testing.assert_allclose(target, [[10], [20]])
-        self.assertEqual((6, 3, 1), _feature_widths(job))
+        self.assertEqual((6, 6, 1), _feature_widths(job))
         self.assertEqual(
             [
                 {
@@ -171,7 +242,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
                 },
                 {
                     "name": "position",
-                    "domain": "output_joints",
+                    "domain": "input_joints",
                     "channels": ["x", "y", "z"],
                 },
                 {
@@ -214,6 +285,30 @@ class TrainingFeatureBlockTests(unittest.TestCase):
             ],
             job.metadata["input_feature_specs"],
         )
+
+    def test_prepare_rejects_output_joint_domain_for_non_previous_feature(self):
+        import numpy as np
+
+        from anchor_bench.training.data import FeatureBlock
+        from anchor_bench.training.trainer import _prepare_episode
+
+        job = self._job(["position"])
+        episode = self._episode(
+            {
+                "position": FeatureBlock(
+                    np.zeros((2, 1, 3), dtype=np.float32),
+                    domain="output_joints",
+                    channels=("x", "y", "z"),
+                )
+            },
+            [[10], [20]],
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"feature 'position' must use domain 'input_joints'",
+        ):
+            _prepare_episode(job, episode)
 
     def test_prepare_rejects_feature_layout_drift_between_episodes(self):
         import numpy as np
@@ -275,8 +370,14 @@ class TrainingFeatureBlockTests(unittest.TestCase):
                     channels=("vx", "vy", "vz"),
                 ),
                 "position": FeatureBlock(
-                    np.array([[[7, 8, 9]], [[17, 18, 19]]], dtype=np.float32),
-                    domain="output_joints",
+                    np.array(
+                        [
+                            [[7, 8, 9], [10, 11, 12]],
+                            [[17, 18, 19], [20, 21, 22]],
+                        ],
+                        dtype=np.float32,
+                    ),
+                    domain="input_joints",
                     channels=("x", "y", "z"),
                 ),
             },
@@ -302,12 +403,26 @@ class TrainingFeatureBlockTests(unittest.TestCase):
         )
         runtime = _runtime_metadata(job, stats)
 
+        self.assertEqual(2, stats["schema_version"])
+        self.assertEqual(2, runtime["schema_version"])
+        self.assertEqual("test_group", runtime["group_name"])
+        self.assertEqual(
+            [{"input_joints": ["j0", "j1"], "output_joints": ["j1"]}],
+            runtime["joint_mappings"],
+        )
+        self.assertNotIn("joint_names", runtime)
+        self.assertNotIn("output_joint_names", runtime)
+        self.assertEqual(
+            ["recorded_episode", "joint_mapping"],
+            runtime["previous_torque_derivation"]["reset_boundaries"],
+        )
+
         self.assertEqual(
             [6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
             stats["normalization"]["inputs"]["mean"]["velocity"],
         )
         self.assertEqual(
-            [12.0, 13.0, 14.0],
+            [12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
             stats["normalization"]["inputs"]["mean"]["position"],
         )
         self.assertEqual(
@@ -316,7 +431,7 @@ class TrainingFeatureBlockTests(unittest.TestCase):
         )
         np.testing.assert_allclose(
             normalized[0][0],
-            np.array([[-1.0] * 10, [1.0] * 10], dtype=np.float32),
+            np.array([[-1.0] * 13, [1.0] * 13], dtype=np.float32),
         )
         np.testing.assert_allclose(normalized[0][1], [[-1.0], [1.0]])
         self.assertEqual(
@@ -373,8 +488,14 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual("gru", resolved.model)
         self.assertTrue(resolved.data.endswith("so101_arm_50motion/train"))
         self.assertTrue(resolved.output.endswith("outputs/training/so101"))
-        self.assertEqual(["Rotation"], resolved.input_joints)
-        self.assertEqual(["Rotation"], resolved.output_joints)
+        self.assertEqual(1, len(resolved.groups))
+        group = resolved.groups[0]
+        self.assertEqual("so101_actuator", group.name)
+        self.assertEqual(
+            ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"],
+            [mapping.input_joints[0] for mapping in group.mappings],
+        )
+        self.assertTrue(all(mapping.input_joints == mapping.output_joints for mapping in group.mappings))
         self.assertTrue(resolved.skip_optuna)
         self.assertEqual(42, resolved.seed)
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
@@ -395,10 +516,10 @@ class TrainingRunnerTests(unittest.TestCase):
 
         self.assertEqual(["position", "solver_pd"], resolved.input_columns)
 
-    def test_siso_dynamic_bias_loads_the_selected_joint_directly(self):
+    def test_shared_siso_expands_mappings_and_records_dynamic_bias_requests(self):
         import numpy as np
 
-        from anchor_bench.training.data import TrainingSource
+        from anchor_bench.training.data import TrainingMapping, TrainingSource
         from anchor_bench.training.dynamic_bias import DynamicBiasResult
         from anchor_bench.training.trainer import TrainingJob, _load_sequences
 
@@ -456,29 +577,94 @@ class TrainingRunnerTests(unittest.TestCase):
                 skip_optuna=True,
                 n_streams=1,
                 noise_std=0.0,
-                input_joints=["Pitch"],
-                output_joints=["Pitch"],
+                group_name="shared_siso",
+                mappings=(
+                    TrainingMapping(("Rotation",), ("Rotation",)),
+                    TrainingMapping(("Pitch",), ("Pitch",)),
+                ),
                 sample_dt_s=0.002,
                 dynamic_bias_provider=provider,
             )
             train, val = _load_sequences(job)
 
         self.assertEqual([], val)
-        self.assertEqual(1, len(provider.calls))
-        self.assertEqual(["Pitch"], provider.calls[0]["requested_joint_names"])
-        self.assertEqual(1, len(train))
-        np.testing.assert_allclose(train[0][0][:, 0], 20.0)
-        np.testing.assert_allclose(train[0][1][:, 0], [20.0, 21.0, 22.0, 23.0])
+        self.assertEqual(2, len(provider.calls))
         self.assertEqual(
-            ["Pitch"],
-            job.metadata["dynamic_bias_derivation"]["requested_joint_names"],
+            [["Rotation"], ["Pitch"]],
+            [call["requested_joint_names"] for call in provider.calls],
+        )
+        self.assertEqual(2, len(train))
+        np.testing.assert_allclose(train[0][0][:, 0], 10.0)
+        np.testing.assert_allclose(train[1][0][:, 0], 20.0)
+        np.testing.assert_allclose(train[0][1][:, 0], [10.0, 11.0, 12.0, 13.0])
+        np.testing.assert_allclose(train[1][1][:, 0], [20.0, 21.0, 22.0, 23.0])
+        self.assertEqual(
+            [
+                {"mapping_index": 0, "requested_joint_names": ["Rotation"]},
+                {"mapping_index": 1, "requested_joint_names": ["Pitch"]},
+            ],
+            job.metadata["dynamic_bias_derivation"]["mapping_requests"],
         )
 
-    def test_artifact_labels_distinguish_topologies_and_joint_domains(self):
-        from anchor_bench.training.data import TrainingSource
+    def test_shared_siso_resets_previous_torque_and_pools_normalization(self):
+        import numpy as np
+
+        from anchor_bench.training.data import TrainingMapping, TrainingSource
+        from anchor_bench.training.trainer import (
+            TrainingJob,
+            _feature_widths,
+            _load_sequences,
+            _normalization_stats,
+            _training_stats_metadata,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            episode_path = Path(tmp) / "episode"
+            _write_two_joint_sage_motion(episode_path)
+            job = TrainingJob(
+                model="gru",
+                train_sources=[TrainingSource(episode_path)],
+                val_sources=[],
+                output_dir=Path(tmp) / "out",
+                input_columns=["position", "previous_torque"],
+                group_name="shared_siso",
+                mappings=(
+                    TrainingMapping(("Rotation",), ("Rotation",)),
+                    TrainingMapping(("Pitch",), ("Pitch",)),
+                ),
+                sample_dt_s=0.002,
+                seed=1,
+                final_epochs=1,
+                trial_epochs=1,
+                trials=1,
+                skip_optuna=True,
+                n_streams=1,
+                noise_std=0.0,
+            )
+            train, _ = _load_sequences(job)
+
+        self.assertEqual(2, len(train))
+        np.testing.assert_allclose(train[0][0][:, 1], [0.0, 10.0, 11.0, 12.0])
+        np.testing.assert_allclose(train[1][0][:, 1], [0.0, 20.0, 21.0, 22.0])
+        stats = _normalization_stats(
+            train,
+            input_columns=job.input_columns,
+            target_column="torque",
+            metadata=_training_stats_metadata(job),
+            input_widths=_feature_widths(job),
+            target_width=1,
+        )
+        self.assertAlmostEqual(1.65, stats["normalization"]["inputs"]["mean"]["position"], places=6)
+        self.assertAlmostEqual(12.0, stats["normalization"]["inputs"]["mean"]["previous_torque"])
+        self.assertAlmostEqual(16.5, stats["normalization"]["targets"]["mean"]["torque"])
+
+    def test_artifact_labels_include_group_and_mapping_digest(self):
+        from anchor_bench.training.data import TrainingMapping, TrainingSource
         from anchor_bench.training.trainer import TrainingJob, _artifact_label
 
-        def job(*, input_joints, output_joints=None):
+        def job(*, group_name="group", input_joints, output_joints=None):
+            inputs = tuple(input_joints)
+            outputs = tuple(output_joints or input_joints)
             return TrainingJob(
                 model="gru",
                 train_sources=[TrainingSource(Path("episode"))],
@@ -486,8 +672,8 @@ class TrainingRunnerTests(unittest.TestCase):
                 output_dir=Path("out"),
                 input_columns=["position"],
                 seed=1,
-                input_joints=input_joints,
-                output_joints=output_joints or input_joints,
+                group_name=group_name,
+                mappings=(TrainingMapping(inputs, outputs),),
                 final_epochs=1,
                 trial_epochs=1,
                 trials=1,
@@ -501,21 +687,19 @@ class TrainingRunnerTests(unittest.TestCase):
             job(input_joints=["joint_a"]),
             job(input_joints=["joint_a", "joint_b"], output_joints=["joint_a"]),
             job(input_joints=["joint_a", "joint_b"]),
-            job(input_joints=["joint_b"]),
-            job(input_joints=["joint_" + "x" * 200]),
+            job(group_name="other", input_joints=["joint_a"]),
+            job(group_name="group_" + "x" * 200, input_joints=["joint_a"]),
         ]
         labels = [_artifact_label(item) for item in jobs]
 
         self.assertEqual(len(labels), len(set(labels)))
         self.assertEqual(labels[0], _artifact_label(jobs[0]))
-        self.assertIn("siso", labels[0])
-        self.assertIn("miso", labels[1])
-        self.assertIn("mimo", labels[2])
-        self.assertIn("siso", labels[3])
+        self.assertRegex(labels[0], r"^group__[0-9a-f]{10}$")
+        self.assertRegex(labels[3], r"^other__[0-9a-f]{10}$")
         self.assertTrue(all(len(label) <= 96 for label in labels))
 
-    def test_stats_metadata_uses_resolved_runtime_axes(self):
-        from anchor_bench.training.data import TrainingSource
+    def test_stats_metadata_uses_group_mappings(self):
+        from anchor_bench.training.data import TrainingMapping, TrainingSource
         from anchor_bench.training.trainer import (
             TrainingJob,
             _training_stats_metadata,
@@ -545,22 +729,28 @@ class TrainingRunnerTests(unittest.TestCase):
                 ]
             },
         }
-        explicit = TrainingJob(
+        job = TrainingJob(
             **base,
-            input_joints=["joint_a", "joint_b"],
-            output_joints=["joint_a", "joint_b"],
-        )
-        miso = TrainingJob(
-            **base,
-            input_joints=["joint_a", "joint_b"],
-            output_joints=["joint_b"],
+            group_name="shared_siso",
+            mappings=(
+                TrainingMapping(("joint_a",), ("joint_a",)),
+                TrainingMapping(("joint_b",), ("joint_b",)),
+            ),
         )
 
-        explicit_metadata = _training_stats_metadata(explicit)
-        miso_metadata = _training_stats_metadata(miso)
-        self.assertEqual(["joint_a", "joint_b"], explicit_metadata["input_joints"])
-        self.assertEqual(["joint_a", "joint_b"], explicit_metadata["output_joints"])
-        self.assertEqual(["joint_a", "joint_b"], miso_metadata["input_joints"])
+        metadata = _training_stats_metadata(job)
+        self.assertEqual("shared_siso", metadata["group_name"])
+        self.assertEqual(
+            [
+                {"input_joints": ["joint_a"], "output_joints": ["joint_a"]},
+                {"input_joints": ["joint_b"], "output_joints": ["joint_b"]},
+            ],
+            metadata["joint_mappings"],
+        )
+        self.assertNotIn("input_joints", metadata)
+        self.assertNotIn("output_joints", metadata)
+        self.assertEqual(2, metadata["data"]["mapping_count"])
+        self.assertEqual(2, metadata["data"]["train_sequence_count"])
 
     @unittest.skipUnless(
         importlib.util.find_spec("torch"),
@@ -594,21 +784,27 @@ class TrainingRunnerTests(unittest.TestCase):
             plan = run_resolved_train_actuator(resolved)
 
             self.assertFalse(plan.dry_run)
-            artifacts = plan.metadata["artifacts"]
+            artifact_groups = plan.metadata["artifacts"]
+            artifacts = artifact_groups["default"]
             self.assertTrue(Path(artifacts["checkpoint"]).exists())
             self.assertTrue(Path(artifacts["network"]).exists())
             self.assertRegex(
                 Path(artifacts["stats"]).name,
-                r"^gru_siso__in__Rotation__out__Rotation__[0-9a-f]{10}_stats.json$",
+                r"^gru_default__[0-9a-f]{10}_stats\.json$",
             )
             stats = json.loads(Path(artifacts["stats"]).read_text(encoding="utf-8"))
             self.assertEqual("gru", stats["model"])
+            self.assertEqual("default", stats["group_name"])
             self.assertEqual("siso", stats["training_topology"])
-            self.assertEqual(["Rotation"], stats["input_joints"])
-            self.assertEqual(["Rotation"], stats["output_joints"])
+            self.assertEqual(
+                [{"input_joints": ["Rotation"], "output_joints": ["Rotation"]}],
+                stats["joint_mappings"],
+            )
             self.assertNotIn("joint_type", stats)
+            self.assertNotIn("input_joints", stats)
+            self.assertNotIn("output_joints", stats)
             self.assertEqual(0.002, stats["sample_dt_s"])
-            self.assertIn("network", plan.metadata["artifacts"])
+            self.assertIn("default", artifact_groups)
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export test requires torch")
     def test_gru_checkpoint_export_writes_scripted_network_with_gru_attribute(self):
@@ -621,10 +817,10 @@ class TrainingRunnerTests(unittest.TestCase):
             checkpoint_path = root / "gru_demo_best.pt"
             model = build_runtime_gru(input_size=3, output_size=1, hidden_size=4, num_layers=1, dropout=0.0)
             runtime_metadata = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "model_type": "gru",
-                "joint_names": ["demo"],
-                "output_joint_names": ["demo"],
+                "group_name": "demo",
+                "joint_mappings": [{"input_joints": ["demo"], "output_joints": ["demo"]}],
                 "training_topology": "siso",
                 "input_columns": ["position", "position_error", "velocity"],
                 "input_feature_specs": [

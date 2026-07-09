@@ -1,4 +1,3 @@
-
 import unittest
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -210,6 +209,36 @@ class NativeActuatorSchemaTests(unittest.TestCase):
         self.assertIsNone(run.training.output_joints)
         self.assertTrue(run.training.skip_optuna)
         self.assertEqual(4, run.training.n_streams)
+
+    def test_robot_run_schema_accepts_training_groups(self):
+        from anchor_bench.core.schemas import RobotRunFile
+
+        run = RobotRunFile.from_dict(
+            {
+                "training": {
+                    "groups": [
+                        {
+                            "name": "shared",
+                            "mappings": [
+                                {
+                                    "input_joints": ["JointA"],
+                                    "output_joints": ["JointA"],
+                                },
+                                {"input_joints": ["JointB"]},
+                            ],
+                        }
+                    ]
+                }
+            },
+            "run.yaml",
+        )
+
+        groups = run.training.groups
+        self.assertIsNotNone(groups)
+        assert groups is not None
+        self.assertEqual("shared", groups[0].name)
+        self.assertEqual(["JointB"], groups[0].mappings[1].input_joints)
+        self.assertIsNone(run.training.input_joints)
 
     def test_robot_run_schema_rejects_unknown_training_keys(self):
         from anchor_bench.core.schemas import RobotRunFile
@@ -451,7 +480,6 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             self.assertNotIn("epsilon", sysid, f"{path} should use sysid.cmaes.epsilon")
             self.assertNotIn("max_iter", sysid, f"{path} should use sysid.cmaes.max_iterations")
             self.assertIn("cmaes", sysid, f"{path} should define sysid.cmaes")
-
 
 
 if __name__ == "__main__":

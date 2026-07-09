@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from anchor_bench.training.data import FeatureBlock, TrainingEpisode
+from anchor_bench.training.data import FeatureBlock, TrainingEpisode, TrainingMapping
 from anchor_bench.training.trainer import (
     ResidualPhysics,
     TrainingJob,
@@ -29,12 +29,15 @@ def _job(
     input_columns: tuple[str, ...] = ("position",),
     physics: ResidualPhysics | None = None,
 ) -> TrainingJob:
+    outputs = input_joints if output_joints is None else output_joints
     return TrainingJob(
         model=model,
         train_sources=[],
         val_sources=[],
         output_dir=Path("unused"),
         input_columns=list(input_columns),
+        group_name="test",
+        mappings=[TrainingMapping(input_joints, outputs)],
         seed=1,
         final_epochs=1,
         trial_epochs=1,
@@ -43,17 +46,13 @@ def _job(
         n_streams=1,
         noise_std=0.0,
         residual_physics=physics,
-        input_joints=input_joints,
-        output_joints=input_joints if output_joints is None else output_joints,
         sample_dt_s=0.01,
         metadata={
             "delay": {"handling": "learned", "training_delay_s": 0.0},
             "input_feature_specs": [
                 {
                     "name": column,
-                    "domain": (
-                        "output_joints" if column == "previous_torque" else "input_joints"
-                    ),
+                    "domain": ("output_joints" if column == "previous_torque" else "input_joints"),
                     "channels": ["value"],
                 }
                 for column in input_columns
@@ -79,8 +78,7 @@ def _episode(
     }
     return TrainingEpisode(
         timestamps=np.arange(len(target), dtype=np.float64) * 0.01,
-        input_joints=input_joints,
-        output_joints=output_joints,
+        mapping=TrainingMapping(input_joints, output_joints),
         feature_blocks=feature_blocks,
         target_torque=target,
     )
@@ -239,16 +237,29 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
                     "std": {"position": [1.0, 1.0], "previous_torque": 1.0},
                 },
                 "targets": {"mean": {"torque": 0.0}, "std": {"torque": 1.0}},
-            }
+            },
         }
 
         metadata = _runtime_metadata(job, stats)
 
+        self.assertEqual(2, metadata["schema_version"])
         self.assertEqual("miso", metadata["training_topology"])
-        self.assertEqual(["j0", "j1"], metadata["joint_names"])
-        self.assertEqual(["j1"], metadata["output_joint_names"])
+        self.assertEqual("test", metadata["group_name"])
+        self.assertEqual(
+            [{"input_joints": ["j0", "j1"], "output_joints": ["j1"]}],
+            metadata["joint_mappings"],
+        )
+        self.assertNotIn("joint_names", metadata)
+        self.assertNotIn("output_joint_names", metadata)
         self.assertEqual("previous_target", metadata["previous_torque_derivation"]["source"])
-        self.assertEqual("physical_zero", metadata["previous_torque_derivation"]["initialization"])
+        self.assertEqual(
+            "physical_zero",
+            metadata["previous_torque_derivation"]["initialization"],
+        )
+        self.assertEqual(
+            ["recorded_episode", "joint_mapping"],
+            metadata["previous_torque_derivation"]["reset_boundaries"],
+        )
         self.assertEqual(
             "previous_raw_network_output_pre_clamp",
             metadata["previous_torque_derivation"]["runtime_source"],
@@ -287,11 +298,11 @@ class GruEpisodeAssemblyTests(unittest.TestCase):
 class GruExportContractTests(unittest.TestCase):
     def _metadata(self) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "model_type": "gru",
+            "group_name": "arm",
             "training_topology": "miso",
-            "joint_names": ["j0", "j1"],
-            "output_joint_names": ["j1"],
+            "joint_mappings": [{"input_joints": ["j0", "j1"], "output_joints": ["j1"]}],
             "input_columns": ["position", "previous_torque"],
             "input_feature_specs": [
                 {
@@ -319,7 +330,7 @@ class GruExportContractTests(unittest.TestCase):
                 "source": "previous_target",
                 "runtime_source": "previous_raw_network_output_pre_clamp",
                 "initialization": "physical_zero",
-                "reset": "episode",
+                "reset_boundaries": ["recorded_episode", "joint_mapping"],
                 "value_space": "physical_torque",
             },
         }
@@ -335,18 +346,18 @@ class GruExportContractTests(unittest.TestCase):
             },
             {
                 "name": "position",
-                "domain": "output_joints",
+                "domain": "input_joints",
                 "channels": ["x", "y", "z"],
             },
         ]
         metadata["normalization"]["inputs"] = {
             "mean": {
                 "velocity": [0.0] * 6,
-                "position": [0.0] * 3,
+                "position": [0.0] * 6,
             },
             "std": {
                 "velocity": [1.0] * 6,
-                "position": [1.0] * 3,
+                "position": [1.0] * 6,
             },
         }
         metadata.pop("previous_torque_derivation")
@@ -358,15 +369,14 @@ class GruExportContractTests(unittest.TestCase):
         if topology == "miso":
             return metadata, 3, 1
         if topology == "siso":
-            metadata["joint_names"] = ["j0"]
-            metadata["output_joint_names"] = ["j0"]
+            metadata["joint_mappings"] = [{"input_joints": ["j0"], "output_joints": ["j0"]}]
             metadata["normalization"]["inputs"] = {
                 "mean": {"position": 0.0, "previous_torque": 0.0},
                 "std": {"position": 1.0, "previous_torque": 1.0},
             }
             return metadata, 2, 1
         if topology == "mimo":
-            metadata["output_joint_names"] = ["j0", "j1"]
+            metadata["joint_mappings"][0]["output_joints"] = ["j0", "j1"]
             metadata["normalization"]["inputs"]["mean"]["previous_torque"] = [
                 0.0,
                 0.0,
@@ -390,9 +400,7 @@ class GruExportContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint_path = Path(tmp) / "model_best.pt"
-            model = build_runtime_gru(
-                input_size=3, output_size=1, hidden_size=4, num_layers=1, dropout=0.0
-            )
+            model = build_runtime_gru(input_size=3, output_size=1, hidden_size=4, num_layers=1, dropout=0.0)
             runtime_metadata = self._metadata()
             torch.save(
                 {
@@ -417,7 +425,10 @@ class GruExportContractTests(unittest.TestCase):
             network = torch.jit.load(str(network_path), _extra_files=extra_files)
 
         metadata = json.loads(extra_files["metadata.json"].decode("utf-8"))
-        self.assertEqual(["j1"], metadata["output_joint_names"])
+        self.assertEqual(
+            [{"input_joints": ["j0", "j1"], "output_joints": ["j1"]}],
+            metadata["joint_mappings"],
+        )
         output, hidden = network(torch.zeros(2, 1, 3), torch.zeros(1, 2, 4))
         self.assertEqual((2, 1, 1), tuple(output.shape))
         self.assertEqual((1, 2, 4), tuple(hidden.shape))
@@ -457,8 +468,7 @@ class GruExportContractTests(unittest.TestCase):
         siso = self._metadata()
         siso.update(
             {
-                "joint_names": ["j0"],
-                "output_joint_names": ["j0"],
+                "joint_mappings": [{"input_joints": ["j0"], "output_joints": ["j0"]}],
                 "input_columns": ["position"],
                 "normalization": {
                     "inputs": {"mean": {"position": 0.0}, "std": {"position": 1.0}},
@@ -471,7 +481,7 @@ class GruExportContractTests(unittest.TestCase):
         siso.pop("previous_torque_derivation")
         mimo = self._metadata()
         mimo["training_topology"] = "mimo"
-        mimo["output_joint_names"] = ["j0", "j1"]
+        mimo["joint_mappings"][0]["output_joints"] = ["j0", "j1"]
         mimo["normalization"] = {
             "inputs": {
                 "mean": {"position": [0.0, 0.0], "previous_torque": [0.0, 0.0]},
@@ -556,13 +566,13 @@ class GruExportContractTests(unittest.TestCase):
         self.assertEqual((1, 2, 4), tuple(hidden.shape))
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
-    def test_export_supports_multichannel_input_and_output_joint_blocks(self):
+    def test_export_supports_multichannel_input_joint_blocks(self):
         import torch
 
         from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
 
         metadata = self._vector_metadata()
-        input_size = 9
+        input_size = 12
         with tempfile.TemporaryDirectory() as tmp:
             torch.manual_seed(17)
             model = build_runtime_gru(
@@ -595,7 +605,7 @@ class GruExportContractTests(unittest.TestCase):
 
         embedded = json.loads(extra_files["metadata.json"].decode("utf-8"))
         self.assertEqual(metadata["input_feature_specs"], embedded["input_feature_specs"])
-        features = torch.arange(54, dtype=torch.float32).reshape(2, 3, input_size)
+        features = torch.arange(72, dtype=torch.float32).reshape(2, 3, input_size)
         hidden = torch.zeros(1, 2, 4)
         first, first_hidden = network(features, hidden)
         second, second_hidden = network(features, hidden)
@@ -608,20 +618,20 @@ class GruExportContractTests(unittest.TestCase):
         from anchor_bench.training.export import _validate_runtime_metadata
 
         valid = self._vector_metadata()
-        _validate_runtime_metadata(valid, input_size=9, output_size=1)
+        _validate_runtime_metadata(valid, input_size=12, output_size=1)
 
         wrong_dimensions = copy.deepcopy(valid)
-        with self.assertRaisesRegex(ValueError, "metadata requires 9"):
+        with self.assertRaisesRegex(ValueError, "metadata requires 12"):
             _validate_runtime_metadata(
                 wrong_dimensions,
-                input_size=8,
+                input_size=11,
                 output_size=1,
             )
 
         wrong_stats = copy.deepcopy(valid)
         wrong_stats["normalization"]["inputs"]["mean"]["velocity"] = [0.0] * 5
         with self.assertRaisesRegex(ValueError, "must contain 6 value"):
-            _validate_runtime_metadata(wrong_stats, input_size=9, output_size=1)
+            _validate_runtime_metadata(wrong_stats, input_size=12, output_size=1)
 
         missing_specs = copy.deepcopy(valid)
         missing_specs.pop("input_feature_specs")
@@ -639,6 +649,8 @@ class GruExportContractTests(unittest.TestCase):
         wrong_order["input_feature_specs"].reverse()
         unknown_domain = copy.deepcopy(valid)
         unknown_domain["input_feature_specs"][0]["domain"] = "global"
+        wrong_feature_domain = copy.deepcopy(valid)
+        wrong_feature_domain["input_feature_specs"][1]["domain"] = "output_joints"
         empty_channels = copy.deepcopy(valid)
         empty_channels["input_feature_specs"][0]["channels"] = []
         duplicate_channels = copy.deepcopy(valid)
@@ -655,18 +667,22 @@ class GruExportContractTests(unittest.TestCase):
             ("missing field", missing_field, "contain exactly"),
             ("wrong order", wrong_order, "match input_columns in order"),
             ("unknown domain", unknown_domain, "domain must be one of"),
+            ("wrong feature domain", wrong_feature_domain, "position must use domain='input_joints'"),
             ("empty channels", empty_channels, "non-empty list"),
             ("duplicate channels", duplicate_channels, "duplicates"),
             ("invalid channel", invalid_channel, "non-empty strings"),
         ]
         for label, metadata, message in cases:
-            with self.subTest(label=label), self.assertRaisesRegex(
-                ValueError,
-                message,
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    ValueError,
+                    message,
+                ),
             ):
                 _validate_runtime_metadata(
                     metadata,
-                    input_size=9,
+                    input_size=12,
                     output_size=1,
                 )
 
@@ -736,9 +752,7 @@ class GruExportContractTests(unittest.TestCase):
 
         for topology in ("siso", "miso", "mimo"):
             with self.subTest(topology=topology):
-                metadata, input_size, output_size = self._metadata_for_topology(
-                    topology
-                )
+                metadata, input_size, output_size = self._metadata_for_topology(topology)
                 _validate_runtime_metadata(
                     metadata,
                     input_size=input_size,
@@ -755,7 +769,7 @@ class GruExportContractTests(unittest.TestCase):
         mimo_shape = self._metadata()
         mimo_shape["training_topology"] = "mimo"
         output_outside_inputs = self._metadata()
-        output_outside_inputs["output_joint_names"] = ["j2"]
+        output_outside_inputs["joint_mappings"][0]["output_joints"] = ["j2"]
         invalid = self._metadata()
         invalid["training_topology"] = "many"
         invalid_type = self._metadata()
@@ -770,15 +784,169 @@ class GruExportContractTests(unittest.TestCase):
             ("invalid topology type", invalid_type, 3, 1, "must be 'miso'"),
         ]
         for label, metadata, input_size, output_size, message in cases:
-            with self.subTest(label=label), self.assertRaisesRegex(
-                ValueError,
-                message,
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(
+                    ValueError,
+                    message,
+                ),
             ):
                 _validate_runtime_metadata(
                     metadata,
                     input_size=input_size,
                     output_size=output_size,
                 )
+
+    def test_shared_siso_dimensions_come_from_one_mapping(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        metadata, input_size, _ = self._metadata_for_topology("siso")
+        metadata["joint_mappings"] = [
+            {"input_joints": [joint], "output_joints": [joint]} for joint in ("Rotation", "Shoulder", "Elbow")
+        ]
+
+        _validate_runtime_metadata(metadata, input_size=input_size, output_size=1)
+        with self.assertRaisesRegex(ValueError, "output_size is 3, metadata requires 1"):
+            _validate_runtime_metadata(metadata, input_size=input_size, output_size=3)
+
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export requires torch")
+    def test_shared_siso_mappings_embed_as_one_scalar_output_model(self):
+        import torch
+
+        from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
+
+        metadata, input_size, output_size = self._metadata_for_topology("siso")
+        metadata["group_name"] = "so101_actuator"
+        metadata["joint_mappings"] = [
+            {"input_joints": [joint], "output_joints": [joint]} for joint in ("Rotation", "Shoulder", "Elbow")
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "shared_siso_best.pt"
+            model = build_runtime_gru(
+                input_size=input_size,
+                output_size=output_size,
+                hidden_size=4,
+                num_layers=1,
+                dropout=0.0,
+            )
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "input_size": input_size,
+                    "output_size": output_size,
+                    "runtime_metadata": metadata,
+                    "hyperparameters": {
+                        "hidden_size": 4,
+                        "num_layers": 1,
+                        "dropout": 0.0,
+                    },
+                },
+                checkpoint_path,
+            )
+            extra_files = {"metadata.json": ""}
+            network = torch.jit.load(
+                str(export_gru_checkpoint(checkpoint_path)),
+                _extra_files=extra_files,
+            )
+
+        embedded = json.loads(extra_files["metadata.json"].decode("utf-8"))
+        self.assertEqual(metadata["joint_mappings"], embedded["joint_mappings"])
+        output, _ = network(torch.zeros(3, 2, input_size), torch.zeros(1, 3, 4))
+        self.assertEqual((3, 2, 1), tuple(output.shape))
+
+    def test_schema_v2_rejects_invalid_joint_mapping_contracts(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        valid = self._metadata()
+        schema_v1 = copy.deepcopy(valid)
+        schema_v1["schema_version"] = 1
+        legacy_joint_names = copy.deepcopy(valid)
+        legacy_joint_names["joint_names"] = ["j0", "j1"]
+        legacy_output_joint_names = copy.deepcopy(valid)
+        legacy_output_joint_names["output_joint_names"] = ["j1"]
+        missing_group = copy.deepcopy(valid)
+        missing_group.pop("group_name")
+        empty_group = copy.deepcopy(valid)
+        empty_group["group_name"] = " "
+        empty_mappings = copy.deepcopy(valid)
+        empty_mappings["joint_mappings"] = []
+        non_mapping = copy.deepcopy(valid)
+        non_mapping["joint_mappings"] = ["j0"]
+        missing_key = copy.deepcopy(valid)
+        missing_key["joint_mappings"][0].pop("output_joints")
+        extra_key = copy.deepcopy(valid)
+        extra_key["joint_mappings"][0]["label"] = "arm"
+        duplicate_input = copy.deepcopy(valid)
+        duplicate_input["joint_mappings"][0]["input_joints"] = ["j0", "j0"]
+        output_outside_input = copy.deepcopy(valid)
+        output_outside_input["joint_mappings"][0]["output_joints"] = ["j2"]
+        unequal_input_width = copy.deepcopy(valid)
+        unequal_input_width["joint_mappings"].append({"input_joints": ["j2"], "output_joints": ["j2"]})
+        unequal_output_width = copy.deepcopy(valid)
+        unequal_output_width["joint_mappings"].append({"input_joints": ["j2", "j3"], "output_joints": ["j2", "j3"]})
+        duplicate_mapping = copy.deepcopy(valid)
+        duplicate_mapping["joint_mappings"].append(copy.deepcopy(duplicate_mapping["joint_mappings"][0]))
+
+        cases = [
+            ("schema v1", schema_v1, "schema-version-2"),
+            ("legacy joint_names", legacy_joint_names, "legacy axis aliases"),
+            ("legacy output_joint_names", legacy_output_joint_names, "legacy axis aliases"),
+            ("missing group", missing_group, "group_name"),
+            ("empty group", empty_group, "group_name"),
+            ("empty mappings", empty_mappings, "non-empty list"),
+            ("non-mapping entry", non_mapping, "must be a mapping"),
+            ("missing key", missing_key, "must contain exactly"),
+            ("extra key", extra_key, "must contain exactly"),
+            ("duplicate input", duplicate_input, "must not contain duplicates"),
+            ("output subset", output_outside_input, "must be a subset"),
+            ("input width", unequal_input_width, "identical input and output widths"),
+            ("output width", unequal_output_width, "identical input and output widths"),
+            ("duplicate mapping", duplicate_mapping, "must not contain duplicates"),
+        ]
+        for label, metadata, message in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, message):
+                _validate_runtime_metadata(metadata, input_size=3, output_size=1)
+
+    def test_dynamic_bias_requests_are_ordered_per_mapping(self):
+        from anchor_bench.training.export import _validate_runtime_metadata
+
+        metadata = self._metadata()
+        metadata["joint_mappings"] = [
+            {"input_joints": ["j0", "j1"], "output_joints": ["j1"]},
+            {"input_joints": ["j2", "j3"], "output_joints": ["j3"]},
+        ]
+        metadata["input_columns"] = ["dynamic_bias"]
+        metadata["input_feature_specs"] = [
+            {
+                "name": "dynamic_bias",
+                "domain": "input_joints",
+                "channels": ["value"],
+            }
+        ]
+        metadata["normalization"]["inputs"] = {
+            "mean": {"dynamic_bias": [0.0, 0.0]},
+            "std": {"dynamic_bias": [1.0, 1.0]},
+        }
+        metadata.pop("previous_torque_derivation")
+        metadata["dynamic_bias_derivation"] = {
+            "source": "newton.solvers.SolverMuJoCo.eval_dynamic_bias",
+            "mapping_requests": [
+                {"mapping_index": 0, "requested_joint_names": ["j0", "j1"]},
+                {"mapping_index": 1, "requested_joint_names": ["j2", "j3"]},
+            ],
+        }
+        _validate_runtime_metadata(metadata, input_size=2, output_size=1)
+
+        wrong_order = copy.deepcopy(metadata)
+        wrong_order["dynamic_bias_derivation"]["mapping_requests"][1]["requested_joint_names"] = ["j3", "j2"]
+        with self.assertRaisesRegex(ValueError, r"must match joint_mappings\[1\]\.input_joints"):
+            _validate_runtime_metadata(wrong_order, input_size=2, output_size=1)
+
+        wrong_index = copy.deepcopy(metadata)
+        wrong_index["dynamic_bias_derivation"]["mapping_requests"][1]["mapping_index"] = 0
+        with self.assertRaisesRegex(ValueError, "mapping_index must be 1"):
+            _validate_runtime_metadata(wrong_index, input_size=2, output_size=1)
 
     def test_export_rejects_metadata_dimension_mismatch(self):
         from anchor_bench.training.export import _validate_runtime_metadata
