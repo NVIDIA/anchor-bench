@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+
+if TYPE_CHECKING:
+    from _typeshed import SupportsRichComparisonT
 
 
 GRU_INPUT_COLUMNS = frozenset(
@@ -31,14 +35,26 @@ RUNTIME_GRU_INPUT_COLUMNS = frozenset(
 JointSelection = Literal["all"] | list[str]
 
 
-def _find_duplicates(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    duplicates: set[str] = set()
+def find_duplicates(values: Sequence[SupportsRichComparisonT]) -> list[SupportsRichComparisonT]:
+    seen: set[SupportsRichComparisonT] = set()
+    duplicates: set[SupportsRichComparisonT] = set()
     for value in values:
         if value in seen:
             duplicates.add(value)
         seen.add(value)
     return sorted(duplicates)
+
+
+def positive_int(value: Any, *, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if result <= 0 or result != value:
+        raise ValueError(f"{name} must be a positive integer")
+    return result
 
 
 def parse_gru_columns(value: Any, *, allowed: frozenset[str] = GRU_INPUT_COLUMNS) -> list[str]:
@@ -50,7 +66,7 @@ def parse_gru_columns(value: Any, *, allowed: frozenset[str] = GRU_INPUT_COLUMNS
         raise ValueError("must be a string or list of strings")
     if not columns:
         raise ValueError("must contain at least one column")
-    duplicates = _find_duplicates(columns)
+    duplicates = find_duplicates(columns)
     if duplicates:
         raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
     unsupported = sorted(set(columns) - allowed)
@@ -68,7 +84,7 @@ def parse_joint_names(value: Any) -> list[str]:
         raise ValueError("must be a string or list of strings")
     if not names:
         raise ValueError("must contain at least one joint")
-    duplicates = _find_duplicates(names)
+    duplicates = find_duplicates(names)
     if duplicates:
         raise ValueError(f"contains duplicate joints: {', '.join(duplicates)}")
     return names

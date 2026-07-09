@@ -11,7 +11,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 
-from anchor_bench.core.config_model import GRU_INPUT_COLUMNS
+from anchor_bench.core.config_model import find_duplicates, parse_gru_columns
 from anchor_bench.data.motion import MotionData
 from anchor_bench.data.sage import discover_sage_motions
 from anchor_bench.training.dynamic_bias import DynamicBiasProvider
@@ -48,6 +48,15 @@ class TrainingMapping:
         object.__setattr__(self, "output_joints", outputs)
 
 
+def training_topology(input_width: int, output_width: int) -> str:
+    """Classify a mapping shape as siso, miso, or mimo."""
+    if input_width == 1:
+        return "siso"
+    if output_width == 1:
+        return "miso"
+    return "mimo"
+
+
 @dataclass(frozen=True)
 class FeatureBlock:
     """One time-aligned feature with explicit axes and channel semantics."""
@@ -78,7 +87,7 @@ class FeatureBlock:
             raise ValueError("feature block channels must contain at least one channel")
         if any(not isinstance(channel, str) or not channel for channel in channels):
             raise ValueError("feature block channel names must be non-empty strings")
-        duplicates = sorted({channel for channel in channels if channels.count(channel) > 1})
+        duplicates = find_duplicates(channels)
         if duplicates:
             raise ValueError("duplicate feature block channels: " + ", ".join(duplicates))
         if values.shape[2] != len(channels):
@@ -192,7 +201,7 @@ def _ordered_unique(values: Sequence[str], *, label: str) -> tuple[str, ...]:
         raise ValueError(f"{label} must contain at least one joint")
     if any(not isinstance(name, str) or not name for name in names):
         raise ValueError(f"{label} must contain non-empty strings")
-    duplicates = sorted({name for name in names if names.count(name) > 1})
+    duplicates = find_duplicates(names)
     if duplicates:
         raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
     return names
@@ -281,13 +290,7 @@ def _assemble_from_arrays(
     inputs = mapping.input_joints
     outputs = mapping.output_joints
 
-    requested_columns = tuple(str(column) for column in input_columns)
-    duplicate_columns = sorted({column for column in requested_columns if requested_columns.count(column) > 1})
-    if duplicate_columns:
-        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicate_columns)}")
-    unsupported = sorted(set(requested_columns) - GRU_INPUT_COLUMNS)
-    if unsupported:
-        raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
+    requested_columns = tuple(parse_gru_columns(list(input_columns)))
 
     input_indices = motion.joints.indices(inputs)
     output_indices = motion.joints.indices(outputs)
@@ -409,27 +412,18 @@ def split_training_sources(
 ) -> tuple[list[TrainingSource], list[TrainingSource]]:
     if not sources:
         raise ValueError("cannot split an empty training source list")
-    groups: dict[Path, list[TrainingSource]] = {}
+    by_path: dict[Path, TrainingSource] = {}
     for source in sources:
-        groups.setdefault(source.path, []).append(source)
-    paths = list(groups)
+        by_path.setdefault(source.path, source)
+    paths = list(by_path)
     random.Random(seed).shuffle(paths)
     if len(paths) == 1:
-        return list(groups[paths[0]]), []
+        return [by_path[paths[0]]], []
     val_count = max(1, int(round(len(paths) * val_fraction)))
     val_count = min(val_count, len(paths) - 1)
     val_paths = set(paths[:val_count])
-
-    train_paths = sorted(
-        (path for path in paths if path not in val_paths),
-        key=str,
-    )
-    val_paths_ordered = sorted(
-        (path for path in paths if path in val_paths),
-        key=str,
-    )
-    train = [source for path in train_paths for source in groups[path]]
-    val = [source for path in val_paths_ordered for source in groups[path]]
+    train = [by_path[path] for path in sorted((p for p in paths if p not in val_paths), key=str)]
+    val = [by_path[path] for path in sorted((p for p in paths if p in val_paths), key=str)]
     return train, val
 
 

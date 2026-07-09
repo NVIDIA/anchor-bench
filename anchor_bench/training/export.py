@@ -6,7 +6,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from anchor_bench.core.config_model import GRU_INPUT_COLUMNS
+from anchor_bench.core.config_model import GRU_INPUT_COLUMNS, positive_int
+from anchor_bench.training.data import training_topology
 
 _SUPPORTED_FEATURE_DOMAINS = {"input_joints", "output_joints"}
 
@@ -47,18 +48,6 @@ def build_runtime_gru(
             return self.head(out), hidden
 
     return RuntimeGRU()
-
-
-def _positive_int(value: Any, name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be a positive integer")
-    try:
-        result = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a positive integer") from exc
-    if result <= 0 or result != value:
-        raise ValueError(f"{name} must be a positive integer")
-    return result
 
 
 def _name_list(value: Any, name: str) -> list[str]:
@@ -246,7 +235,7 @@ def _validate_training_topology(
     input_joints: Sequence[str],
     output_joints: Sequence[str],
 ) -> None:
-    expected = "siso" if len(input_joints) == 1 else "miso" if len(output_joints) == 1 else "mimo"
+    expected = training_topology(len(input_joints), len(output_joints))
     if metadata.get("training_topology") != expected:
         raise ValueError(
             "runtime_metadata.training_topology must be "
@@ -436,22 +425,22 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
             raise ValueError(f"{source} checkpoint is missing target_columns")
         if "input_feature_specs" in checkpoint:
             raise ValueError("checkpoint input_feature_specs requires non-null runtime_metadata")
-        input_size = _positive_int(
+        input_size = positive_int(
             checkpoint.get("input_size", len(input_columns)),
-            "checkpoint input_size",
+            name="checkpoint input_size",
         )
-        output_size = _positive_int(
+        output_size = positive_int(
             checkpoint.get("output_size", len(target_columns)),
-            "checkpoint output_size",
+            name="checkpoint output_size",
         )
     else:
-        input_size = _positive_int(
+        input_size = positive_int(
             checkpoint.get("input_size"),
-            "checkpoint input_size",
+            name="checkpoint input_size",
         )
-        output_size = _positive_int(
+        output_size = positive_int(
             checkpoint.get("output_size"),
-            "checkpoint output_size",
+            name="checkpoint output_size",
         )
         metadata = _mapping(runtime_metadata, "runtime_metadata")
         _validate_runtime_metadata(

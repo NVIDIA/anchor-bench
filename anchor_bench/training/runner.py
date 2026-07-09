@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from anchor_bench.actuators.loader import load_actuator_file
-from anchor_bench.core.config_model import parse_gru_columns
+from anchor_bench.core.config_model import find_duplicates, parse_gru_columns, positive_int
 from anchor_bench.core.plan import CommandPlan
 from anchor_bench.core.run_config import (
     resolve_repo_path_text,
@@ -23,6 +23,7 @@ from anchor_bench.training.data import (
     TrainingMapping,
     discover_training_sources,
     split_training_sources,
+    training_topology,
 )
 
 
@@ -59,13 +60,6 @@ class ResolvedTrainActuatorRunConfig:
     seed: int
     input_columns: list[str]
     config_sources: dict[str, str]
-
-
-def _positive_int(name: str, value: Any) -> int:
-    resolved = int(value)
-    if resolved < 1:
-        raise ValueError(f"{name} must be >= 1")
-    return resolved
 
 
 def _nonnegative_float(name: str, value: Any) -> float:
@@ -112,7 +106,7 @@ def _canonical_joint_list(bundle: Any, values: Sequence[Any], *, label: str) -> 
     joints = [_canonical_joint(bundle, value, label=label) for value in values]
     if not joints:
         raise ValueError(f"{label} must contain at least one joint")
-    duplicates = sorted({joint for joint in joints if joints.count(joint) > 1})
+    duplicates = find_duplicates(joints)
     if duplicates:
         raise ValueError(f"{label} contains duplicate joints after alias resolution: " + ", ".join(duplicates))
     return joints
@@ -182,8 +176,7 @@ def _validate_resolved_group(
                 f"expected {input_width}->{output_width}"
             )
     identities = [(mapping.input_joints, mapping.output_joints) for mapping in mappings]
-    duplicates = sorted({identity for identity in identities if identities.count(identity) > 1})
-    if duplicates:
+    if find_duplicates(identities):
         raise ValueError(f"training group {name!r} contains duplicate mappings")
     return tuple(mappings)
 
@@ -195,13 +188,9 @@ def _resolve_joint_groups(
 ) -> tuple[list[tuple[str, tuple[TrainingMapping, ...]]], str, dict[str, str]]:
     sources: dict[str, str] = {}
     cli_selection = config.input_joints is not None or config.output_joints is not None
-    programmatic_groups = getattr(config, "groups", None)
-    if cli_selection and programmatic_groups:
-        raise ValueError("groups cannot be combined with input_joints or output_joints")
+    programmatic_groups = config.groups
 
     if cli_selection:
-        if config.input_joints is None:
-            raise ValueError("input_joints is required when output_joints is configured")
         mapping = _resolve_mapping_values(
             bundle,
             config.input_joints,
@@ -230,12 +219,8 @@ def _resolve_joint_groups(
         raise ValueError("training requires groups or input_joints")
 
     resolved: list[tuple[str, tuple[TrainingMapping, ...]]] = []
-    names: set[str] = set()
     for group_index, raw_group in enumerate(raw_groups):
         name = str(raw_group.name)
-        if name in names:
-            raise ValueError(f"duplicate training group name {name!r}")
-        names.add(name)
         mappings = [
             _resolve_mapping_values(
                 bundle,
@@ -255,14 +240,6 @@ def _resolve_joint_groups(
     return resolved, mode, sources
 
 
-def _training_topology(mapping: TrainingMapping) -> str:
-    if len(mapping.input_joints) == 1:
-        return "siso"
-    if len(mapping.output_joints) == 1:
-        return "miso"
-    return "mimo"
-
-
 def _ordered_mapping_joints(
     mappings: Sequence[TrainingMapping],
     *,
@@ -273,16 +250,6 @@ def _ordered_mapping_joints(
         values = mapping.input_joints if domain == "input_joints" else mapping.output_joints
         joints.extend(joint for joint in values if joint not in joints)
     return joints
-
-
-def _actuator_for_joint(spec: Any, joint: str) -> Any:
-    matches = [actuator for actuator in spec.actuators if joint in actuator.joints]
-    if not matches:
-        raise ValueError(f"actuator YAML has no actuator covering joint {joint!r}")
-    if len(matches) > 1:
-        names = ", ".join(actuator.name for actuator in matches)
-        raise ValueError(f"actuator YAML has multiple actuators covering joint {joint!r}: {names}")
-    return matches[0]
 
 
 def _configured_parameter(
@@ -321,8 +288,19 @@ def _infer_uniform_baseline(
     else:
         raise ValueError(f"unsupported baseline kind {kind!r}")
 
+    coverage: dict[str, list[Any]] = {}
+    for actuator in spec.actuators:
+        for joint in actuator.joints:
+            coverage.setdefault(joint, []).append(actuator)
+
     for joint in joints:
-        actuator = _actuator_for_joint(spec, joint)
+        matches = coverage.get(joint, [])
+        if not matches:
+            raise ValueError(f"actuator YAML has no actuator covering joint {joint!r}")
+        if len(matches) > 1:
+            names = ", ".join(actuator.name for actuator in matches)
+            raise ValueError(f"actuator YAML has multiple actuators covering joint {joint!r}: {names}")
+        actuator = matches[0]
         values = actuator.controller.parameters if kind == "pd" else actuator.physical_parameters
         first_values.append(
             (
@@ -499,16 +477,16 @@ def resolve_train_actuator_run_config(
         sample_dt_s=sample_dt_s,
         dry_run=config.dry_run,
         skip_optuna=bool(select("skip_optuna", config.skip_optuna, True)),
-        trials=_positive_int("trials", select("trials", config.trials, 20)),
-        trial_epochs=_positive_int(
-            "trial_epochs",
+        trials=positive_int(select("trials", config.trials, 20), name="trials"),
+        trial_epochs=positive_int(
             select("trial_epochs", config.trial_epochs, 5),
+            name="trial_epochs",
         ),
-        final_epochs=_positive_int(
-            "final_epochs",
+        final_epochs=positive_int(
             select("final_epochs", config.final_epochs, 50),
+            name="final_epochs",
         ),
-        n_streams=_positive_int("n_streams", select("n_streams", config.n_streams, 4)),
+        n_streams=positive_int(select("n_streams", config.n_streams, 4), name="n_streams"),
         noise_std=_nonnegative_float(
             "noise_std",
             select("noise_std", config.noise_std, 0.0),
@@ -623,7 +601,10 @@ def build_resolved_train_actuator_command(
     for group in resolved.groups:
         payload: dict[str, Any] = {
             "name": group.name,
-            "training_topology": _training_topology(group.mappings[0]),
+            "training_topology": training_topology(
+                len(group.mappings[0].input_joints),
+                len(group.mappings[0].output_joints),
+            ),
             "mapping_count": len(group.mappings),
             "mappings": [
                 {

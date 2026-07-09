@@ -17,6 +17,7 @@ from anchor_bench.training.data import (
     TrainingEpisode,
     TrainingMapping,
     TrainingSource,
+    training_topology,
     write_stats_json,
 )
 from anchor_bench.training.export import build_runtime_gru, export_gru_checkpoint
@@ -122,12 +123,7 @@ def _mapping_widths(job: TrainingJob) -> tuple[int, int]:
 
 
 def _training_topology(job: TrainingJob) -> str:
-    input_width, output_width = _mapping_widths(job)
-    if input_width == 1:
-        return "siso"
-    if output_width == 1:
-        return "miso"
-    return "mimo"
+    return training_topology(*_mapping_widths(job))
 
 
 def _joint_mappings(job: TrainingJob) -> list[dict[str, list[str]]]:

@@ -9,6 +9,7 @@ from pydantic import Field, StrictBool, field_validator, model_validator
 from anchor_bench.core.config_model import (
     ConfigModel,
     JointSelection,
+    find_duplicates,
     parse_gru_columns,
     parse_joint_selection,
 )
@@ -172,7 +173,7 @@ class TrainingDefaults(ConfigModel):
             raise ValueError("input_joints is required when output_joints is configured")
         if self.groups is not None:
             names = [group.name for group in self.groups]
-            duplicates = sorted({name for name in names if names.count(name) > 1})
+            duplicates = find_duplicates(names)
             if duplicates:
                 raise ValueError(f"duplicate training group names: {', '.join(duplicates)}")
         return self
