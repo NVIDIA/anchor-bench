@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+      # NVIDIA self-hosted GPU runners require trusted PR branches copied by
+      # copy-pr-bot; pull_request events are not allowed on those runners.
+      # https://docs.gha-runners.nvidia.com/platform/onboarding/pull-request-testing/
+      - "pull-request/[0-9]+"
   pull_request:
     branches:
       - main
@@ -45,9 +49,14 @@ jobs:
             python3 scripts/run_unit_tests.py
 
   full:
-    name: Build full image
+    name: Build full image and run all tests
+    # Self-hosted GPU runners must not run on pull_request; only trusted pushes.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/pull-request/')
     runs-on: linux-amd64-gpu-rtxpro6000-latest-1
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,3 +66,16 @@ jobs:
 
       - name: Verify full image
         run: docker image inspect anchor-bench:full
+
+      - name: Run all tests (including runtime end-to-end)
+        run: |
+          docker run --rm \
+            --gpus all \
+            -e NVIDIA_DRIVER_CAPABILITIES=all \
+            -e NVIDIA_VISIBLE_DEVICES=all \
+            -e ACCEPT_EULA=Y \
+            -e OMNI_KIT_ACCEPT_EULA=YES \
+            -e ANCHOR_BENCH_RUN_RUNTIME_E2E=1 \
+            -e ANCHOR_BENCH_ASSET_DIR=/opt/anchor-bench/assets/robots \
+            anchor-bench:full \
+            python3 scripts/run_unit_tests.py -v
