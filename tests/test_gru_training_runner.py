@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -218,6 +219,7 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
         )
         self.assertTrue(all(mapping.input_joints == mapping.output_joints for mapping in group.mappings))
         self.assertNotIn("--input-joints", plan.command)
+        self.assertIn("--groups", plan.command)
         self.assertEqual("siso", plan.metadata["groups"][0]["training_topology"])
         self.assertEqual(6, plan.metadata["groups"][0]["mapping_count"])
 
@@ -299,7 +301,52 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
         )
         plan = build_resolved_train_actuator_command(resolved)
         self.assertNotIn("--input-joints", plan.command)
+        self.assertIn("--groups", plan.command)
         self.assertEqual(2, plan.metadata["groups"][0]["mapping_count"])
+
+    def test_group_mode_commands_replay_the_resolved_selection(self):
+        training = TrainingDefaults(
+            model="gru",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            groups=[
+                TrainingGroup(
+                    name="custom",
+                    mappings=[
+                        TrainingJointMapping(input_joints=["a", "b"], output_joints=["b"]),
+                    ],
+                )
+            ],
+        )
+        with patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)):
+            resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="demo", dry_run=True))
+        plan = build_resolved_train_actuator_command(resolved)
+
+        self.assertIn("--groups", plan.command)
+        payload = json.loads(plan.command[plan.command.index("--groups") + 1])
+        self.assertEqual(
+            [
+                {
+                    "name": "custom",
+                    "mappings": [
+                        {"input_joints": ["joint_a", "joint_b"], "output_joints": ["joint_b"]}
+                    ],
+                }
+            ],
+            payload,
+        )
+
+        # Round trip: feeding the emitted JSON back through the CLI-config path
+        # resolves the identical groups.
+        groups = [
+            TrainingGroup.from_dict(item, f"--groups[{index}]")
+            for index, item in enumerate(payload)
+        ]
+        with patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)):
+            replayed = resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(robot="demo", groups=groups, dry_run=True)
+            )
+        self.assertEqual(resolved.groups, replayed.groups)
 
     def test_group_mappings_must_have_identical_tensor_widths(self):
         training = TrainingDefaults(

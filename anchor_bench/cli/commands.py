@@ -52,14 +52,28 @@ def _handle_sysid(args: argparse.Namespace) -> int:
 
 
 def _handle_train(args: argparse.Namespace) -> int:
+    from anchor_bench.core.run_schema import TrainingGroup
     from anchor_bench.core.schemas import TrainActuatorRunConfig
     from anchor_bench.training.runner import resolve_train_actuator_run_config, run_resolved_train_actuator
+
+    groups = None
+    if args.groups is not None:
+        try:
+            raw_groups = json.loads(args.groups)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"--groups must be valid JSON: {exc}") from exc
+        if not isinstance(raw_groups, list) or not raw_groups:
+            raise ValueError("--groups must be a non-empty JSON list of group objects")
+        groups = [
+            TrainingGroup.from_dict(item, f"--groups[{index}]") for index, item in enumerate(raw_groups)
+        ]
 
     config = TrainActuatorRunConfig(
         robot=args.robot,
         model=args.model,
         data=args.data,
         output=args.output,
+        groups=groups,
         input_joints=args.input_joints,
         output_joints=args.output_joints,
         pd_kp=args.pd_kp,

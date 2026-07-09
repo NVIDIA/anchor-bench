@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -533,6 +534,21 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         mapping = resolved.groups[0].mappings[0]
         command.extend(("--input-joints", ",".join(mapping.input_joints)))
         command.extend(("--output-joints", ",".join(mapping.output_joints)))
+    else:
+        groups_payload = [
+            {
+                "name": group.name,
+                "mappings": [
+                    {
+                        "input_joints": list(mapping.input_joints),
+                        "output_joints": list(mapping.output_joints),
+                    }
+                    for mapping in group.mappings
+                ],
+            }
+            for group in resolved.groups
+        ]
+        command.extend(("--groups", json.dumps(groups_payload, separators=(",", ":"))))
     command.extend(
         (
             "--output",

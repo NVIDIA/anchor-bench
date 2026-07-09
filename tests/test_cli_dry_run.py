@@ -87,6 +87,13 @@ class CliDryRunTests(unittest.TestCase):
             with self.subTest(joint=joint):
                 self.assertIn(f"- {joint}", result.stdout)
         self.assertNotIn("- --input-joints", result.stdout)
+        self.assertIn("--groups", result.stdout)
+
+    def test_groups_flag_dry_runs_a_custom_selection(self):
+        groups = '[{"name":"pair","mappings":[{"input_joints":["Rotation","Pitch"],"output_joints":["Pitch"]}]}]'
+        result = run_cli("train-actuator", "--robot", "so101", "--groups", groups, "--dry-run")
+        self.assertIn("name: pair", result.stdout)
+        self.assertIn("training_topology: miso", result.stdout)
 
     def test_train_actuator_dry_runs_for_pure_and_hybrid_gru(self):
         data = "inputs/datasets/so101/custom_figure8_with_camera"

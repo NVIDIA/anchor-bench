@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--data")
     train.add_argument("--input-joints")
     train.add_argument("--output-joints")
+    train.add_argument("--groups")
     train.add_argument("--output")
     train.add_argument("--input-columns")
     train.add_argument("--sample-dt", type=float, dest="sample_dt_s")
