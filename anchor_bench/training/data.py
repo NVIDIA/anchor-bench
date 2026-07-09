@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -197,6 +198,10 @@ def _ordered_unique(values: Sequence[str], *, label: str) -> tuple[str, ...]:
     return names
 
 
+CADENCE_MEDIAN_REL_TOL = 1.0e-2
+CADENCE_INTERVAL_REL_TOL = 0.25
+
+
 def _validate_episode_cadence(
     timestamps: np.ndarray,
     sample_dt_s: float,
@@ -208,12 +213,19 @@ def _validate_episode_cadence(
     if len(timestamps) < 2:
         return
     intervals = np.diff(timestamps)
-    tolerance = max(1.0e-9, sample_dt_s * 1.0e-6)
-    matches = np.isclose(intervals, sample_dt_s, rtol=1.0e-6, atol=tolerance)
-    if not np.all(matches):
-        first = int(np.flatnonzero(~matches)[0])
+    median = float(np.median(intervals))
+    if not math.isclose(median, sample_dt_s, rel_tol=CADENCE_MEDIAN_REL_TOL):
         raise ValueError(
-            f"{source} state cadence does not match sample_dt_s {sample_dt_s}: "
+            f"{source} median state cadence does not match sample_dt_s {sample_dt_s}: "
+            f"median interval is {median}; set training.sample_dt_s or --sample-dt "
+            "to the recording's actual sample interval"
+        )
+    mismatched = ~np.isclose(intervals, sample_dt_s, rtol=CADENCE_INTERVAL_REL_TOL, atol=0.0)
+    if np.any(mismatched):
+        first = int(np.flatnonzero(mismatched)[0])
+        raise ValueError(
+            f"{source} state cadence has an interval outside "
+            f"{CADENCE_INTERVAL_REL_TOL:.0%} of sample_dt_s {sample_dt_s}: "
             f"interval {first}->{first + 1} is {float(intervals[first])}"
         )
 

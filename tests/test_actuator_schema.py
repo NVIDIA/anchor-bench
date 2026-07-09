@@ -210,6 +210,18 @@ class NativeActuatorSchemaTests(unittest.TestCase):
         self.assertTrue(run.training.skip_optuna)
         self.assertEqual(4, run.training.n_streams)
 
+    def test_training_defaults_accept_sample_dt(self):
+        from anchor_bench.core.schemas import RobotRunFile
+
+        run = RobotRunFile.from_dict(
+            {"training": {"model": "gru", "sample_dt_s": 0.02}},
+            "run.yaml",
+        )
+        self.assertEqual(0.02, run.training.sample_dt_s)
+
+        with self.assertRaisesRegex(ValueError, "sample_dt_s"):
+            RobotRunFile.from_dict({"training": {"sample_dt_s": 0.0}}, "run.yaml")
+
     def test_robot_run_schema_accepts_training_groups(self):
         from anchor_bench.core.schemas import RobotRunFile
 

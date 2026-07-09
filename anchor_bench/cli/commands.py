@@ -75,6 +75,7 @@ def _handle_train(args: argparse.Namespace) -> int:
         n_streams=args.n_streams,
         noise_std=args.noise_std,
         seed=args.seed,
+        sample_dt_s=args.sample_dt_s,
     )
     resolved = resolve_train_actuator_run_config(config)
     if not args.dry_run:

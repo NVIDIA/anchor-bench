@@ -366,6 +366,34 @@ class GRUEpisodeDataTests(unittest.TestCase):
                 sample_dt_s=1.0,
             )
 
+    def test_accepts_hardware_timestamp_jitter_around_sample_dt(self):
+        # Real robot logs jitter by up to a few percent per interval; only the
+        # median cadence and gross per-interval outliers should be enforced.
+        episode = assemble_training_episode(
+            _motion(state_time=[0.0, 1.003, 1.998]),
+            mapping=TrainingMapping(("output",), ("output",)),
+            sample_dt_s=1.0,
+        )
+        self.assertEqual(3, len(episode.timestamps))
+
+    def test_rejects_median_cadence_mismatch_with_config_hint(self):
+        with self.assertRaisesRegex(ValueError, r"sample_dt_s.*--sample-dt"):
+            assemble_training_episode(
+                _motion(state_time=[0.0, 0.1, 0.2]),
+                mapping=TrainingMapping(("output",), ("output",)),
+                sample_dt_s=1.0,
+            )
+
+    def test_rejects_interval_outliers_beyond_quarter_of_sample_dt(self):
+        # Intervals [0.72, 1.28] keep the median exactly at sample_dt_s, so
+        # only the per-interval outlier check can reject this recording.
+        with self.assertRaisesRegex(ValueError, "interval outside"):
+            assemble_training_episode(
+                _motion(state_time=[0.0, 0.72, 2.0]),
+                mapping=TrainingMapping(("output",), ("output",)),
+                sample_dt_s=1.0,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

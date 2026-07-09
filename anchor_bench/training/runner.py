@@ -74,6 +74,29 @@ def _nonnegative_float(name: str, value: Any) -> float:
     return resolved
 
 
+def _resolve_sample_dt(
+    config: TrainActuatorRunConfig,
+    training_cfg: Any,
+    bundle: Any,
+) -> tuple[float, str]:
+    explicit = config.sample_dt_s
+    configured = getattr(training_cfg, "sample_dt_s", None)
+    if explicit is not None:
+        value, source = float(explicit), "cli"
+    elif configured is not None:
+        value, source = float(configured), "run.yaml"
+    else:
+        timing = resolve_simulation_timing(
+            bundle.run_config.simulation,
+            f"{bundle.paths.run}.simulation",
+        )
+        source = "simulation.control_freq" if bundle.run_config.simulation.control_freq is not None else "fallback"
+        return timing.control_dt, source
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError("sample_dt_s must be finite and greater than zero")
+    return value, source
+
+
 def _canonical_joint(bundle: Any, value: Any, *, label: str) -> str:
     name = str(value).strip()
     if not name:
@@ -410,12 +433,7 @@ def resolve_train_actuator_run_config(
 
     input_columns = parse_gru_columns(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
 
-    timing = resolve_simulation_timing(
-        bundle.run_config.simulation,
-        f"{bundle.paths.run}.simulation",
-    )
-    sample_dt_s = timing.control_dt
-    sources["sample_dt_s"] = "run.yaml" if bundle.run_config.simulation.control_freq is not None else "fallback"
+    sample_dt_s, sources["sample_dt_s"] = _resolve_sample_dt(config, training_cfg, bundle)
 
     pd_required = model == "hybrid_residual" or "solver_pd" in input_columns
     friction_required = model == "hybrid_residual"
@@ -531,6 +549,8 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
             str(resolved.noise_std),
             "--seed",
             str(resolved.seed),
+            "--sample-dt",
+            str(resolved.sample_dt_s),
             "--input-columns",
             ",".join(resolved.input_columns),
         )

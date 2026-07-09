@@ -208,6 +208,7 @@ class TrainActuatorRunConfig:
     n_streams: int | None = None
     noise_std: float | None = None
     seed: int | None = None
+    sample_dt_s: float | None = None
 
     def __post_init__(self) -> None:
         input_joints = None if self.input_joints is None else parse_joint_selection(self.input_joints)

@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--output-joints")
     train.add_argument("--output")
     train.add_argument("--input-columns")
+    train.add_argument("--sample-dt", type=float, dest="sample_dt_s")
     train.add_argument("--pd-kp", type=float)
     train.add_argument("--pd-kd", type=float)
     train.add_argument("--friction-dry", type=float)

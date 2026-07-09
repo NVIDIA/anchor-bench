@@ -80,6 +80,29 @@ class TrainingRunnerResolutionTests(unittest.TestCase):
         self.assertIn("--output-joints", plan.command)
         self.assertEqual("miso", plan.metadata["groups"][0]["training_topology"])
 
+    def test_sample_dt_resolution_prefers_cli_then_run_yaml(self):
+        training = TrainingDefaults(
+            model="gru",
+            real_data_dir="inputs/demo",
+            output_dir="outputs/demo",
+            input_joints=["a"],
+            sample_dt_s=0.02,
+        )
+        with patch("anchor_bench.training.runner.get_robot", return_value=_bundle(training)):
+            from_yaml = resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(robot="demo", dry_run=True)
+            )
+            from_cli = resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(robot="demo", sample_dt_s=0.004, dry_run=True)
+            )
+        self.assertEqual(0.02, from_yaml.sample_dt_s)
+        self.assertEqual("run.yaml", from_yaml.config_sources["sample_dt_s"])
+        self.assertEqual(0.004, from_cli.sample_dt_s)
+        self.assertEqual("cli", from_cli.config_sources["sample_dt_s"])
+        plan = build_resolved_train_actuator_command(from_cli)
+        self.assertIn("--sample-dt", plan.command)
+        self.assertIn("0.004", plan.command)
+
     def test_cli_input_list_defaults_outputs_without_inheriting_run_outputs(self):
         training = TrainingDefaults(
             model="gru",
