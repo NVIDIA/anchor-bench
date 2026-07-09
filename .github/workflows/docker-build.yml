@@ -4,13 +4,10 @@ on:
   push:
     branches:
       - main
-      # NVIDIA self-hosted GPU runners require trusted PR branches copied by
+      # NVIDIA self-hosted runners require trusted PR branches copied by
       # copy-pr-bot; pull_request events are not allowed on those runners.
       # https://docs.gha-runners.nvidia.com/platform/onboarding/pull-request-testing/
       - "pull-request/[0-9]+"
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
@@ -23,7 +20,12 @@ env:
 jobs:
   kitless:
     name: Build kitless image and run unit tests
-    runs-on: ubuntu-latest
+    # Self-hosted runners must not run on pull_request; only trusted pushes.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/pull-request/')
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -76,6 +78,8 @@ jobs:
             -e ACCEPT_EULA=Y \
             -e OMNI_KIT_ACCEPT_EULA=YES \
             -e ANCHOR_BENCH_RUN_RUNTIME_E2E=1 \
-            -e ANCHOR_BENCH_ASSET_DIR=/opt/anchor-bench/assets/robots \
+            -e ANCHOR_BENCH_ASSET_DIR=/workspace/anchor-bench/assets/robots \
+            -v "${{ github.workspace }}:/workspace/anchor-bench" \
+            -w /workspace/anchor-bench \
             anchor-bench:full \
             python3 scripts/run_unit_tests.py -v
