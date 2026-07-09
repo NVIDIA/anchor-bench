@@ -9,14 +9,23 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-GRU_INPUT_COLUMNS = {
-    "position",
-    "position_error",
-    "velocity",
-    "solver_pd",
-    "dynamic_bias",
-    "previous_torque",
-}
+GRU_INPUT_COLUMNS = frozenset(
+    {
+        "position",
+        "position_error",
+        "velocity",
+        "solver_pd",
+        "dynamic_bias",
+        "previous_torque",
+    }
+)
+
+# Columns the deployed GRU runtime can feed today; training-only derived
+# features (dynamic_bias, previous_torque) are excluded until the runtime
+# learns to compute them.
+RUNTIME_GRU_INPUT_COLUMNS = frozenset(
+    {"position", "position_error", "velocity", "solver_pd"}
+)
 
 
 JointSelection = Literal["all"] | list[str]
@@ -32,7 +41,7 @@ def _find_duplicates(values: list[str]) -> list[str]:
     return sorted(duplicates)
 
 
-def parse_gru_columns(value: Any) -> list[str]:
+def parse_gru_columns(value: Any, *, allowed: frozenset[str] = GRU_INPUT_COLUMNS) -> list[str]:
     if isinstance(value, str):
         columns = [item.strip() for item in value.split(",") if item.strip()]
     elif isinstance(value, (list, tuple)):
@@ -44,7 +53,7 @@ def parse_gru_columns(value: Any) -> list[str]:
     duplicates = _find_duplicates(columns)
     if duplicates:
         raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
-    unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
+    unsupported = sorted(set(columns) - allowed)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     return columns

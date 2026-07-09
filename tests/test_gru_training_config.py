@@ -41,33 +41,38 @@ class GruFeatureValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: qfrc_bias"):
             parse_gru_columns(["position", "qfrc_bias"])
 
-    def test_runtime_parser_and_schemas_accept_all_features(self):
+    def test_training_parser_accepts_all_features(self):
         for feature in ("dynamic_bias", "previous_torque"):
             with self.subTest(feature=feature):
                 columns = ["position", feature]
                 self.assertEqual(columns, parse_gru_columns(columns))
 
-                controller = ControllerSpec.from_dict(
-                    {
-                        "type": "gru",
-                        "network_file": "runtime.pt",
-                        "parameters": {
+    def test_runtime_schemas_reject_training_only_derived_features(self):
+        for feature in ("dynamic_bias", "previous_torque"):
+            with self.subTest(feature=feature):
+                columns = ["position", feature]
+
+                with self.assertRaisesRegex(ValueError, f"unsupported GRU input columns: {feature}"):
+                    ControllerSpec.from_dict(
+                        {
+                            "type": "gru",
+                            "network_file": "runtime.pt",
+                            "parameters": {
+                                "input_columns": columns,
+                            },
+                        },
+                        "controller",
+                    )
+
+                with self.assertRaisesRegex(ValueError, f"unsupported GRU input columns: {feature}"):
+                    ResidualSpec.from_dict(
+                        {
+                            "type": "gru",
+                            "network_file": "runtime.pt",
                             "input_columns": columns,
                         },
-                    },
-                    "controller",
-                )
-                self.assertEqual(columns, controller.parameters["input_columns"])
-
-                residual = ResidualSpec.from_dict(
-                    {
-                        "type": "gru",
-                        "network_file": "runtime.pt",
-                        "input_columns": columns,
-                    },
-                    "residual",
-                )
-                self.assertEqual(columns, residual.input_columns)
+                        "residual",
+                    )
 
 
 class TrainingDefaultsTests(unittest.TestCase):

@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 from anchor_bench.core.config_model import (
     ConfigModel,
     JointSelection,
+    RUNTIME_GRU_INPUT_COLUMNS,
     parse_gru_columns,
     parse_joint_selection,
 )
@@ -57,7 +58,9 @@ class ControllerSpec(ConfigModel):
     def _validate_parameters(cls, value: Any) -> dict[str, Any]:
         parameters = dict(value or {})
         if "input_columns" in parameters:
-            parameters["input_columns"] = parse_gru_columns(parameters["input_columns"])
+            parameters["input_columns"] = parse_gru_columns(
+                parameters["input_columns"], allowed=RUNTIME_GRU_INPUT_COLUMNS
+            )
         return parameters
 
     @model_validator(mode="after")
@@ -86,7 +89,7 @@ class ResidualSpec(ConfigModel):
     @field_validator("input_columns", mode="before")
     @classmethod
     def _validate_input_columns(cls, value: Any) -> list[str]:
-        return parse_gru_columns(value)
+        return parse_gru_columns(value, allowed=RUNTIME_GRU_INPUT_COLUMNS)
 
 
 class DelaySpec(ConfigModel):

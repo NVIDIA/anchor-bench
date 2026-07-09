@@ -342,6 +342,28 @@ class NativeActuatorSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: qfrc_bias"):
             ActuatorSpec.from_dict(actuator, "actuator")
 
+    def test_runtime_gru_specs_reject_training_only_columns(self):
+        from anchor_bench.core.schemas import ControllerSpec, ResidualSpec
+
+        with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: previous_torque"):
+            ControllerSpec.from_dict(
+                {
+                    "type": "gru",
+                    "network_file": "net.pt",
+                    "parameters": {"input_columns": ["position", "previous_torque"]},
+                },
+                "actuators.yaml.controller",
+            )
+        with self.assertRaisesRegex(ValueError, "unsupported GRU input columns: dynamic_bias"):
+            ResidualSpec.from_dict(
+                {
+                    "type": "gru",
+                    "network_file": "net.pt",
+                    "input_columns": ["position", "dynamic_bias"],
+                },
+                "actuators.yaml.residual",
+            )
+
     def test_instantiate_newton_actuators_delegates_pd_to_newton_adapter(self):
         from anchor_bench.actuators import loader
         from anchor_bench.core.schemas import ActuatorFile

@@ -5,9 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from anchor_bench.core.config_model import RUNTIME_GRU_INPUT_COLUMNS
+
 
 DEFAULT_GRU_INPUT_COLUMNS = ("position", "position_error", "velocity")
-SUPPORTED_GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
+SUPPORTED_GRU_INPUT_COLUMNS = RUNTIME_GRU_INPUT_COLUMNS
 
 
 def _coerce_configclass(candidate):
