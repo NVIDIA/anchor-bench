@@ -58,13 +58,13 @@ def resolve_runtime_asset(bundle: RobotBundle) -> Path:
 
 def _import_newton_runtime() -> tuple[Any, Any]:
     try:
+        import mujoco
         import newton
-        import warp as wp
     except ImportError as exc:  # pragma: no cover - full-runtime dependency
         raise RuntimeError(
-            "dynamic_bias training requires Newton, Warp, MuJoCo, and MuJoCo-Warp from the full runtime environment"
+            "dynamic_bias training requires Newton and MuJoCo from the full runtime environment"
         ) from exc
-    return newton, wp
+    return newton, mujoco
 
 
 def _normalized_joint_name(value: str) -> str:
@@ -83,28 +83,24 @@ def _file_sha256(path: Path) -> str:
 class NewtonMuJoCoDynamicBiasProvider:
     """Evaluate MuJoCo qfrc_bias without advancing the simulation."""
 
-    def __init__(self, bundle: RobotBundle, *, batch_size: int = 64):
-        if batch_size < 1:
-            raise ValueError("dynamic-bias batch_size must be >= 1")
+    def __init__(self, bundle: RobotBundle):
         self._bundle = bundle
-        self._batch_size = int(batch_size)
         self._initialized = False
         self._newton: Any = None
+        self._mujoco: Any = None
         self._template: Any = None
         self._solver: Any = None
-        self._state: Any = None
-        self._bias: Any = None
-        self._coords_per_world = 0
-        self._dofs_per_world = 0
-        self._default_q = np.empty(0, dtype=np.float32)
-        self._default_qd = np.empty(0, dtype=np.float32)
+        self._mj_q_start = np.empty(0, dtype=np.int64)
+        self._mj_qd_start = np.empty(0, dtype=np.int64)
+        self._dof_ref = np.empty(0, dtype=np.float64)
+        self._default_qpos = np.empty(0, dtype=np.float64)
         self._mapping_cache: dict[str, int | None] = {}
         self._provenance: dict[str, Any] = {
-            "source": "newton.solvers.SolverMuJoCo.eval_dynamic_bias",
+            "source": "mujoco.mj_forward.qfrc_bias",
+            "model_source": "newton.solvers.SolverMuJoCo(use_mujoco_cpu=True)",
             "quantity": "qfrc_bias",
-            "batch_size": self._batch_size,
             "contacts": "disabled",
-            "use_mujoco_cpu": False,
+            "use_mujoco_cpu": True,
             "unrecorded_positions": "model_defaults",
             "unrecorded_velocities": "zero",
         }
@@ -113,15 +109,17 @@ class NewtonMuJoCoDynamicBiasProvider:
         if self._initialized:
             return
 
-        newton, wp = _import_newton_runtime()
+        newton, mujoco = _import_newton_runtime()
         solver_namespace = getattr(newton, "solvers", None)
         solver_type = getattr(solver_namespace, "SolverMuJoCo", None)
-        if solver_type is None or not hasattr(solver_type, "eval_dynamic_bias"):
-            raise RuntimeError("dynamic_bias training requires Newton SolverMuJoCo.eval_dynamic_bias(state, out)")
+        if solver_type is None:
+            raise RuntimeError("dynamic_bias training requires newton.solvers.SolverMuJoCo")
 
         asset_path = resolve_runtime_asset(self._bundle)
         template = newton.ModelBuilder()
-        solver_type.register_custom_attributes(template)
+        register = getattr(solver_type, "register_custom_attributes", None)
+        if callable(register):
+            register(template)
         template.add_usd(
             str(asset_path),
             floating=not self._bundle.spec.fixed_base,
@@ -130,34 +128,44 @@ class NewtonMuJoCoDynamicBiasProvider:
             load_visual_shapes=False,
             skip_mesh_approximation=True,
         )
-
-        scene = newton.ModelBuilder()
-        scene.replicate(template, self._batch_size)
-        model = scene.finalize()
+        model = template.finalize()
         solver = solver_type(
             model,
-            use_mujoco_cpu=False,
+            use_mujoco_cpu=True,
             disable_contacts=True,
         )
+        missing = [
+            name
+            for name in ("mj_model", "mj_data", "mj_q_start", "mj_qd_start")
+            if getattr(solver, name, None) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                "dynamic_bias training requires SolverMuJoCo MuJoCo model access; missing: "
+                + ", ".join(missing)
+            )
+
+        mujoco_attrs = getattr(model, "mujoco", None)
+        dof_ref = getattr(mujoco_attrs, "dof_ref", None) if mujoco_attrs is not None else None
 
         self._newton = newton
+        self._mujoco = mujoco
         self._template = template
         self._solver = solver
-        self._state = model.state()
-        self._bias = wp.empty(
-            model.joint_dof_count,
-            dtype=wp.float32,
-            device=model.device,
+        self._mj_q_start = np.asarray(solver.mj_q_start.numpy(), dtype=np.int64)
+        self._mj_qd_start = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
+        self._dof_ref = (
+            np.zeros(int(model.joint_dof_count), dtype=np.float64)
+            if dof_ref is None
+            else np.asarray(dof_ref.numpy(), dtype=np.float64)
         )
-        self._coords_per_world = int(template.joint_coord_count)
-        self._dofs_per_world = int(template.joint_dof_count)
-        self._default_q = model.joint_q.numpy().astype(np.float32, copy=True)
-        self._default_qd = np.zeros(model.joint_dof_count, dtype=np.float32)
+        self._default_qpos = np.array(solver.mj_data.qpos, dtype=np.float64, copy=True)
         self._provenance.update(
             {
                 "asset": asset_path.name,
                 "asset_sha256": _file_sha256(asset_path),
                 "newton_version": str(getattr(newton, "__version__", "unknown")),
+                "mujoco_version": str(getattr(mujoco, "__version__", "unknown")),
             }
         )
         self._initialized = True
@@ -196,7 +204,7 @@ class NewtonMuJoCoDynamicBiasProvider:
         name: str,
         *,
         required: bool,
-    ) -> tuple[int, int] | None:
+    ) -> tuple[int, int, int] | None:
         joint_index = self._resolve_template_joint(name)
         if joint_index is None:
             if required:
@@ -213,8 +221,14 @@ class NewtonMuJoCoDynamicBiasProvider:
             if required:
                 raise ValueError(f"input joint {name!r} must map to one revolute or prismatic Newton DOF")
             return None
+        if int(self._mj_q_start[joint_index]) < 0:
+            # Loop-closure joints carry no MuJoCo coordinates; treat as unmapped.
+            if required:
+                raise ValueError(f"input joint {name!r} has no MuJoCo coordinates in the compiled model")
+            return None
         return (
-            int(self._template.joint_q_start[joint_index]),
+            int(self._mj_q_start[joint_index]),
+            int(self._mj_qd_start[joint_index]),
             int(self._template.joint_qd_start[joint_index]),
         )
 
@@ -272,7 +286,7 @@ class NewtonMuJoCoDynamicBiasProvider:
 
         self._initialize()
         requested_set = set(requested_names)
-        mapped: list[tuple[int, str, int, int]] = []
+        mapped: list[tuple[int, str, int, int, int]] = []
         mapped_model_indices: set[int] = set()
         mapped_model_names: dict[int, str] = {}
         unmapped_names: list[str] = []
@@ -290,37 +304,32 @@ class NewtonMuJoCoDynamicBiasProvider:
                 )
             mapped_model_names[joint_index] = name
             mapped_model_indices.add(joint_index)
-            mapped.append((column, name, indices[0], indices[1]))
+            mapped.append((column, name, indices[0], indices[1], indices[2]))
 
-        q_indices_by_name = {name: (q_index, qd_index) for _, name, q_index, qd_index in mapped}
-        requested_qd_indices = np.asarray(
-            [q_indices_by_name[name][1] for name in requested_names],
+        qd_by_name = {name: qd_adr for _, name, _, qd_adr, _ in mapped}
+        requested_qd_adr = np.asarray(
+            [qd_by_name[name] for name in requested_names],
             dtype=np.int64,
         )
+
+        mapped_columns = np.asarray([item[0] for item in mapped], dtype=np.int64)
+        mapped_q_adr = np.asarray([item[2] for item in mapped], dtype=np.int64)
+        mapped_qd_adr = np.asarray([item[3] for item in mapped], dtype=np.int64)
+        mapped_dof_ref = self._dof_ref[np.asarray([item[4] for item in mapped], dtype=np.int64)]
+
+        mj_model = self._solver.mj_model
+        mj_data = self._solver.mj_data
+        mj_data.qpos[:] = self._default_qpos
+        mj_data.qvel[:] = 0.0
         result = np.empty(
             (len(position_values), len(requested_names)),
             dtype=np.float32,
         )
-
-        mapped_columns = np.asarray([item[0] for item in mapped], dtype=np.int64)
-        mapped_q_indices = np.asarray([item[2] for item in mapped], dtype=np.int64)
-        mapped_qd_indices = np.asarray([item[3] for item in mapped], dtype=np.int64)
-        for start in range(0, len(position_values), self._batch_size):
-            end = min(start + self._batch_size, len(position_values))
-            active = end - start
-            q_values = self._default_q.copy().reshape(self._batch_size, self._coords_per_world)
-            qd_values = self._default_qd.copy().reshape(self._batch_size, self._dofs_per_world)
-            q_values[:active, mapped_q_indices] = position_values[start:end, mapped_columns]
-            qd_values[:active, mapped_qd_indices] = velocity_values[start:end, mapped_columns]
-
-            self._state.joint_q.assign(q_values.reshape(-1))
-            self._state.joint_qd.assign(qd_values.reshape(-1))
-            self._solver.eval_dynamic_bias(self._state, self._bias)
-            bias = self._bias.numpy().reshape(
-                self._batch_size,
-                self._dofs_per_world,
-            )
-            result[start:end] = bias[:active, requested_qd_indices]
+        for row in range(len(position_values)):
+            mj_data.qpos[mapped_q_adr] = position_values[row, mapped_columns] + mapped_dof_ref
+            mj_data.qvel[mapped_qd_adr] = velocity_values[row, mapped_columns]
+            self._mujoco.mj_forward(mj_model, mj_data)
+            result[row] = mj_data.qfrc_bias[requested_qd_adr]
 
         if not np.all(np.isfinite(result)):
             raise ValueError("SolverMuJoCo produced non-finite dynamic_bias values")

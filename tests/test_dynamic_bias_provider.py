@@ -17,35 +17,36 @@ from anchor_bench.training.dynamic_bias import (
 )
 
 
-class _FakeArray:
+class _FakeIntArray:
     def __init__(self, values) -> None:
-        self.values = np.asarray(values, dtype=np.float32)
+        self._values = np.asarray(values, dtype=np.int32)
 
     def numpy(self):
-        return np.array(self.values, copy=True)
-
-    def assign(self, values) -> None:
-        self.values = np.asarray(values, dtype=np.float32).copy()
+        return np.array(self._values, copy=True)
 
 
-class _FakeState:
-    def __init__(self, q, qd) -> None:
-        self.joint_q = _FakeArray(q)
-        self.joint_qd = _FakeArray(qd)
+class _FakeFloatArray:
+    def __init__(self, values) -> None:
+        self._values = np.asarray(values, dtype=np.float64)
+
+    def numpy(self):
+        return np.array(self._values, copy=True)
+
+
+class _FakeMjData:
+    def __init__(self, size: int) -> None:
+        self.qpos = np.array([1.0, 2.0, 3.0], dtype=np.float64)[:size]
+        self.qvel = np.zeros(size, dtype=np.float64)
+        self.qfrc_bias = np.zeros(size, dtype=np.float64)
 
 
 class _FakeModel:
-    def __init__(self, batch_size: int) -> None:
-        self.joint_dof_count = batch_size * 3
+    def __init__(self) -> None:
+        self.joint_dof_count = 3
+        self.joint_coord_count = 3
         self.device = "cpu"
-        self.joint_q = _FakeArray(np.tile([1.0, 2.0, 3.0], batch_size))
-        self._batch_size = batch_size
-
-    def state(self):
-        return _FakeState(
-            self.joint_q.numpy(),
-            np.zeros(self.joint_dof_count, dtype=np.float32),
-        )
+        # Per-DOF qpos offsets, indexed by Newton DOF index (a, b, c).
+        self.mujoco = SimpleNamespace(dof_ref=_FakeFloatArray([0.5, -0.25, 0.0]))
 
 
 class _FakeModelBuilder:
@@ -55,44 +56,70 @@ class _FakeModelBuilder:
         self.joint_type = [1, 1, 1]
         self.joint_q_start = [0, 1, 2]
         self.joint_qd_start = [0, 1, 2]
-        self.joint_coord_count = 3
-        self.joint_dof_count = 3
-        self._batch_size = 1
 
     def add_usd(self, *_args, **_kwargs) -> None:
         return None
 
-    def replicate(self, _template, batch_size: int) -> None:
-        self._batch_size = batch_size
-
     def finalize(self):
-        return _FakeModel(self._batch_size)
+        return _FakeModel()
 
 
 class _FakeSolver:
+    """Fake solver whose MuJoCo address maps are permuted relative to Newton's.
+
+    Newton joint order (a, b, c) has q/qd starts [0, 1, 2]; the maps below send
+    a->qpos[2]/qvel[1], b->qpos[0]/qvel[2], c->qpos[1]/qvel[0], so a provider
+    that indexes MuJoCo arrays with Newton addresses produces wrong values.
+    """
+
     @staticmethod
     def register_custom_attributes(_builder) -> None:
         return None
 
-    def __init__(self, _model, **_kwargs) -> None:
+    def __init__(self, _model, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.mj_model = SimpleNamespace()
+        self.mj_data = _FakeMjData(3)
+        self.mj_q_start = _FakeIntArray([2, 0, 1])
+        self.mj_qd_start = _FakeIntArray([1, 2, 0])
+
+
+class _NegativeAddressSolver:
+    """Fake solver where joint a has no MuJoCo coordinates (address -1)."""
+
+    @staticmethod
+    def register_custom_attributes(_builder) -> None:
         return None
 
-    def eval_dynamic_bias(self, state, out) -> None:
-        out.assign(state.joint_q.values + 10.0 * state.joint_qd.values)
+    def __init__(self, _model, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.mj_model = SimpleNamespace()
+        self.mj_data = _FakeMjData(2)
+        self.mj_q_start = _FakeIntArray([-1, 0, 1])
+        self.mj_qd_start = _FakeIntArray([-1, 0, 1])
 
 
-def _fake_runtime():
+class _SolverMissingMaps:
+    def __init__(self, _model, **_kwargs) -> None:
+        self.mj_model = SimpleNamespace()
+        self.mj_data = _FakeMjData(3)
+
+
+def _fake_mj_forward(_model, data) -> None:
+    # Couple every qpos entry into every bias entry so a misdirected qpos
+    # write (wrong address, missing dof_ref offset) shifts observed values.
+    data.qfrc_bias[:] = data.qpos + 10.0 * data.qvel + data.qpos.sum()
+
+
+def _fake_runtime(solver_cls=_FakeSolver):
     newton = SimpleNamespace(
         __version__="test-newton",
         ModelBuilder=_FakeModelBuilder,
         JointType=SimpleNamespace(REVOLUTE=1, PRISMATIC=2),
-        solvers=SimpleNamespace(SolverMuJoCo=_FakeSolver),
+        solvers=SimpleNamespace(SolverMuJoCo=solver_cls),
     )
-    wp = SimpleNamespace(
-        float32=np.float32,
-        empty=lambda size, **_kwargs: _FakeArray(np.zeros(size, dtype=np.float32)),
-    )
-    return newton, wp
+    mujoco = SimpleNamespace(__version__="test-mujoco", mj_forward=_fake_mj_forward)
+    return newton, mujoco
 
 
 class DynamicBiasProviderTests(unittest.TestCase):
@@ -114,16 +141,13 @@ class DynamicBiasProviderTests(unittest.TestCase):
             check=True,
         )
 
-    def test_constructor_is_lazy_and_validates_batch_size(self):
+    def test_constructor_is_lazy(self):
         bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
         with patch(
             "anchor_bench.training.dynamic_bias._import_newton_runtime",
             side_effect=AssertionError("runtime import must be lazy"),
         ):
             NewtonMuJoCoDynamicBiasProvider(bundle)
-
-        with self.assertRaisesRegex(ValueError, "batch_size must be >= 1"):
-            NewtonMuJoCoDynamicBiasProvider(bundle, batch_size=0)
 
     def test_missing_input_joint_fails_before_runtime_import(self):
         bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
@@ -143,14 +167,23 @@ class DynamicBiasProviderTests(unittest.TestCase):
     def test_missing_newton_capability_has_clear_error(self):
         bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
         newton = SimpleNamespace(
-            solvers=SimpleNamespace(SolverMuJoCo=object),
+            __version__="test-newton",
+            ModelBuilder=_FakeModelBuilder,
+            JointType=SimpleNamespace(REVOLUTE=1, PRISMATIC=2),
+            solvers=SimpleNamespace(SolverMuJoCo=_SolverMissingMaps),
         )
         provider = NewtonMuJoCoDynamicBiasProvider(bundle)
-        with patch(
-            "anchor_bench.training.dynamic_bias._import_newton_runtime",
-            return_value=(newton, object()),
+        with (
+            patch(
+                "anchor_bench.training.dynamic_bias._import_newton_runtime",
+                return_value=(newton, object()),
+            ),
+            patch(
+                "anchor_bench.training.dynamic_bias.resolve_runtime_asset",
+                return_value=Path("/nonexistent/robot.usd"),
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "SolverMuJoCo.eval_dynamic_bias"):
+            with self.assertRaisesRegex(RuntimeError, "mj_q_start"):
                 provider.compute(
                     joint_names=["a"],
                     positions=np.zeros((1, 1)),
@@ -159,8 +192,8 @@ class DynamicBiasProviderTests(unittest.TestCase):
                 )
 
     def test_missing_newton_dependency_has_clear_error(self):
-        with patch.dict(sys.modules, {"newton": None}):
-            with self.assertRaisesRegex(RuntimeError, "requires Newton"):
+        with patch.dict(sys.modules, {"newton": None, "mujoco": None}):
+            with self.assertRaisesRegex(RuntimeError, "requires Newton and MuJoCo"):
                 _import_newton_runtime()
 
     def test_rejects_multiple_trajectory_labels_for_same_newton_joint(self):
@@ -195,7 +228,7 @@ class DynamicBiasProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             asset = Path(tmp) / "robot.usd"
             asset.write_bytes(b"usd")
-            provider = NewtonMuJoCoDynamicBiasProvider(bundle, batch_size=2)
+            provider = NewtonMuJoCoDynamicBiasProvider(bundle)
             with (
                 patch(
                     "anchor_bench.training.dynamic_bias._import_newton_runtime",
@@ -208,14 +241,24 @@ class DynamicBiasProviderTests(unittest.TestCase):
             ):
                 result = provider.compute(
                     joint_names=["a", "outside", "b"],
-                    positions=np.asarray([[4.0, 40.0, 5.0], [6.0, 60.0, 7.0], [8.0, 80.0, 9.0]]),
-                    velocities=np.asarray([[0.1, 1.0, 0.2], [0.3, 3.0, 0.4], [0.5, 5.0, 0.6]]),
+                    positions=np.asarray(
+                        [[0.1, 9.0, 0.2], [0.3, 9.0, 0.4], [0.5, 9.0, 0.6]]
+                    ),
+                    velocities=np.asarray(
+                        [[1.0, 9.0, 2.0], [3.0, 9.0, 4.0], [5.0, 9.0, 6.0]]
+                    ),
                     requested_joint_names=["b", "a"],
                 )
 
+        # Per row: qpos = [pos_b - 0.25, 2.0 (c default), pos_a + 0.5] and
+        # qvel = [0, vel_a, vel_b] via the permuted maps; with
+        # bias[i] = qpos[i] + 10*qvel[i] + sum(qpos) and S = pos_a + pos_b + 2.25:
+        #   b (qvel addr 2) = pos_a + 0.5 + 10*vel_b + S
+        #   a (qvel addr 1) = 2.0 + 10*vel_a + S
         np.testing.assert_allclose(
             result.values,
-            [[7.0, 5.0], [11.0, 9.0], [15.0, 13.0]],
+            [[23.15, 14.55], [43.75, 34.95], [64.35, 55.35]],
+            rtol=1e-6,
         )
         provenance = dict(result.provenance)
         self.assertEqual(["b", "a"], provenance["requested_joint_names"])
@@ -226,17 +269,74 @@ class DynamicBiasProviderTests(unittest.TestCase):
             hashlib.sha256(b"usd").hexdigest(),
             provenance["asset_sha256"],
         )
+        self.assertEqual("mujoco.mj_forward.qfrc_bias", provenance["source"])
         self.assertEqual(
-            "newton.solvers.SolverMuJoCo.eval_dynamic_bias",
-            provenance["source"],
+            "newton.solvers.SolverMuJoCo(use_mujoco_cpu=True)",
+            provenance["model_source"],
         )
         self.assertEqual("qfrc_bias", provenance["quantity"])
-        self.assertEqual(2, provenance["batch_size"])
         self.assertEqual("disabled", provenance["contacts"])
-        self.assertIs(False, provenance["use_mujoco_cpu"])
+        self.assertTrue(provenance["use_mujoco_cpu"])
         self.assertEqual("test-newton", provenance["newton_version"])
+        self.assertEqual("test-mujoco", provenance["mujoco_version"])
+        self.assertNotIn("batch_size", provenance)
         self.assertEqual("model_defaults", provenance["unrecorded_positions"])
         self.assertEqual("zero", provenance["unrecorded_velocities"])
+
+    def test_requested_joint_without_mujoco_coordinates_errors(self):
+        bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "robot.usd"
+            asset.write_bytes(b"usd")
+            provider = NewtonMuJoCoDynamicBiasProvider(bundle)
+            with (
+                patch(
+                    "anchor_bench.training.dynamic_bias._import_newton_runtime",
+                    return_value=_fake_runtime(_NegativeAddressSolver),
+                ),
+                patch(
+                    "anchor_bench.training.dynamic_bias.resolve_runtime_asset",
+                    return_value=asset,
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "'a'.*no MuJoCo coordinates"):
+                    provider.compute(
+                        joint_names=["a"],
+                        positions=np.zeros((1, 1)),
+                        velocities=np.zeros((1, 1)),
+                        requested_joint_names=["a"],
+                    )
+
+    def test_optional_joint_without_mujoco_coordinates_is_unmapped(self):
+        bundle = SimpleNamespace(spec=SimpleNamespace(fixed_base=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "robot.usd"
+            asset.write_bytes(b"usd")
+            provider = NewtonMuJoCoDynamicBiasProvider(bundle)
+            with (
+                patch(
+                    "anchor_bench.training.dynamic_bias._import_newton_runtime",
+                    return_value=_fake_runtime(_NegativeAddressSolver),
+                ),
+                patch(
+                    "anchor_bench.training.dynamic_bias.resolve_runtime_asset",
+                    return_value=asset,
+                ),
+            ):
+                result = provider.compute(
+                    joint_names=["a", "b"],
+                    positions=np.asarray([[0.7, 0.9]]),
+                    velocities=np.asarray([[0.0, 0.3]]),
+                    requested_joint_names=["b"],
+                )
+
+        # b maps to qpos[0]/qvel[0] with dof_ref -0.25; c stays at qpos[1]=2.0:
+        # qpos = [0.65, 2.0], qvel = [0.3, 0], S = 2.65 ->
+        # b = 0.65 + 10*0.3 + 2.65 = 6.3
+        np.testing.assert_allclose(result.values, [[6.3]], rtol=1e-6)
+        provenance = dict(result.provenance)
+        self.assertEqual(["b"], provenance["mapped_joint_names"])
+        self.assertEqual(["a"], provenance["unmapped_trajectory_joint_names"])
 
 
 if __name__ == "__main__":
