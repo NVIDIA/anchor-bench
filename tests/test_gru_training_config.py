@@ -227,7 +227,7 @@ class TrainingDefaultsTests(unittest.TestCase):
                 parse_joint_selection(value)
 
     def test_removed_joint_type_is_rejected_as_an_unknown_key(self):
-        with self.assertRaisesRegex(ValueError, "training has unknown keys: joint_type"):
+        with self.assertRaisesRegex(ValueError, r"joint_type.*training\.groups"):
             TrainingDefaults.from_dict({"joint_type": "full"}, "training")
 
     def test_nested_baselines_require_complete_pairs(self):

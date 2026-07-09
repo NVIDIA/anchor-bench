@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import Field, StrictBool, field_validator, model_validator
 
@@ -135,6 +136,23 @@ class TrainingDefaults(ConfigModel):
     seed: int | None = None
     input_columns: list[str] | None = None
     sample_dt_s: float | None = Field(default=None, gt=0.0)
+
+    _REMOVED_KEY_HINTS: ClassVar[dict[str, str]] = {
+        "joint_type": "declare training.groups or training.input_joints/output_joints instead",
+        "target_column": "the training target is always measured torque",
+    }
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_keys(cls, data: Any) -> Any:
+        if isinstance(data, Mapping):
+            removed = [key for key in cls._REMOVED_KEY_HINTS if key in data]
+            if removed:
+                key = removed[0]
+                raise ValueError(
+                    f"'{key}' is no longer supported; {cls._REMOVED_KEY_HINTS[key]}"
+                )
+        return data
 
     @field_validator("input_columns", mode="before")
     @classmethod

@@ -258,6 +258,14 @@ class NativeActuatorSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "run.yaml.training has unknown keys: typo"):
             RobotRunFile.from_dict({"training": {"model": "gru", "typo": True}}, "run.yaml")
 
+    def test_removed_training_keys_get_migration_hint(self):
+        from anchor_bench.core.schemas import RobotRunFile
+
+        with self.assertRaisesRegex(ValueError, r"joint_type.*training\.groups"):
+            RobotRunFile.from_dict({"training": {"joint_type": "full"}}, "run.yaml")
+        with self.assertRaisesRegex(ValueError, "target_column"):
+            RobotRunFile.from_dict({"training": {"target_column": "torque"}}, "run.yaml")
+
     def test_experiment_file_retains_validated_sections(self):
         from anchor_bench.core.schemas import ExperimentFile
 
