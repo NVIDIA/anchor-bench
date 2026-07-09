@@ -43,3 +43,17 @@ jobs:
             -e ANCHOR_BENCH_ASSET_DIR=/workspace/anchor-bench/assets/robots \
             anchor-bench:kitless \
             python3 scripts/run_unit_tests.py
+
+  full:
+    name: Build full image
+    runs-on: linux-amd64-gpu-rtxpro6000-latest-1
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build anchor-bench:full
+        run: ./setup.sh --full
+
+      - name: Verify full image
+        run: docker image inspect anchor-bench:full
