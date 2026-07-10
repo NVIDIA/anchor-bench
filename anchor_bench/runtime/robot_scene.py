@@ -1,24 +1,13 @@
+"""Lazy Isaac Lab/Newton scene helpers used by authoritative SysID."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-
-def resolve_fix_root_override(configured: bool, asset_fixed_base: bool) -> bool | None:
-    """Only override the USD root mode when configuration requests a real change."""
-    return None if configured == asset_fixed_base else configured
-
-def robot_joint_names(bundle: Any) -> list[str]:
-    joint_names = list(bundle.spec.joint_names)
-    if not joint_names:
-        raise ValueError(f"robot {bundle.spec.name!r} config must define joint_names")
-    return joint_names
-
-
-
-
 def to_torch(value: Any, wp: Any) -> Any:
     """Return a torch tensor from supported Warp, Isaac Lab, or Torch arrays."""
+
     if isinstance(value, wp.array):
         return wp.to_torch(value)
     import torch  # noqa: PLC0415 - runtime-only; callers already run in the full Isaac runtime
@@ -35,12 +24,16 @@ def to_torch(value: Any, wp: Any) -> Any:
 
 
 def _joint_ids_to_list(joint_ids: Any) -> list[int]:
+    """Convert tensor-like or iterable joint indices to plain integers."""
+
     if hasattr(joint_ids, "detach"):
         return [int(value) for value in joint_ids.detach().cpu().tolist()]
     return [int(value) for value in joint_ids]
 
 
 def _get_newton_model_for_viscous_friction() -> tuple[Any, Any]:
+    """Return Newton's live model after validating passive-damping access."""
+
     try:
         from isaaclab_newton.physics import NewtonManager
     except Exception as exc:
@@ -60,6 +53,8 @@ def _get_newton_model_for_viscous_friction() -> tuple[Any, Any]:
 
 
 def _write_viscous_friction(robot: Any, values: Any, joint_ids: Any) -> None:
+    """Write per-environment passive damping and notify Newton of the change."""
+
     NewtonManager, newton_model = _get_newton_model_for_viscous_friction()
     try:
         from newton.solvers import SolverNotifyFlags
@@ -83,55 +78,9 @@ def _write_viscous_friction(robot: Any, values: Any, joint_ids: Any) -> None:
     NewtonManager.add_model_change(SolverNotifyFlags.JOINT_DOF_PROPERTIES)
 
 
-def _matrix_from_param_map(
-    actuator_params: dict[str, Any], prop: str, joint_names: list[str], num_envs: int, torch: Any, device: Any
-) -> Any:
-    mapping = actuator_params.get(prop)
-    if mapping is None:
-        return None
-    missing = [joint for joint in joint_names if joint not in mapping]
-    if missing:
-        raise ValueError(f"missing {prop} values for joints: {', '.join(missing)}")
-    values = [[float(mapping[joint]) for joint in joint_names] for _ in range(num_envs)]
-    return torch.tensor(values, dtype=torch.float32, device=device)
-
-
-def apply_static_actuator_params(
-    robot: Any,
-    actuator_params: dict[str, Any],
-    joint_ids: Any,
-    env_ids: Any,
-    torch: Any,
-    joint_names: list[str] | None = None,
-) -> None:
-    num_envs = int(env_ids.numel())
-    if joint_names is None:
-        ids = _joint_ids_to_list(joint_ids)
-        joint_names = [robot.joint_names[joint_id] for joint_id in ids]
-    static_writers = {
-        "armature": lambda vals: robot.write_joint_armature_to_sim_index(
-            armature=vals, joint_ids=joint_ids, env_ids=env_ids
-        ),
-        "dry_friction": lambda vals: robot.write_joint_friction_coefficient_to_sim_index(
-            joint_friction_coeff=vals, joint_ids=joint_ids, env_ids=env_ids
-        ),
-        "viscous_friction": lambda vals: _write_viscous_friction(robot, vals, joint_ids),
-        "stiffness": lambda vals: robot.write_joint_stiffness_to_sim_index(
-            stiffness=vals, joint_ids=joint_ids, env_ids=env_ids
-        ),
-        "damping": lambda vals: robot.write_joint_damping_to_sim_index(
-            damping=vals, joint_ids=joint_ids, env_ids=env_ids
-        ),
-    }
-    for prop, writer in static_writers.items():
-        values = _matrix_from_param_map(actuator_params, prop, joint_names, num_envs, torch, robot.device)
-        if values is None:
-            continue
-        writer(values)
-
-
 def _isaac_implicit_actuator_kwargs(actuator_params: dict[str, Any]) -> dict[str, Any]:
     """Map Anchor Bench actuator params to IsaacLab ImplicitActuatorCfg kwargs."""
+
     return {
         "joint_names_expr": [".*"],
         "effort_limit_sim": actuator_params.get("effort_limit_sim"),
@@ -150,6 +99,8 @@ def build_scene_class(
     joint_names: list[str],
     fix_root: bool | None = None,
 ):
+    """Build a lazy Isaac Lab scene class for one explicit PD parameter map."""
+
     import isaaclab.sim as sim_utils
     from isaaclab.actuators import ImplicitActuatorCfg
     from isaaclab.assets import ArticulationCfg, AssetBaseCfg

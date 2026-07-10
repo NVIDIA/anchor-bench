@@ -1,3 +1,5 @@
+"""Resolve declarative robot assets without importing the simulator."""
+
 from __future__ import annotations
 
 import os
@@ -11,6 +13,8 @@ class AssetNotFoundError(FileNotFoundError):
 
 
 def _candidate_roots(bundle: RobotBundle) -> list[Path]:
+    """Return configured and repository-local asset roots in precedence order."""
+
     roots: list[Path] = [bundle.paths.asset.parent / "files"]
     env_root = os.environ.get("ANCHOR_BENCH_ASSET_DIR")
     if env_root:
@@ -20,6 +24,8 @@ def _candidate_roots(bundle: RobotBundle) -> list[Path]:
 
 
 def resolve_robot_asset(bundle: RobotBundle, filename: str) -> Path:
+    """Resolve one robot asset or report every supported location."""
+
     candidates = [root / filename for root in _candidate_roots(bundle)]
     for candidate in candidates:
         if candidate.exists():
@@ -35,6 +41,8 @@ def resolve_robot_asset(bundle: RobotBundle, filename: str) -> Path:
 
 
 def resolve_runtime_asset(bundle: RobotBundle) -> Path:
+    """Resolve the runtime USD named by a declarative robot identity."""
+
     filename = bundle.spec.runtime_usd
     if not filename:
         raise AssetNotFoundError(

@@ -12,6 +12,8 @@ def run_setup(
     dry_run: bool = False,
     env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Run setup.sh from the repository with stable captured output."""
+
     env = os.environ.copy()
     if dry_run:
         env["ANCHOR_BENCH_SETUP_DRY_RUN"] = "1"
@@ -30,6 +32,8 @@ def run_setup(
 
 class DockerSetupTests(unittest.TestCase):
     def test_setup_help_describes_docker_first_modes(self):
+        """Advertise the supported image, check, and shell setup modes."""
+
         result = run_setup("--help")
         self.assertIn("Docker-first", result.stdout)
         self.assertIn("Usage: ./setup.sh", result.stdout)
@@ -39,6 +43,8 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("does not create a host .venv", result.stdout)
 
     def test_kitless_dry_run_builds_docker_image_without_host_venv(self):
+        """Keep the default setup path container-only and non-mutating."""
+
         venv_existed = (REPO / ".venv").exists()
         result = run_setup("--kitless", dry_run=True)
         self.assertIn("docker build", result.stdout)
@@ -55,16 +61,22 @@ class DockerSetupTests(unittest.TestCase):
         self.assertEqual(venv_existed, (REPO / ".venv").exists())
 
     def test_check_dry_run_runs_environment_check_inside_kitless_image(self):
+        """Route environment checks through the prepared container image."""
+
         result = run_setup("--check", dry_run=True)
         self.assertIn("docker image inspect anchor-bench:kitless", result.stdout)
         self.assertIn("python check_environment.py --dry-run", result.stdout)
 
     def test_shell_dry_run_delegates_to_internal_persistent_helper(self):
+        """Delegate persistent shells to the internal container helper."""
+
         result = run_setup("--shell", dry_run=True)
         self.assertIn("docker/run-persist.sh", result.stdout)
         self.assertNotIn("anchor-bench:kitless", result.stdout)
 
     def test_shell_dry_run_prints_persistent_helper_without_invoking_it(self):
+        """Print the delegated shell command during a dry run."""
+
         result = run_setup("--shell", dry_run=True)
         self.assertNotIn("python check_environment.py", result.stdout)
         self.assertNotIn("Container anchor-bench-persist loaded properly", result.stdout)
@@ -72,6 +84,8 @@ class DockerSetupTests(unittest.TestCase):
         self.assertNotIn("docker exec", result.stdout)
 
     def test_shell_third_party_isaaclab_source_dry_run_bootstraps_local_checkout(self):
+        """Prepare an optional host-editable Isaac Lab checkout explicitly."""
+
         result = run_setup(
             "--shell",
             "anchor-bench",
@@ -101,77 +115,76 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("docker/run-persist.sh", result.stdout)
 
     def test_persistent_shell_check_has_quiet_success_output(self):
+        """Avoid noisy success banners from the persistent shell check."""
+
         run_persist_text = (REPO / "docker" / "run-persist.sh").read_text(encoding="utf-8")
         self.assertNotIn("Running environment check", run_persist_text)
 
-    def test_readme_uses_setup_shell_as_public_persistent_interface(self):
+    def test_readme_uses_setup_shell_as_public_runtime_interface(self):
+        """Document the supported container entrypoints without internals."""
+
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         cli = (REPO / "docs" / "cli.md").read_text(encoding="utf-8")
         self.assertIn("./setup.sh --full", readme)
-        self.assertIn("| Command | Purpose |", readme)
-        self.assertIn("`./setup.sh --shell`", readme)
+        self.assertIn("./setup.sh --check", readme)
+        self.assertIn("./setup.sh --shell", readme)
         self.assertIn("host UID/GID", readme)
         self.assertIn("[CLI commands](docs/cli.md)", readme)
-        self.assertNotIn("ANCHOR_BENCH_ISAACLAB_SOURCE=third_party", readme)
-        self.assertNotIn("ANCHOR_BENCH_RUN_AS_ROOT=1", readme)
-        self.assertIn("ANCHOR_BENCH_ISAACLAB_SOURCE=third_party", cli)
-        self.assertIn("ANCHOR_BENCH_RUN_AS_ROOT=1", cli)
-        self.assertIn("/opt/IsaacLab", cli)
-        self.assertIn("`anchor-bench --help`", readme)
-        self.assertIn("anchor-bench robots list", readme)
-        self.assertIn("./docker/run-gui.sh", readme)
-        self.assertIn("./docker/run-headless.sh", readme)
-        self.assertNotIn("Executables per robot/dataset", readme)
-        self.assertNotIn("Single instance of Docker containers", readme)
-        self.assertNotIn("bash setup.sh", readme)
+        self.assertIn("anchor-bench robots list", cli)
+        self.assertIn("--dry-run", cli)
         self.assertNotIn("./docker/run-persist.sh", readme)
 
     def test_readme_links_to_reference_docs(self):
+        """Link each authoritative workflow reference from the project README."""
+
         readme = (REPO / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("[CLI commands](docs/cli.md)", readme)
-        self.assertIn("[repo structure](docs/repo-structure.md)", readme)
-        self.assertIn("[Artifacts](docs/artifacts.md)", readme)
-        self.assertIn("[Robot plugins](docs/robot-plugin.md)", readme)
-        self.assertIn("run.yaml", readme)
+        self.assertIn("[Repository structure](docs/repo-structure.md)", readme)
+        self.assertIn("[Artifacts and immutable runs](docs/artifacts.md)", readme)
+        self.assertIn("[Adding a robot](docs/robot-plugin.md)", readme)
+        self.assertNotIn("run.yaml", readme)
         self.assertIn("prepare_huggingface_parquets.py", readme)
 
     def test_reference_docs_document_inputs_outputs_and_config_boundary(self):
+        """Describe authoritative phase state and its repository boundaries."""
+
         repo_structure = (REPO / "docs" / "repo-structure.md").read_text(encoding="utf-8")
         cli = (REPO / "docs" / "cli.md").read_text(encoding="utf-8")
 
-        self.assertIn("## Configs", repo_structure)
+        self.assertIn("## Robot configuration", repo_structure)
         self.assertIn("## Assets", repo_structure)
         self.assertIn("ANCHOR_BENCH_ASSET_DIR", repo_structure)
-        self.assertIn("Do not put robot USDs", repo_structure)
+        self.assertIn("Do not place USDs", repo_structure)
         self.assertIn("## Inputs", repo_structure)
         self.assertIn("## Outputs", repo_structure)
         self.assertIn("optional vendor checkouts", repo_structure)
-        self.assertIn("container image uses /opt/IsaacLab", repo_structure)
         self.assertIn("inputs/datasets/", repo_structure)
-        self.assertIn("inputs/actuator_params/", repo_structure)
-        self.assertIn("configs/robots/<robot>/actuators.yaml", repo_structure)
-        self.assertIn("outputs/sysid/.../best_params.yaml", repo_structure)
+        self.assertIn("sysid/default.yaml", repo_structure)
+        self.assertIn("train/default.yaml", repo_structure)
+        self.assertIn("outputs/sysid/<robot>/<profile>", repo_structure)
         self.assertIn("anchor-bench robots list", cli)
-        self.assertIn("anchor-bench experiment benchmark", cli)
+        self.assertIn("anchor-bench benchmark", cli)
+        self.assertNotIn("anchor-bench experiment", cli)
 
     def test_third_party_artifact_layout_is_documented(self):
+        """Keep local binary artifacts ignored and outside robot phase configs."""
+
         gitignore = (REPO / ".gitignore").read_text(encoding="utf-8")
         dockerignore = (REPO / ".dockerignore").read_text(encoding="utf-8")
         setup_text = (REPO / "setup.sh").read_text(encoding="utf-8")
         check_environment = (REPO / "check_environment.py").read_text(encoding="utf-8")
-        teststand_actuators = (REPO / "configs" / "robots" / "teststand" / "actuators.yaml").read_text(encoding="utf-8")
 
         self.assertTrue((REPO / "third_party" / "README.md").exists())
-        self.assertIn("third_party/artifacts/h1/nvidia-motor.fmu", teststand_actuators)
         self.assertIn("third_party/artifacts/h1", setup_text)
         self.assertIn("third_party", dockerignore)
         self.assertIn("third_party/*", gitignore)
         self.assertIn("repo_root() / \"third_party\" / \"IsaacLab\"", check_environment)
-        self.assertNotIn("external" + "/artifacts", teststand_actuators)
         self.assertNotIn("repo_root() / \"external\"", check_environment)
 
     def test_required_docker_assets_are_present(self):
+        """Keep every script and manifest needed by container entrypoints."""
+
         dockerfile = REPO / "docker" / "Dockerfile"
         compose = REPO / "docker-compose.yaml"
         entrypoint = REPO / "docker" / "entrypoint.sh"
@@ -239,6 +252,8 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("XAUTHORITY", x11_text)
 
     def test_docker_cache_defaults_use_non_root_anchor_home(self):
+        """Place default container caches below the non-root Anchor home."""
+
         dockerfile_text = (REPO / "docker" / "Dockerfile").read_text(encoding="utf-8")
         compose_text = (REPO / "docker-compose.yaml").read_text(encoding="utf-8")
         run_persist_text = (REPO / "docker" / "run-persist.sh").read_text(encoding="utf-8")
@@ -255,6 +270,8 @@ class DockerSetupTests(unittest.TestCase):
         self.assertNotIn("/root/Documents", run_persist_text)
 
     def test_container_wrappers_default_to_host_uid_gid_for_bind_mount_writes(self):
+        """Run wrappers as the host user so bind-mounted outputs stay writable."""
+
         entrypoint_text = (REPO / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
         check_environment = (REPO / "check_environment.py").read_text(encoding="utf-8")
         run_gui_text = (REPO / "docker" / "run-gui.sh").read_text(encoding="utf-8")

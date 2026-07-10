@@ -1,13 +1,21 @@
+"""Lazy Isaac Lab/Newton simulation construction for authoritative phases."""
+
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
-from anchor_bench.core.schemas import SimulationDefaults
+
+class NewtonSimulationConfig(Protocol):
+    """Newton solver settings required to construct an Isaac Lab scene."""
+
+    integrator: str
+    solver_iterations: int
+    line_search_iterations: int
 
 
 def create_newton_scene(
     scene_config: Any,
-    simulation_config: SimulationDefaults,
+    simulation_config: NewtonSimulationConfig,
     timing: Any,
     *,
     num_envs: int,
@@ -25,9 +33,9 @@ def create_newton_scene(
     )
     sim_cfg.physics = NewtonCfg(
         solver_cfg=MJWarpSolverCfg(
-            integrator=simulation_config.integrator or "implicitfast",
-            ls_iterations=simulation_config.line_search_iterations or 10,
-            iterations=simulation_config.solver_iterations or 10,
+            integrator=simulation_config.integrator,
+            ls_iterations=simulation_config.line_search_iterations,
+            iterations=simulation_config.solver_iterations,
         )
     )
     simulation = SimulationContext(sim_cfg)
@@ -38,6 +46,8 @@ def create_newton_scene(
 
 
 def joint_ids_for(robot: Any, joint_names: list[str], torch: Any) -> Any:
+    """Return articulation indices in requested order or report missing joints."""
+
     indices_by_name = {name: index for index, name in enumerate(robot.joint_names)}
     missing = [name for name in joint_names if name not in indices_by_name]
     if missing:

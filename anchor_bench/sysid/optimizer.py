@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from anchor_bench.core.schemas import CMAESConfig, SysIdBoundsFile
 from anchor_bench.sysid.schema import (
     ParameterLayoutEntry,
     SysIdOptimizerConfig,
@@ -25,14 +24,14 @@ _IMPROVEMENT_WINDOW = 5
 class CMAESOptimizer:
     """Adapt CMA-ES samples to canonical per-joint physical parameters.
 
-    New callers pass a SysIdProfile and the selected parent parameter maps.
-    Legacy bounds remain accepted while old runtime code is migrated. Actual
-    runs require cmaes; host tests may explicitly use deterministic sampling.
+    Callers pass one resolved SysID profile and its exact parent parameter
+    state. Actual runs require cmaes; host tests may explicitly use
+    deterministic sampling.
     """
 
-    bounds: SysIdProfile | SysIdBoundsFile
+    profile: SysIdProfile
     num_envs: int
-    cmaes: SysIdOptimizerConfig | CMAESConfig
+    cmaes: SysIdOptimizerConfig
     seed: int = 0
     allow_random_fallback: bool = False
     parent_parameters: Mapping[str, Mapping[str, float]] | None = None
@@ -42,44 +41,17 @@ class CMAESOptimizer:
 
         if self.num_envs < 1:
             raise ValueError("num_envs must be >= 1")
-        self._layout: tuple[ParameterLayoutEntry, ...] | None = None
-        if isinstance(self.bounds, SysIdProfile):
-            self._layout = parameter_layout(self.bounds)
-            self.joint_types = list(self.bounds.joints)
-            self.parameter_names = list(self.bounds.parameters)
-            self.param_names = [entry.name for entry in self._layout]
-            self._lower = np.asarray(
-                [entry.bounds.lower for entry in self._layout], dtype=np.float64
-            )
-            self._upper = np.asarray(
-                [entry.bounds.upper for entry in self._layout], dtype=np.float64
-            )
-            self._normalized_mean = self._parent_normalized_mean()
-        else:
-            self.joint_types = list(self.bounds.joint_types)
-            self.parameter_names = list(self.bounds.parameters)
-            self.param_names = [
-                f"{parameter}/{joint}"
-                for parameter in self.parameter_names
-                for joint in self.joint_types
-            ]
-            self._lower = np.asarray(
-                [
-                    self.bounds.parameters[parameter].lower
-                    for parameter in self.parameter_names
-                    for _ in self.joint_types
-                ],
-                dtype=np.float64,
-            )
-            self._upper = np.asarray(
-                [
-                    self.bounds.parameters[parameter].upper
-                    for parameter in self.parameter_names
-                    for _ in self.joint_types
-                ],
-                dtype=np.float64,
-            )
-            self._normalized_mean = np.zeros(len(self.param_names), dtype=np.float64)
+        self._layout: tuple[ParameterLayoutEntry, ...] = parameter_layout(
+            self.profile
+        )
+        self.param_names = [entry.name for entry in self._layout]
+        self._lower = np.asarray(
+            [entry.bounds.lower for entry in self._layout], dtype=np.float64
+        )
+        self._upper = np.asarray(
+            [entry.bounds.upper for entry in self._layout], dtype=np.float64
+        )
+        self._normalized_mean = self._parent_normalized_mean()
 
         self._rng = np.random.default_rng(self.seed)
         self._cma = None
@@ -122,8 +94,6 @@ class CMAESOptimizer:
     def _parent_normalized_mean(self) -> np.ndarray:
         """Map selected parent cells into the tied-variable layout."""
 
-        if self._layout is None:  # pragma: no cover
-            return np.zeros(0, dtype=np.float64)
         if self.parent_parameters is None:
             raise ValueError("parent_parameters is required with a SysIdProfile")
         physical: list[float] = []
@@ -243,20 +213,10 @@ class CMAESOptimizer:
     ) -> dict[str, dict[str, float]]:
         """Expand one physical vector according to the active layout."""
 
-        if self._layout is not None:
-            candidate: dict[str, dict[str, float]] = {}
-            for entry, raw_value in zip(self._layout, row, strict=True):
-                joint_map = candidate.setdefault(entry.parameter, {})
-                value = round(float(raw_value), 9)
-                for joint in entry.joints:
-                    joint_map[joint] = value
-            return candidate
-
-        candidate = {}
-        index = 0
-        for parameter in self.parameter_names:
-            candidate[parameter] = {}
-            for joint in self.joint_types:
-                candidate[parameter][joint] = round(float(row[index]), 9)
-                index += 1
+        candidate: dict[str, dict[str, float]] = {}
+        for entry, raw_value in zip(self._layout, row, strict=True):
+            joint_map = candidate.setdefault(entry.parameter, {})
+            value = round(float(raw_value), 9)
+            for joint in entry.joints:
+                joint_map[joint] = value
         return candidate

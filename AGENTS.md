@@ -18,6 +18,6 @@ versions here; read them from that manifest.
 
 - Add a robot: follow `docs/robot-plugin.md`.
 - Run SysID: use `anchor-bench sysid ... --dry-run` first; see `docs/cli.md`.
-- Run benchmark/analysis: use `anchor-bench benchmark`, `anchor-bench analyze`, or
-  `anchor-bench experiment ... --dry-run`; see `docs/cli.md`.
+- Benchmark an exact candidate: use `anchor-bench benchmark ... --dry-run`
+  first; see `docs/cli.md`.
 - Record run results as generated artifacts under `outputs/`; see `docs/artifacts.md`.

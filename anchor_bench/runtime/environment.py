@@ -1,3 +1,5 @@
+"""Actionable checks for optional full-runtime Python modules."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -9,6 +11,8 @@ class RuntimeUnavailableError(RuntimeError):
 
 
 def require_full_runtime(modules: Iterable[str], workflow: str) -> None:
+    """Require runtime modules and raise an actionable container error."""
+
     missing = [name for name in modules if importlib.util.find_spec(name) is None]
     if not missing:
         return

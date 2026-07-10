@@ -23,7 +23,7 @@ import numpy as np
 
 from anchor_bench.core.paths import repo_root, robot_config_dir
 from anchor_bench.core.profiles import load_yaml_mapping
-from anchor_bench.core.run_config import resolve_simulation_timing
+from anchor_bench.core.timing import resolve_simulation_timing
 from anchor_bench.core.hashing import sha256_file, sha256_tree, validate_sha256
 from anchor_bench.robots.schema import RobotIdentity
 from anchor_bench.sysid.runner import ResolvedSysIdRun, SysIdExecutionResult
