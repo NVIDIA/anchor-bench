@@ -24,12 +24,16 @@ ParameterMode = Literal["per_joint", "shared"]
 
 
 def _require_non_empty_text(value: str, *, name: str) -> str:
+    """Return text after enforcing a non-empty, whitespace-stable value."""
+
     if not value or value != value.strip():
         raise ValueError(f"{name} must be non-empty and have no surrounding whitespace")
     return value
 
 
 def _validate_joint_names(joints: Sequence[str], *, name: str = "joints") -> tuple[str, ...]:
+    """Validate and freeze an ordered, non-empty sequence of unique joints."""
+
     result: list[str] = []
     for joint in joints:
         if not isinstance(joint, str) or not joint or joint != joint.strip():
@@ -51,6 +55,8 @@ class ParameterBounds(ConfigModel):
 
     @model_validator(mode="after")
     def _validate_order(self) -> "ParameterBounds":
+        """Require the upper bound to be no smaller than the lower bound."""
+
         if self.upper < self.lower:
             raise ValueError(f"upper ({self.upper}) must be >= lower ({self.lower})")
         return self
@@ -64,6 +70,8 @@ class SysIdParameterSpec(ConfigModel):
 
 
 class SysIdSimulationConfig(ConfigModel):
+    """Complete simulation settings used by one SysID recipe."""
+
     physics_freq: int = Field(ge=1)
     control_freq: int = Field(ge=1)
     render_freq: int = Field(ge=1)
@@ -74,10 +82,14 @@ class SysIdSimulationConfig(ConfigModel):
     @field_validator("integrator")
     @classmethod
     def _validate_integrator(cls, value: str) -> str:
+        """Validate the configured simulation integrator name."""
+
         return _require_non_empty_text(value, name="integrator")
 
 
 class SysIdOptimizerConfig(ConfigModel):
+    """CMA-ES settings used to optimize one SysID candidate."""
+
     type: Literal["cmaes"]
     sigma: FiniteFloat = Field(gt=0.0)
     max_iterations: int = Field(ge=1)
@@ -85,11 +97,15 @@ class SysIdOptimizerConfig(ConfigModel):
 
 
 class SysIdLossConfig(ConfigModel):
+    """Non-negative state-signal weights for the SysID objective."""
+
     position: FiniteFloat = Field(ge=0.0)
     velocity: FiniteFloat = Field(ge=0.0)
 
     @model_validator(mode="after")
     def _require_signal(self) -> "SysIdLossConfig":
+        """Require at least one state signal to contribute to the loss."""
+
         if self.position == 0.0 and self.velocity == 0.0:
             raise ValueError("at least one loss weight must be greater than zero")
         return self
@@ -112,16 +128,22 @@ class SysIdProfile(ConfigModel):
     @field_validator("data")
     @classmethod
     def _validate_data(cls, value: str) -> str:
+        """Validate the SysID dataset reference."""
+
         return _require_non_empty_text(value, name="data")
 
     @field_validator("joints")
     @classmethod
     def _validate_joints(cls, value: list[str]) -> list[str]:
+        """Validate the profile's ordered target-joint list."""
+
         return list(_validate_joint_names(value))
 
     @field_validator("parameters", mode="before")
     @classmethod
     def _validate_parameters(cls, value: Any) -> Any:
+        """Reject empty or unsupported SysID parameter specifications."""
+
         if not isinstance(value, dict):
             return value
         unsupported = sorted(set(value) - set(SUPPORTED_SYSID_PARAMETERS))
@@ -142,6 +164,8 @@ class ParameterLayoutEntry:
 
     @property
     def name(self) -> str:
+        """Return the deterministic optimizer-variable name."""
+
         if len(self.joints) == 1:
             return f"{self.parameter}/{self.joints[0]}"
         return f"{self.parameter}/shared"

@@ -46,6 +46,8 @@ class FeatureBlock:
     components: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        """Validate the block's rank, domain, components, and finite values."""
+
         values = _readonly(self.values, dtype=np.float32, ndim=3, label="feature values")
         if self.domain not in {"input", "output"}:
             raise ValueError("feature domain must be 'input' or 'output'")
@@ -71,6 +73,8 @@ class TrainingEpisode:
     dynamic_bias_provenance: Mapping[str, Any] | None = field(default=None)
 
     def __post_init__(self) -> None:
+        """Validate episode shapes and freeze its aligned recurrent sequence."""
+
         timestamps = _readonly(self.timestamps, dtype=np.float64, ndim=1, label="episode timestamps")
         torque = _readonly(self.measured_torque, dtype=np.float32, ndim=2, label="measured torque")
         if not len(timestamps):
@@ -160,6 +164,8 @@ class EpisodeAssembler:
     """Per-run source cache and mapping-specific episode assembler."""
 
     def __init__(self, dynamic_bias_provider: DynamicBiasProvider | None = None):
+        """Create an assembler with an optional injectable dynamic-bias provider."""
+
         self._dynamic_bias_provider = dynamic_bias_provider
         self._prepared: dict[tuple[Path, float], PreparedEpisodeSource] = {}
 

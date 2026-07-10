@@ -71,6 +71,8 @@ class TrainingJob:
     stats_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Validate shared-weight mappings, episode coverage, and runtime inputs."""
+
         train = _typed_tuple(self.train_episodes, TrainingEpisode, label="train_episodes")
         validation = _typed_tuple(self.val_episodes, TrainingEpisode, label="val_episodes", allow_empty=True)
         mappings = _typed_tuple(self.mappings, ResolvedTrainingMapping, label="mappings")
@@ -159,6 +161,8 @@ class TrainingArtifacts:
 
 
 def _typed_tuple(values: Any, expected_type: type, *, label: str, allow_empty: bool = False) -> tuple[Any, ...]:
+    """Validate and freeze an ordered sequence of one expected type."""
+
     if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
         raise ValueError(f"{label} must be an ordered sequence")
     result = tuple(values)
@@ -170,10 +174,14 @@ def _typed_tuple(values: Any, expected_type: type, *, label: str, allow_empty: b
 
 
 def _mapping_identity(mapping: ResolvedTrainingMapping) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the ordered physical axes that identify a training mapping."""
+
     return mapping.input_joints, mapping.output_joints
 
 
 def _import_torch():
+    """Import PyTorch lazily and report a runtime-focused failure."""
+
     try:
         import torch
     except Exception as exc:  # pragma: no cover - environment-specific
@@ -197,6 +205,8 @@ def _seed_everything(seed: int, torch: Any | None = None) -> None:
 
 
 def _runtime_for_episode(job: TrainingJob, episode: TrainingEpisode) -> RuntimeMapping:
+    """Return the frozen physical constants for an episode's mapping."""
+
     identity = _mapping_identity(episode.mapping)
     for mapping, runtime in zip(job.mappings, job.mapping_runtime, strict=True):
         if _mapping_identity(mapping) == identity:
@@ -205,6 +215,8 @@ def _runtime_for_episode(job: TrainingJob, episode: TrainingEpisode) -> RuntimeM
 
 
 def _value_vector(value: StatValue, width: int, *, label: str) -> np.ndarray:
+    """Expand a scalar/vector metadata value to one finite NumPy vector."""
+
     raw = value if isinstance(value, tuple) else (value,)
     if len(raw) != width:
         raise ValueError(f"{label} must contain {width} value(s)")
@@ -215,6 +227,8 @@ def _value_vector(value: StatValue, width: int, *, label: str) -> np.ndarray:
 
 
 def _physics_signal(blocks: Mapping[str, FeatureBlock], name: str, *, source: str) -> np.ndarray:
+    """Extract the scalar value component of an input-domain physics signal."""
+
     block = blocks.get(name)
     if block is None:
         raise ValueError(f"{source} is missing {name!r} required by the physics baseline")
@@ -341,6 +355,8 @@ def _prepare_episode(
 def _load_sequences(
     job: TrainingJob,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
+    """Prepare independent train and validation recurrent sequences."""
+
     train = [
         _prepare_episode(job, episode, source_name=f"training episode {index}")
         for index, episode in enumerate(job.train_episodes)
@@ -353,6 +369,8 @@ def _load_sequences(
 
 
 def _feature_widths(job: TrainingJob) -> tuple[int, ...]:
+    """Return each flattened feature block's runtime width."""
+
     mapping = job.mappings[0]
     return tuple(
         len(mapping.output_joints if feature.domain == "output" else mapping.input_joints)
@@ -365,6 +383,8 @@ def _validate_sequence_shapes(
     job: TrainingJob,
     sequences: Sequence[tuple[np.ndarray, np.ndarray]],
 ) -> tuple[int, int]:
+    """Validate sequence ranks, widths, row alignment, and finite values."""
+
     input_size = sum(_feature_widths(job))
     output_size = len(job.mappings[0].output_joints)
     for index, (features, targets) in enumerate(sequences):
@@ -380,6 +400,8 @@ def _validate_sequence_shapes(
 
 
 def _stat_value(values: np.ndarray) -> StatValue:
+    """Encode a width-one statistic as a scalar and wider values as a tuple."""
+
     result = tuple(float(value) for value in values)
     return result[0] if len(result) == 1 else result
 
@@ -425,6 +447,8 @@ def _normalization_stats(
 
 
 def _expand_stat(value: StatValue, width: int, *, label: str) -> np.ndarray:
+    """Expand one serialized normalization statistic to its runtime vector."""
+
     return _value_vector(value, width, label=label)
 
 
@@ -432,6 +456,8 @@ def _normalization_vectors(
     job: TrainingJob,
     normalization: RuntimeNormalization,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Flatten named input and target statistics into runtime vector order."""
+
     means: list[np.ndarray] = []
     standard_deviations: list[np.ndarray] = []
     for feature, width in zip(job.input_features, _feature_widths(job), strict=True):
@@ -472,6 +498,8 @@ def _normalize_sequences(
     sequences: Sequence[tuple[np.ndarray, np.ndarray]],
     normalization: RuntimeNormalization,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Normalize sequence inputs and targets with train-only pooled statistics."""
+
     input_mean, input_std, target_mean, target_std = _normalization_vectors(job, normalization)
     return [
         (
@@ -522,6 +550,8 @@ def _run_epoch(
 
 
 def _default_hparams(job: TrainingJob) -> TrainingHyperParameters:
+    """Build default fit parameters from the selected network architecture."""
+
     return TrainingHyperParameters(
         hidden_size=job.network.hidden_size,
         num_layers=job.network.num_layers,
@@ -588,6 +618,8 @@ def _fit_once(
     save_artifacts: bool,
     normalization: RuntimeNormalization,
 ) -> tuple[float, TrainingArtifacts | None]:
+    """Fit one deterministic GRU candidate and optionally persist its best epoch."""
+
     torch = _import_torch()
     _seed_everything(job.fit.seed, torch)
     try:
@@ -691,6 +723,8 @@ def _select_hparams(
     val_sequences: Sequence[tuple[np.ndarray, np.ndarray]],
     normalization: RuntimeNormalization,
 ) -> TrainingHyperParameters:
+    """Return fixed hyperparameters or select optimizer settings with Optuna."""
+
     if job.fit.skip_optuna:
         return _default_hparams(job)
     try:
@@ -701,6 +735,8 @@ def _select_hparams(
     sampler = optuna.samplers.TPESampler(seed=job.fit.seed)
 
     def objective(trial: Any) -> float:
+        """Evaluate one deterministic Optuna hyperparameter trial."""
+
         hparams = TrainingHyperParameters(
             hidden_size=job.network.hidden_size,
             num_layers=job.network.num_layers,

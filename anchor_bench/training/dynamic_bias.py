@@ -64,6 +64,8 @@ class DynamicBiasResult:
     provenance: Mapping[str, Any]
 
     def __post_init__(self) -> None:
+        """Validate and freeze computed bias values and provenance."""
+
         values = np.asarray(self.values, dtype=np.float32)
         if values.ndim != 2:
             raise ValueError("dynamic-bias values must be a 2-D array")
@@ -86,11 +88,16 @@ class DynamicBiasProvider(Protocol):
         velocities: np.ndarray,
         requested_joint_names: Sequence[str],
         cache_key: str | None = None,
-    ) -> DynamicBiasResult: ...
+    ) -> DynamicBiasResult:
+        """Evaluate dynamic bias for requested joints over one synchronized episode."""
+
+        ...
 
 
 @dataclass(frozen=True)
 class _RuntimeModules:
+    """Lazily imported simulator modules required by the Newton adapter."""
+
     newton: Any
     warp: Any
     mujoco: Any
@@ -99,6 +106,8 @@ class _RuntimeModules:
 
 @dataclass(frozen=True)
 class _MappedColumn:
+    """One recorded trajectory column resolved to a Newton scalar joint."""
+
     column: int
     recorded_name: str
     joint: ScalarJointMapping
@@ -106,6 +115,8 @@ class _MappedColumn:
 
 @dataclass(frozen=True)
 class _TrajectoryCacheEntry:
+    """Authenticated cached dynamic-bias table for one mapped trajectory."""
+
     fingerprint: str
     mapped_names: tuple[str, ...]
     values: np.ndarray
@@ -136,6 +147,8 @@ def _import_newton_runtime() -> _RuntimeModules:
 
 
 def _module_version(module: Any, distribution: str) -> str:
+    """Return an imported module's best available distribution version."""
+
     value = getattr(module, "__version__", None)
     if value is not None:
         return str(value)
@@ -165,6 +178,8 @@ def _plain_setting(value: Any, *, label: str) -> Any:
 
 
 def _resolved_solver_settings(values: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate and freeze contact-free MuJoCo Warp solver settings."""
+
     settings = dict(values or {})
     unknown = sorted(set(settings) - _SOLVER_SETTING_NAMES)
     if unknown:
@@ -179,6 +194,8 @@ def _resolved_solver_settings(values: Mapping[str, Any] | None) -> dict[str, Any
 
 
 def _ordered_names(values: Sequence[str], *, label: str) -> tuple[str, ...]:
+    """Validate and freeze an ordered sequence of unique trajectory names."""
+
     if isinstance(values, (str, bytes)):
         raise ValueError(f"dynamic_bias {label} must be an ordered sequence")
     names = tuple(str(value).strip() for value in values)
@@ -191,6 +208,8 @@ def _ordered_names(values: Sequence[str], *, label: str) -> tuple[str, ...]:
 
 
 def _hash_text(digest: Any, value: str) -> None:
+    """Append length-delimited UTF-8 text to a trajectory digest."""
+
     encoded = value.encode("utf-8")
     digest.update(len(encoded).to_bytes(8, "little"))
     digest.update(encoded)
@@ -235,6 +254,8 @@ class NewtonMuJoCoDynamicBiasProvider:
         solver_settings: Mapping[str, Any] | None = None,
         device: str | None = None,
     ) -> None:
+        """Configure a lazy, reusable Newton dynamic-bias evaluator."""
+
         if isinstance(batch_size, bool) or batch_size < 1:
             raise ValueError("dynamic-bias batch_size must be >= 1")
         self._bundle = bundle
@@ -272,6 +293,8 @@ class NewtonMuJoCoDynamicBiasProvider:
         return self.asset_snapshot.effort_limits(joint_names)
 
     def _initialize(self) -> None:
+        """Load Newton and allocate the replicated model and reusable buffers once."""
+
         if self._initialized:
             return
 
@@ -356,6 +379,8 @@ class NewtonMuJoCoDynamicBiasProvider:
         trajectory_names: tuple[str, ...],
         requested_names: tuple[str, ...],
     ) -> tuple[tuple[_MappedColumn, ...], tuple[str, ...]]:
+        """Resolve recorded columns to unique scalar joints and report unmapped context."""
+
         snapshot = self.asset_snapshot
         requested_set = set(requested_names)
         mapped: list[_MappedColumn] = []
@@ -385,6 +410,8 @@ class NewtonMuJoCoDynamicBiasProvider:
         velocities: np.ndarray,
         mapped: tuple[_MappedColumn, ...],
     ) -> np.ndarray:
+        """Evaluate dynamic bias in batches without advancing simulation."""
+
         assert self._snapshot is not None
         assert self._state is not None
         assert self._solver is not None
@@ -430,6 +457,8 @@ class NewtonMuJoCoDynamicBiasProvider:
         velocities: np.ndarray,
         mapped: tuple[_MappedColumn, ...],
     ) -> np.ndarray:
+        """Reuse a bias table only when its authenticated computation inputs match."""
+
         assert self._snapshot is not None
         fingerprint = _trajectory_fingerprint(
             asset_sha256=self._snapshot.sha256,
@@ -461,6 +490,8 @@ class NewtonMuJoCoDynamicBiasProvider:
         requested_joint_names: Sequence[str],
         cache_key: str | None = None,
     ) -> DynamicBiasResult:
+        """Evaluate and reorder episode bias while recording mapping provenance."""
+
         trajectory_names = _ordered_names(joint_names, label="joint_names")
         requested_names = _ordered_names(requested_joint_names, label="requested_joint_names")
         missing = [name for name in requested_names if name not in trajectory_names]

@@ -9,6 +9,8 @@ from anchor_bench.core.paths import repo_root
 
 @dataclass(frozen=True)
 class ExternalVersions:
+    """Pinned external runtime versions required by this repository."""
+
     isaac_sim_version: str
     python_version: str
     newton_version: str
@@ -20,6 +22,8 @@ class ExternalVersions:
 
 
 def load_external_versions() -> ExternalVersions:
+    """Load the pinned Isaac Sim, Newton, and Isaac Lab versions."""
+
     path = repo_root() / "versions" / "compatibility.toml"
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     return ExternalVersions(

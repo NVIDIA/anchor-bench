@@ -62,15 +62,21 @@ class TrainingMapping(ConfigModel):
     @field_validator("input_joints", mode="before")
     @classmethod
     def _parse_inputs(cls, value: Any) -> JointSelection:
+        """Parse the mapping's explicit or all-joint input selection."""
+
         return _joint_selection(value, label="input_joints")
 
     @field_validator("output_joints", mode="before")
     @classmethod
     def _parse_outputs(cls, value: Any) -> JointSelection | None:
+        """Parse an optional output selection, defaulting later to the inputs."""
+
         return None if value is None else _joint_selection(value, label="output_joints")
 
     @model_validator(mode="after")
     def _validate_subset(self) -> "TrainingMapping":
+        """Require explicit outputs to be a subset of the mapping inputs."""
+
         outputs = self.output_joints
         if self.input_joints == "all":
             if outputs not in (None, "all"):
@@ -100,6 +106,8 @@ class TrainingFeature(ConfigModel):
     @field_validator("name")
     @classmethod
     def _validate_name(cls, value: str) -> str:
+        """Validate the feature name against the supported training set."""
+
         name = value.strip()
         if name not in SUPPORTED_FEATURES:
             raise ValueError(f"unsupported training feature {name!r}")
@@ -108,10 +116,14 @@ class TrainingFeature(ConfigModel):
     @field_validator("components", mode="before")
     @classmethod
     def _validate_components(cls, value: Any) -> tuple[str, ...]:
+        """Parse the feature's ordered component axis."""
+
         return _ordered_names(value, label="feature components")
 
     @model_validator(mode="after")
     def _validate_domain(self) -> "TrainingFeature":
+        """Match each feature to its input/output domain and component contract."""
+
         expected = "output" if self.name == "previous_torque" else "input"
         if self.domain != expected:
             raise ValueError(f"feature {self.name!r} must use domain {expected!r}")
@@ -156,6 +168,8 @@ class TrainingProfile(ConfigModel):
     @field_validator("sysid_state", "data")
     @classmethod
     def _nonempty_text(cls, value: str) -> str:
+        """Normalize required SysID-state and dataset references."""
+
         result = value.strip()
         if not result:
             raise ValueError("must not be empty")
@@ -163,6 +177,8 @@ class TrainingProfile(ConfigModel):
 
     @model_validator(mode="after")
     def _validate_contract(self) -> "TrainingProfile":
+        """Validate cadence, feature uniqueness, and shared-weight mapping shapes."""
+
         if not math.isfinite(self.sample_dt_s):
             raise ValueError("sample_dt_s must be finite")
         feature_names = [feature.name for feature in self.input_features]
@@ -207,10 +223,14 @@ class ResolvedTrainingMapping(ConfigModel):
     @field_validator("input_joints", "output_joints", mode="before")
     @classmethod
     def _validate_joints(cls, value: Any, info: Any) -> tuple[str, ...]:
+        """Parse one canonical resolved training axis."""
+
         return _ordered_names(value, label=info.field_name)
 
     @model_validator(mode="after")
     def _validate_subset(self) -> "ResolvedTrainingMapping":
+        """Require canonical output joints to be a subset of canonical inputs."""
+
         missing = [name for name in self.output_joints if name not in self.input_joints]
         if missing:
             raise ValueError("output_joints must be a subset of input_joints: " + ", ".join(missing))
@@ -326,6 +346,8 @@ class TrainingAcceptedCatalog(ConfigModel):
 
     @model_validator(mode="after")
     def _reject_output_overlap(self) -> "TrainingAcceptedCatalog":
+        """Require accepted model keys to own disjoint physical output joints."""
+
         owner: dict[str, str] = {}
         for key, model in self.models.items():
             require_logical_name(key, label="model key")

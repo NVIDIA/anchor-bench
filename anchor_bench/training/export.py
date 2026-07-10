@@ -12,6 +12,8 @@ from anchor_bench.training.metadata import RuntimeGRUMetadata
 
 
 def _import_torch():
+    """Import PyTorch lazily and report a runtime-focused failure."""
+
     try:
         import torch
     except Exception as exc:  # pragma: no cover - environment-specific
@@ -32,7 +34,11 @@ def build_runtime_gru(
     torch = _import_torch()
 
     class RuntimeGRU(torch.nn.Module):
+        """Minimal recurrent module stored in the deployment archive."""
+
         def __init__(self):
+            """Build the configured GRU and linear output head."""
+
             super().__init__()
             recurrent_dropout = dropout if num_layers > 1 else 0.0
             self.gru = torch.nn.GRU(
@@ -45,6 +51,8 @@ def build_runtime_gru(
             self.head = torch.nn.Linear(hidden_size, output_size)
 
         def forward(self, x, hidden):
+            """Return sequence outputs and the next recurrent hidden state."""
+
             out, hidden = self.gru(x, hidden)
             return self.head(out), hidden
 
@@ -68,12 +76,16 @@ def serialize_runtime_metadata(metadata: RuntimeGRUMetadata | Mapping[str, Any])
 
 
 def _positive_int(value: Any, *, label: str) -> int:
+    """Validate and return a positive integer checkpoint field."""
+
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{label} must be a positive integer")
     return value
 
 
 def _validated_metadata(source: Path, checkpoint: Mapping[str, Any]) -> RuntimeGRUMetadata:
+    """Validate embedded metadata against checkpoint dimensions and hyperparameters."""
+
     raw = checkpoint.get("runtime_metadata")
     if raw is None:
         raise ValueError(f"{source} checkpoint is missing required schema-v3 runtime_metadata")
@@ -125,6 +137,8 @@ def _validated_metadata(source: Path, checkpoint: Mapping[str, Any]) -> RuntimeG
 
 
 def _default_output_path(source: Path) -> Path:
+    """Derive the conventional network archive path beside a checkpoint tree."""
+
     if source.name == "best.pt" and source.parent.name == "checkpoints":
         return source.parent.parent / "network.pt"
     return source.with_name("network.pt")

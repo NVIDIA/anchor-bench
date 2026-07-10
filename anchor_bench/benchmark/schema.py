@@ -18,12 +18,16 @@ MotionSelection = Literal["*"] | tuple[str, ...]
 
 
 def _require_text(value: str, *, label: str) -> str:
+    """Return text after enforcing a non-empty, whitespace-stable value."""
+
     if not value or value != value.strip():
         raise ValueError(f"{label} must be non-empty and have no surrounding whitespace")
     return value
 
 
 def _ordered_names(value: Any, *, label: str) -> tuple[str, ...]:
+    """Parse an ordered, non-empty sequence of unique names."""
+
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ValueError(f"{label} must be an ordered list")
     names = tuple(value)
@@ -50,6 +54,8 @@ class BenchmarkSimulationConfig(ConfigModel):
     @field_validator("integrator")
     @classmethod
     def _integrator(cls, value: str) -> str:
+        """Validate the configured integrator name."""
+
         return _require_text(value, label="integrator")
 
 
@@ -69,12 +75,16 @@ class BenchmarkProfile(ConfigModel):
     @field_validator("data", "output_root")
     @classmethod
     def _relative_paths(cls, value: str, info: Any) -> str:
+        """Normalize benchmark data and output paths as relative POSIX paths."""
+
         _require_text(value, label=info.field_name)
         return require_relative_posix_path(value)
 
     @field_validator("motions", mode="before")
     @classmethod
     def _motions(cls, value: Any) -> MotionSelection:
+        """Accept either every motion or an ordered set of named motions."""
+
         if value == "*":
             return "*"
         return _ordered_names(value, label="motions")
@@ -82,6 +92,8 @@ class BenchmarkProfile(ConfigModel):
     @field_validator("signals", mode="before")
     @classmethod
     def _signals(cls, value: Any) -> tuple[str, ...]:
+        """Validate the ordered state signals supported by benchmark replay."""
+
         signals = _ordered_names(value, label="signals")
         if "torque" in signals:
             raise ValueError(
@@ -105,20 +117,28 @@ class BenchmarkCandidateReference(ConfigModel):
     @field_validator("robot")
     @classmethod
     def _robot(cls, value: str) -> str:
+        """Validate the candidate robot's logical name."""
+
         return require_logical_name(value, label="robot name")
 
     @field_validator("run")
     @classmethod
     def _run(cls, value: str) -> str:
+        """Normalize the candidate run reference as a relative POSIX path."""
+
         return require_relative_posix_path(value)
 
     @field_validator("run_input_sha256", "run_manifest_sha256")
     @classmethod
     def _hash(cls, value: str, info: Any) -> str:
+        """Validate candidate identity fields as SHA-256 digests."""
+
         return validate_sha256(value, label=info.field_name)
 
     @model_validator(mode="after")
     def _immutable_run_layout(self) -> Self:
+        """Require the candidate path to encode its phase, robot, seed, and digest."""
+
         parts = PurePosixPath(self.run).parts
         expected_prefix = ("outputs", self.phase, self.robot)
         if len(parts) != 6 or parts[:3] != expected_prefix:

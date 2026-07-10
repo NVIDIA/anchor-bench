@@ -25,17 +25,23 @@ ParameterMaps = dict[str, dict[str, float]]
 
 
 def _require_text(value: str, *, name: str) -> str:
+    """Return text after enforcing a non-empty, whitespace-stable value."""
+
     if not value or value != value.strip():
         raise ValueError(f"{name} must be non-empty and have no surrounding whitespace")
     return value
 
 
 def _validate_joint_name(joint: str) -> None:
+    """Validate one canonical joint name in a state document."""
+
     if not joint or joint != joint.strip():
         raise ValueError("joint names must be non-empty and have no surrounding whitespace")
 
 
 def _validate_parameter_input(value: Any, *, sparse: bool) -> Any:
+    """Validate the raw shape and supported keys of parameter maps."""
+
     if not isinstance(value, Mapping):
         return value
     unsupported = sorted(set(value) - set(SUPPORTED_SYSID_PARAMETERS))
@@ -51,6 +57,8 @@ def _validate_parameter_input(value: Any, *, sparse: bool) -> Any:
 
 
 def _validate_parameter_maps(parameters: ParameterMaps) -> ParameterMaps:
+    """Validate all joint names in parsed parameter maps."""
+
     for joint_map in parameters.values():
         for joint in joint_map:
             _validate_joint_name(joint)
@@ -58,6 +66,8 @@ def _validate_parameter_maps(parameters: ParameterMaps) -> ParameterMaps:
 
 
 class SysIdParameterCell(ConfigModel):
+    """One parameter-and-joint cell changed by a promotion."""
+
     parameter: Literal[
         "stiffness",
         "damping",
@@ -70,17 +80,23 @@ class SysIdParameterCell(ConfigModel):
     @field_validator("joint")
     @classmethod
     def _valid_joint(cls, value: str) -> str:
+        """Validate the promoted cell's joint name."""
+
         _validate_joint_name(value)
         return value
 
 
 class SysIdBenchmarkEvidence(ConfigModel):
+    """Optional immutable benchmark evidence attached to a promotion."""
+
     run: str
     run_manifest_sha256: Sha256
 
     @field_validator("run")
     @classmethod
     def _valid_run(cls, value: str) -> str:
+        """Normalize the benchmark run as a relative POSIX path."""
+
         return require_relative_posix_path(_require_text(value, name="benchmark run"))
 
 
@@ -101,10 +117,14 @@ class SysIdPromotionRecord(ConfigModel):
     @field_validator("source_run")
     @classmethod
     def _valid_source_run(cls, value: str) -> str:
+        """Normalize the promoted SysID run as a relative POSIX path."""
+
         return require_relative_posix_path(_require_text(value, name="source run"))
 
     @model_validator(mode="after")
     def _unique_evidence(self) -> "SysIdPromotionRecord":
+        """Reject duplicate updated cells and duplicate benchmark evidence."""
+
         cells = [(cell.parameter, cell.joint) for cell in self.updated_cells]
         if len(cells) != len(set(cells)):
             raise ValueError("updated_cells contains duplicate parameter/joint cells")
@@ -115,6 +135,8 @@ class SysIdPromotionRecord(ConfigModel):
 
 
 class SysIdProvenance(ConfigModel):
+    """Ordered history of accepted SysID state revisions."""
+
     history: list[SysIdPromotionRecord] = Field(default_factory=list)
 
 
@@ -129,6 +151,8 @@ class AcceptedSysIdState(ConfigModel):
     @model_validator(mode="before")
     @classmethod
     def _raw_history_length(cls, data: Any) -> Any:
+        """Reject a revision/history mismatch before nested validation loses context."""
+
         if not isinstance(data, Mapping):
             return data
         provenance = data.get("provenance")
@@ -141,15 +165,21 @@ class AcceptedSysIdState(ConfigModel):
     @field_validator("parameters", mode="before")
     @classmethod
     def _parameters_input(cls, value: Any) -> Any:
+        """Validate raw accepted-state parameter maps as complete maps."""
+
         return _validate_parameter_input(value, sparse=False)
 
     @field_validator("parameters")
     @classmethod
     def _parameters(cls, value: ParameterMaps) -> ParameterMaps:
+        """Validate parsed accepted-state parameter joint names."""
+
         return _validate_parameter_maps(value)
 
     @model_validator(mode="after")
     def _history(self) -> "AcceptedSysIdState":
+        """Require consecutive provenance revisions ending at the current revision."""
+
         history = self.provenance.history
         if self.revision != len(history):
             raise ValueError("revision must equal provenance history length")
@@ -169,20 +199,28 @@ class SysIdFittedPatch(ConfigModel):
     @field_validator("robot")
     @classmethod
     def _valid_robot(cls, value: str) -> str:
+        """Validate the fitted patch robot name."""
+
         return _require_text(value, name="robot")
 
     @field_validator("parameters", mode="before")
     @classmethod
     def _parameters_input(cls, value: Any) -> Any:
+        """Validate raw fitted values as a sparse parameter patch."""
+
         return _validate_parameter_input(value, sparse=True)
 
     @field_validator("parameters")
     @classmethod
     def _parameters(cls, value: ParameterMaps) -> ParameterMaps:
+        """Validate parsed fitted-patch joint names."""
+
         return _validate_parameter_maps(value)
 
 
 class SysIdCandidateSource(ConfigModel):
+    """Exact parent, patch, and run identities used to build a candidate."""
+
     parent_state_sha256: Sha256
     fitted_patch_sha256: Sha256
     run_input_sha256: Sha256
@@ -200,16 +238,22 @@ class SysIdCandidateState(ConfigModel):
     @field_validator("robot")
     @classmethod
     def _valid_robot(cls, value: str) -> str:
+        """Validate the candidate state robot name."""
+
         return _require_text(value, name="robot")
 
     @field_validator("parameters", mode="before")
     @classmethod
     def _parameters_input(cls, value: Any) -> Any:
+        """Validate raw candidate values as complete parameter maps."""
+
         return _validate_parameter_input(value, sparse=False)
 
     @field_validator("parameters")
     @classmethod
     def _parameters(cls, value: ParameterMaps) -> ParameterMaps:
+        """Validate parsed candidate-state joint names."""
+
         return _validate_parameter_maps(value)
 
 
@@ -397,10 +441,14 @@ class LoadedSysIdCandidate:
 
 
 def _object_field(value: Any, name: str) -> Any:
+    """Read a field from either a mapping or an attribute-backed object."""
+
     return value.get(name) if isinstance(value, Mapping) else getattr(value, name, None)
 
 
 def _required_manifest_entry(manifest: Any, role: str, expected_path: str) -> Any:
+    """Return the unique manifest entry for a required role and path."""
+
     entries = [
         entry
         for entry in (_object_field(manifest, "generated_files") or [])

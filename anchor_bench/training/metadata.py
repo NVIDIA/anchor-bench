@@ -68,6 +68,8 @@ class RuntimeFeature(ConfigModel):
     @field_validator("name")
     @classmethod
     def _feature_name(cls, value: str) -> str:
+        """Validate the runtime feature against the supported feature set."""
+
         name = value.strip()
         if name not in SUPPORTED_FEATURES:
             raise ValueError(f"unsupported runtime feature {name!r}")
@@ -76,10 +78,14 @@ class RuntimeFeature(ConfigModel):
     @field_validator("components", mode="before")
     @classmethod
     def _components(cls, value: Any) -> tuple[str, ...]:
+        """Parse the feature's ordered component axis."""
+
         return _names(value, label="feature components")
 
     @model_validator(mode="after")
     def _feature_domain(self) -> "RuntimeFeature":
+        """Match each feature to its input/output domain and component contract."""
+
         expected = "output" if self.name == "previous_torque" else "input"
         if self.domain != expected:
             raise ValueError(f"feature {self.name!r} must use domain {expected!r}")
@@ -98,11 +104,15 @@ class PDBaseline(ConfigModel):
     @field_validator("joint_names", mode="before")
     @classmethod
     def _joint_names(cls, value: Any) -> tuple[str, ...]:
+        """Parse the PD baseline's ordered input joints."""
+
         return _names(value, label="pd_baseline.joint_names")
 
     @field_validator("kp", "kd", mode="before")
     @classmethod
     def _stats(cls, value: Any) -> StatValue:
+        """Parse scalar or vector PD baseline values."""
+
         return _stat_value(value)
 
 
@@ -116,11 +126,15 @@ class FrictionBaseline(ConfigModel):
     @field_validator("joint_names", mode="before")
     @classmethod
     def _joint_names(cls, value: Any) -> tuple[str, ...]:
+        """Parse the friction baseline's ordered output joints."""
+
         return _names(value, label="friction_baseline.joint_names")
 
     @field_validator("dry", "viscous", mode="before")
     @classmethod
     def _stats(cls, value: Any) -> StatValue:
+        """Parse scalar or vector friction baseline values."""
+
         return _stat_value(value)
 
 
@@ -133,11 +147,15 @@ class ArmatureValues(ConfigModel):
     @field_validator("joint_names", mode="before")
     @classmethod
     def _joint_names(cls, value: Any) -> tuple[str, ...]:
+        """Parse the armature snapshot's ordered output joints."""
+
         return _names(value, label="armature.joint_names")
 
     @field_validator("values", mode="before")
     @classmethod
     def _stats(cls, value: Any) -> StatValue:
+        """Parse scalar or vector armature values."""
+
         return _stat_value(value)
 
 
@@ -155,15 +173,21 @@ class RuntimeMapping(ConfigModel):
     @field_validator("input_joints", "output_joints", mode="before")
     @classmethod
     def _axes(cls, value: Any, info: Any) -> tuple[str, ...]:
+        """Parse one physical runtime mapping axis."""
+
         return _names(value, label=info.field_name)
 
     @field_validator("effort_limits", mode="before")
     @classmethod
     def _effort_limits(cls, value: Any) -> StatValue:
+        """Parse scalar or vector output effort limits."""
+
         return _stat_value(value)
 
     @model_validator(mode="after")
     def _mapping_contract(self) -> "RuntimeMapping":
+        """Validate physical axes and mapping-specific runtime constants."""
+
         missing = [name for name in self.output_joints if name not in self.input_joints]
         if missing:
             raise ValueError("output_joints must be a subset of input_joints: " + ", ".join(missing))
@@ -198,6 +222,8 @@ class NormalizationValues(ConfigModel):
     @field_validator("mean", "std", mode="before")
     @classmethod
     def _parse_values(cls, value: Any) -> Mapping[str, StatValue]:
+        """Parse named scalar/vector normalization values."""
+
         if not isinstance(value, Mapping):
             raise ValueError("must be a mapping")
         return {str(key): _stat_value(item) for key, item in value.items()}
@@ -239,6 +265,8 @@ class PreviousTorqueDerivation(ConfigModel):
 
     @model_validator(mode="after")
     def _reset_contract(self) -> "PreviousTorqueDerivation":
+        """Require resets at both recorded-episode and physical-mapping boundaries."""
+
         if self.reset_boundaries != ("recorded_episode", "joint_mapping"):
             raise ValueError("previous_torque reset boundaries must be recorded_episode then joint_mapping")
         return self
@@ -263,6 +291,8 @@ class RuntimeHashes(ConfigModel):
     @field_validator("profile_sha256", "resolved_config_sha256", "sysid_state_sha256", "asset_sha256", "source_sha256")
     @classmethod
     def _hash(cls, value: str) -> str:
+        """Validate one lowercase runtime identity digest."""
+
         result = value.strip().lower()
         if not _SHA256.fullmatch(result):
             raise ValueError("must be a lowercase SHA-256 digest")
@@ -291,6 +321,8 @@ class RuntimeGRUMetadata(ConfigModel):
 
     @model_validator(mode="after")
     def _runtime_contract(self) -> "RuntimeGRUMetadata":
+        """Validate tensor dimensions, mappings, statistics, targets, and derivations."""
+
         if not math.isfinite(self.sample_dt_s):
             raise ValueError("sample_dt_s must be finite")
         if self.flattening_order != ("feature", "joint", "component"):

@@ -28,6 +28,8 @@ def _as_numpy(value: Any, *, dtype: Any | None = None) -> np.ndarray:
 
 
 def _leaf_name(label: str) -> str:
+    """Return the final path component of a Newton joint label."""
+
     return label.rsplit("/", maxsplit=1)[-1]
 
 
@@ -38,6 +40,8 @@ def _loose_name(name: str) -> str:
 
 
 def _ordered_names(values: Sequence[str], *, label: str) -> tuple[str, ...]:
+    """Validate and freeze an ordered sequence of unique joint names."""
+
     if isinstance(values, (str, bytes)):
         raise ValueError(f"{label} must be an ordered sequence of joint names")
     names = tuple(str(value).strip() for value in values)
@@ -50,6 +54,8 @@ def _ordered_names(values: Sequence[str], *, label: str) -> tuple[str, ...]:
 
 
 def _freeze_mapping(values: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Copy a mapping into a read-only proxy."""
+
     return MappingProxyType(dict(values))
 
 
@@ -65,6 +71,8 @@ class ScalarJointMapping:
     kind: JointKind
 
     def provenance(self) -> dict[str, Any]:
+        """Serialize the scalar joint's resolved Newton indices."""
+
         return {
             "name": self.name,
             "label": self.label,
@@ -98,6 +106,8 @@ class AssetSnapshot:
     _unsupported_labels: tuple[str, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
+        """Validate dimensions and freeze all mutable snapshot payloads."""
+
         path = Path(self.path).resolve()
         if len(self.sha256) != 64 or any(character not in "0123456789abcdef" for character in self.sha256):
             raise ValueError("asset sha256 must be a lowercase SHA-256 digest")
@@ -144,6 +154,8 @@ class AssetSnapshot:
         return self._default_q
 
     def _matches(self, requested_name: str, joints: Sequence[ScalarJointMapping]) -> list[ScalarJointMapping]:
+        """Return exact or compatible scalar-joint matches for a recorded name."""
+
         exact_label = [joint for joint in joints if joint.label == requested_name]
         if exact_label:
             return exact_label

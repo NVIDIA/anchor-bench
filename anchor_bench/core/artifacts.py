@@ -96,10 +96,14 @@ def ordered_locks(*targets: str | Path) -> Iterator[None]:
 
 
 def _lexists(path: Path) -> bool:
+    """Return whether a path entry exists without following a dangling symlink."""
+
     return os.path.lexists(path)
 
 
 def _fsync_directory(directory: Path) -> None:
+    """Flush directory metadata to durable storage."""
+
     flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
         flags |= os.O_DIRECTORY
@@ -111,6 +115,8 @@ def _fsync_directory(directory: Path) -> None:
 
 
 def _fsync_file(path: Path) -> None:
+    """Flush one regular file's contents and metadata to durable storage."""
+
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
@@ -191,6 +197,8 @@ def _verify_generated_files(
     *,
     require_manifest_file: bool,
 ) -> None:
+    """Verify that a run contains exactly the payloads authenticated by its manifest."""
+
     actual_files, _ = _tree_entries(run_dir)
     manifest_path = actual_files.pop(MANIFEST_NAME, None)
     if require_manifest_file and manifest_path is None:
@@ -223,6 +231,8 @@ def _verify_generated_files(
 
 
 def manifest_path(run_dir: str | Path) -> Path:
+    """Return the canonical manifest path inside a run directory."""
+
     return Path(run_dir) / MANIFEST_NAME
 
 
@@ -369,6 +379,8 @@ atomic_install_dir = atomic_install_directory
 
 
 def _remove_temporary(path: Path) -> None:
+    """Remove an unfinished sibling directory while refusing unsafe path types."""
+
     if path.is_symlink():
         path.unlink(missing_ok=True)
     elif path.exists():

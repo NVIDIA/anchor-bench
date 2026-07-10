@@ -170,6 +170,8 @@ def repo_relative_posix(
 
 
 def _walk_tree(root: Path) -> list[Path]:
+    """Collect regular files beneath a tree while rejecting symlinks."""
+
     files: list[Path] = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
         current_path = Path(current)

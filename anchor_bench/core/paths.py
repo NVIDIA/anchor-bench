@@ -12,26 +12,38 @@ PhaseName = Literal["sysid", "train", "benchmark", "deploy"]
 
 
 def repo_root() -> Path:
+    """Return the Anchor Bench repository root."""
+
     return Path(__file__).resolve().parents[2]
 
 
 def config_root() -> Path:
+    """Return the repository's declarative configuration root."""
+
     return repo_root() / "configs"
 
 
 def robot_config_root() -> Path:
+    """Return the root containing per-robot configuration directories."""
+
     return config_root() / "robots"
 
 
 def asset_root() -> Path:
+    """Return the repository's tracked asset root."""
+
     return repo_root() / "assets"
 
 
 def output_root() -> Path:
+    """Return the root for generated phase outputs."""
+
     return repo_root() / "outputs"
 
 
 def third_party_root() -> Path:
+    """Return the root for pinned third-party source trees."""
+
     return repo_root() / "third_party"
 
 

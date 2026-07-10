@@ -35,6 +35,8 @@ class _UniqueKeyLoader(yaml.SafeLoader):
 
 
 def _construct_mapping(loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+    """Construct a YAML mapping while rejecting duplicate or unhashable keys."""
+
     loader.flatten_mapping(node)
     result: dict[Any, Any] = {}
     for key_node, value_node in node.value:
@@ -117,6 +119,8 @@ class LoadedProfile(Generic[ProfileModelT]):
 
     @property
     def raw_yaml(self) -> str:
+        """Decode and return the exact UTF-8 profile source text."""
+
         return self.raw_bytes.decode("utf-8")
 
     def manifest_data(self, *, repository_root: str | Path) -> dict[str, Any]:

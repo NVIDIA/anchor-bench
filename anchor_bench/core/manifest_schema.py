@@ -35,20 +35,28 @@ class ProfileSnapshot(ConfigModel):
     @field_validator("name")
     @classmethod
     def _valid_name(cls, value: str) -> str:
+        """Validate the profile's logical name."""
+
         return require_logical_name(value, label="profile name")
 
     @field_validator("path")
     @classmethod
     def _valid_path(cls, value: str) -> str:
+        """Normalize the profile source as a relative POSIX path."""
+
         return require_relative_posix_path(value)
 
     @field_validator("raw_sha256", "content_sha256")
     @classmethod
     def _valid_hash(cls, value: str, info: Any) -> str:
+        """Validate profile source and semantic hashes as SHA-256 digests."""
+
         return validate_sha256(value, label=info.field_name)
 
     @model_validator(mode="after")
     def _matching_hashes(self) -> Self:
+        """Require stored profile hashes to match the embedded raw and semantic content."""
+
         canonical_object(self.content)
         actual_raw = sha256_hex(self.raw_yaml.encode("utf-8"))
         if actual_raw != self.raw_sha256:
@@ -70,6 +78,8 @@ class GeneratedFile(ConfigModel):
     @field_validator("path")
     @classmethod
     def _valid_path(cls, value: str) -> str:
+        """Normalize a generated payload path and exclude the manifest itself."""
+
         normalized = require_relative_posix_path(value)
         if normalized == MANIFEST_NAME:
             raise ValueError(f"{MANIFEST_NAME} cannot list itself as generated content")
@@ -78,16 +88,22 @@ class GeneratedFile(ConfigModel):
     @field_validator("role")
     @classmethod
     def _valid_role(cls, value: str) -> str:
+        """Validate the generated file's logical role name."""
+
         return require_logical_name(value, label="generated-file role")
 
     @field_validator("sha256")
     @classmethod
     def _valid_hash(cls, value: str) -> str:
+        """Validate the generated file's content digest."""
+
         return validate_sha256(value)
 
     @field_validator("size_bytes")
     @classmethod
     def _valid_size(cls, value: int | None) -> int | None:
+        """Require an optional generated file size to be non-negative."""
+
         if value is not None and value < 0:
             raise ValueError("must be >= 0")
         return value
@@ -115,11 +131,15 @@ class RunManifest(ConfigModel):
     @field_validator("robot")
     @classmethod
     def _valid_robot(cls, value: str) -> str:
+        """Validate the manifest robot's logical name."""
+
         return require_logical_name(value, label="robot name")
 
     @field_validator("replicate")
     @classmethod
     def _valid_replicate(cls, value: str | None) -> str | None:
+        """Validate an optional printable replicate label."""
+
         if value is None:
             return None
         if not value or len(value) > 128 or any(ord(character) < 32 for character in value):
@@ -133,12 +153,16 @@ class RunManifest(ConfigModel):
     )
     @classmethod
     def _valid_hash(cls, value: str | None, info: Any) -> str | None:
+        """Validate optional and required manifest identity digests."""
+
         if value is None:
             return None
         return validate_sha256(value, label=info.field_name)
 
     @model_validator(mode="after")
     def _validate_identity(self) -> Self:
+        """Verify canonical identities and the generated-file index."""
+
         for value in (
             self.resolved_config,
             self.cli_overrides,
