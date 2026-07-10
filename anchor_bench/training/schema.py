@@ -9,6 +9,8 @@ from typing import Any, Literal
 from pydantic import Field, StrictBool, field_validator, model_validator
 
 from anchor_bench.core.config_model import ConfigModel
+from anchor_bench.core.hashing import require_relative_posix_path, validate_sha256
+from anchor_bench.core.profiles import require_logical_name
 
 
 TrainingTarget = Literal["torque", "torque_residual"]
@@ -222,6 +224,20 @@ class TrainingArtifactReference(ConfigModel):
     sha256: str
     metadata_sha256: str
 
+    @field_validator("path")
+    @classmethod
+    def _artifact_path(cls, value: str) -> str:
+        """Require a normalized repository-relative artifact path."""
+
+        return require_relative_posix_path(value)
+
+    @field_validator("sha256", "metadata_sha256")
+    @classmethod
+    def _artifact_hashes(cls, value: str, info: Any) -> str:
+        """Require exact lowercase artifact and metadata digests."""
+
+        return validate_sha256(value, label=info.field_name)
+
 
 class AcceptedTrainingContract(ConfigModel):
     """Runtime-relevant summary recorded in the accepted model catalog."""
@@ -231,6 +247,27 @@ class AcceptedTrainingContract(ConfigModel):
     mappings: tuple[ResolvedTrainingMapping, ...] = Field(min_length=1)
 
 
+class TrainingBenchmarkEvidence(ConfigModel):
+    """One exact benchmark run attached to an accepted training model."""
+
+    run: str
+    run_manifest_sha256: str
+
+    @field_validator("run")
+    @classmethod
+    def _run_path(cls, value: str) -> str:
+        """Require a normalized repository-relative benchmark path."""
+
+        return require_relative_posix_path(value)
+
+    @field_validator("run_manifest_sha256")
+    @classmethod
+    def _manifest_hash(cls, value: str) -> str:
+        """Require an exact lowercase benchmark manifest digest."""
+
+        return validate_sha256(value, label="run_manifest_sha256")
+
+
 class TrainingSourceReference(ConfigModel):
     """Immutable training run and optional exact benchmark evidence."""
 
@@ -238,7 +275,37 @@ class TrainingSourceReference(ConfigModel):
     run_input_sha256: str
     run_manifest_sha256: str
     sysid_state_sha256: str
-    benchmarks: tuple[str, ...] = ()
+    benchmarks: tuple[TrainingBenchmarkEvidence, ...] = ()
+
+    @field_validator("run")
+    @classmethod
+    def _source_run(cls, value: str) -> str:
+        """Require a normalized repository-relative source-run path."""
+
+        return require_relative_posix_path(value)
+
+    @field_validator(
+        "run_input_sha256",
+        "run_manifest_sha256",
+        "sysid_state_sha256",
+    )
+    @classmethod
+    def _source_hashes(cls, value: str, info: Any) -> str:
+        """Require exact lowercase source identity digests."""
+
+        return validate_sha256(value, label=info.field_name)
+
+    @model_validator(mode="after")
+    def _unique_benchmarks(self) -> "TrainingSourceReference":
+        """Reject duplicate exact benchmark evidence."""
+
+        identities = [
+            (item.run, item.run_manifest_sha256)
+            for item in self.benchmarks
+        ]
+        if len(identities) != len(set(identities)):
+            raise ValueError("benchmarks contains duplicate evidence")
+        return self
 
 
 class AcceptedTrainingModel(ConfigModel):
@@ -261,8 +328,7 @@ class TrainingAcceptedCatalog(ConfigModel):
     def _reject_output_overlap(self) -> "TrainingAcceptedCatalog":
         owner: dict[str, str] = {}
         for key, model in self.models.items():
-            if not key.strip():
-                raise ValueError("model keys must not be empty")
+            require_logical_name(key, label="model key")
             outputs = {
                 joint
                 for mapping in model.contract.mappings
