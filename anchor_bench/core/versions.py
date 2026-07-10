@@ -12,6 +12,8 @@ class ExternalVersions:
     isaac_sim_version: str
     python_version: str
     newton_version: str
+    newton_repo: str
+    newton_commit: str
     isaac_lab_repo: str
     isaac_lab_branch: str
     isaac_lab_commit: str
@@ -24,6 +26,8 @@ def load_external_versions() -> ExternalVersions:
         isaac_sim_version=data["isaac_sim"]["version"],
         python_version=data["isaac_sim"]["python"],
         newton_version=data["newton"]["version"],
+        newton_repo=data["newton"]["repo"],
+        newton_commit=data["newton"]["commit"],
         isaac_lab_repo=data["isaac_lab"]["repo"],
         isaac_lab_branch=data["isaac_lab"]["branch"],
         isaac_lab_commit=data["isaac_lab"]["commit"],

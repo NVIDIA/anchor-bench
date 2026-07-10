@@ -5,7 +5,9 @@ ARG PYTHON_VERSION=3.12
 FROM python:${PYTHON_VERSION}-slim AS kitless
 
 ARG NEWTON_PACKAGE=newton
-ARG NEWTON_VERSION=1.2.0
+ARG NEWTON_VERSION=1.4.0.dev0
+ARG NEWTON_REPO=https://github.com/newton-physics/newton.git
+ARG NEWTON_REF=b6402cf6630df90234cdf3a2c72f9b08ac72472e
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -31,7 +33,7 @@ COPY versions ./versions
 
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install -e ".[dev]" \
-    && python -m pip install "${NEWTON_PACKAGE}==${NEWTON_VERSION}" cmaes matplotlib optuna pandas pyarrow "huggingface_hub>=0.34"
+    && python -m pip install "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_REF}" cmaes matplotlib optuna pandas pyarrow "huggingface_hub>=0.34"
 
 COPY docker/entrypoint.sh /usr/local/bin/anchor-bench-entrypoint
 RUN chmod +x /usr/local/bin/anchor-bench-entrypoint \
@@ -62,10 +64,12 @@ CMD ["bash"]
 FROM kitless AS full
 
 ARG NEWTON_PACKAGE=newton
-ARG NEWTON_VERSION=1.2.0
+ARG NEWTON_VERSION=1.4.0.dev0
+ARG NEWTON_REPO=https://github.com/newton-physics/newton.git
+ARG NEWTON_REF=b6402cf6630df90234cdf3a2c72f9b08ac72472e
 ARG ISAACLAB_REPO=https://github.com/isaac-sim/IsaacLab.git
 ARG ISAACLAB_BRANCH=develop
-ARG ISAACLAB_REF=482d21c936b863e323f0a135c8e8e8e8a9c166b2
+ARG ISAACLAB_REF=5f2db9902baa724427b7aa654835aa559fce64e8
 ARG ISAACLAB_DIR=/opt/IsaacLab
 ARG ISAACSIM_VERSION=6.0.0.0
 
@@ -93,7 +97,7 @@ RUN python -m pip install \
       pyarrow \
       "huggingface_hub>=0.34" \
       matplotlib \
-    && python -m pip install --force-reinstall "${NEWTON_PACKAGE}==${NEWTON_VERSION}" \
+    && python -m pip install --force-reinstall "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_REF}" \
     && git clone --branch "${ISAACLAB_BRANCH}" --single-branch "${ISAACLAB_REPO}" "${ISAACLAB_DIR}" \
     && cd "${ISAACLAB_DIR}" \
     && git fetch origin "${ISAACLAB_REF}" \
@@ -109,7 +113,7 @@ RUN python -m pip install \
          source/isaaclab_visualizers; do \
          if [ -d "$package" ]; then python -m pip install --no-deps --editable "$package"; fi; \
        done \
-    && python -m pip install --force-reinstall "${NEWTON_PACKAGE}[sim]==${NEWTON_VERSION}" \
+    && python -m pip install --force-reinstall "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_REF}" \
     && python -m pip install --editable /opt/anchor-bench
 
 RUN chown -R anchor:anchor "${ISAACLAB_DIR}" /opt/anchor-bench

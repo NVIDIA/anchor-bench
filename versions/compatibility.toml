@@ -4,10 +4,12 @@ version = "6.0.0.0"
 python = "3.12"
 
 [newton]
-version = "1.2.0"
+version = "1.4.0.dev0"
 package = "newton"
+repo = "https://github.com/newton-physics/newton.git"
+commit = "b6402cf6630df90234cdf3a2c72f9b08ac72472e"
 
 [isaac_lab]
 repo = "https://github.com/isaac-sim/IsaacLab.git"
 branch = "develop"
-commit = "482d21c936b863e323f0a135c8e8e8e8a9c166b2"
+commit = "5f2db9902baa724427b7aa654835aa559fce64e8"
