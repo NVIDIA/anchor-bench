@@ -1,107 +1,78 @@
+"""Host-safe registry for declarative robot identity documents."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-import yaml
 
 from anchor_bench.core.paths import repo_root, robot_config_root
-from anchor_bench.core.schemas import ActuatorFile, RobotRunFile, RobotSpec, SysIdBoundsFile
-
-_ROBOT_CONFIG_ERRORS = (OSError, ValueError, KeyError, yaml.YAMLError)
+from anchor_bench.core.profiles import load_yaml_mapping, require_logical_name
+from anchor_bench.robots.schema import RobotIdentity
 
 
 @dataclass(frozen=True)
 class RobotPaths:
+    """Repository locations owned by one robot identity."""
+
     config_dir: Path
     robot: Path
-    run: Path
-    actuators: Path
-    bounds: Path
     asset: Path
 
 
 @dataclass(frozen=True)
 class RobotBundle:
-    spec: RobotSpec
+    """A validated identity paired with its repository paths."""
+
+    spec: RobotIdentity
     paths: RobotPaths
-    run_config: RobotRunFile
 
 
 def list_robots() -> list[str]:
+    """List robots that provide a declarative ``robot.yaml`` identity."""
+
     root = robot_config_root()
     if not root.exists():
         return []
-    return sorted(path.name for path in root.iterdir() if (path / "robot.yaml").exists())
-
-
-def _load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return sorted(path.name for path in root.iterdir() if (path / "robot.yaml").is_file())
 
 
 def _load_robot_bundle(name: str) -> RobotBundle:
-    cfg_dir = robot_config_root() / name
-    robot_file = cfg_dir / "robot.yaml"
-    if not robot_file.exists():
-        raise KeyError(f"unknown robot '{name}'")
-    spec = RobotSpec.from_dict(_load_yaml(robot_file))
-    run_file = cfg_dir / "run.yaml"
-    run_config = RobotRunFile.from_dict(
-        _load_yaml(run_file) if run_file.exists() else {},
-        run_file,
+    """Load one identity without importing runtimes or resolving external USD bytes."""
+
+    robot_name = require_logical_name(name, label="robot name")
+    config_dir = robot_config_root() / robot_name
+    robot_file = config_dir / "robot.yaml"
+    if not robot_file.is_file():
+        raise KeyError(f"unknown robot {robot_name!r}")
+    spec = RobotIdentity.from_dict(load_yaml_mapping(robot_file), robot_file)
+    if spec.name != robot_name:
+        raise ValueError(
+            f"{robot_file}.name must match its configuration directory {robot_name!r}"
+        )
+    return RobotBundle(
+        spec=spec,
+        paths=RobotPaths(
+            config_dir=config_dir,
+            robot=robot_file,
+            asset=repo_root() / spec.asset_path,
+        ),
     )
-    paths = RobotPaths(
-        config_dir=cfg_dir,
-        robot=robot_file,
-        run=run_file,
-        actuators=cfg_dir / spec.actuator_file,
-        bounds=cfg_dir / spec.bounds_file,
-        asset=repo_root() / spec.asset_path,
-    )
-    return RobotBundle(spec=spec, paths=paths, run_config=run_config)
 
 
 def _validate_robot_bundle(name: str, bundle: RobotBundle) -> list[str]:
+    """Return identity and manifest errors without requiring the runtime asset itself."""
+
     errors: list[str] = []
-    for label in ("robot", "run", "actuators", "bounds", "asset"):
-        path = getattr(bundle.paths, label)
-        if not path.exists():
-            errors.append(f"{name}: missing {label} file {path}")
-
-    try:
-        actuator_file = ActuatorFile.from_dict(_load_yaml(bundle.paths.actuators), bundle.paths.actuators)
-    except _ROBOT_CONFIG_ERRORS as exc:
-        errors.append(f"{name}: invalid actuator file: {exc}")
-        actuator_file = None
-
-    if actuator_file is not None:
-        valid_joints = set(bundle.spec.joint_names)
-        for actuator in actuator_file.actuators:
-            unknown = sorted(set(actuator.joints) - valid_joints)
-            if unknown:
-                errors.append(
-                    f"{name}: actuator {actuator.name} joints not in robot.yaml joint_names: "
-                    f"{', '.join(unknown)}"
-                )
-
-    if bundle.paths.bounds.exists():
-        try:
-            bounds = SysIdBoundsFile.from_dict(_load_yaml(bundle.paths.bounds), bundle.paths.bounds)
-            valid_joint_types = set(bundle.spec.joint_names) | set(bundle.spec.joint_aliases)
-            unknown = sorted(set(bounds.joint_types) - valid_joint_types)
-            if unknown:
-                errors.append(
-                    f"{name}: bounds joint_types not in robot.yaml joint_names or joint_aliases: "
-                    f"{', '.join(unknown)}"
-                )
-        except _ROBOT_CONFIG_ERRORS as exc:
-            errors.append(f"{name}: invalid bounds file: {exc}")
+    if not bundle.paths.robot.is_file():
+        errors.append(f"{name}: missing robot file {bundle.paths.robot}")
+    if not bundle.paths.asset.is_file():
+        errors.append(f"{name}: missing asset manifest {bundle.paths.asset}")
     return errors
 
 
 def get_robot(name: str) -> RobotBundle:
+    """Return one strictly validated, host-safe robot identity bundle."""
+
     bundle = _load_robot_bundle(name)
     errors = _validate_robot_bundle(name, bundle)
     if errors:
@@ -110,8 +81,13 @@ def get_robot(name: str) -> RobotBundle:
 
 
 def validate_robot(name: str) -> list[str]:
+    """Return validation errors for one robot instead of raising them."""
+
     try:
         bundle = _load_robot_bundle(name)
-    except _ROBOT_CONFIG_ERRORS as exc:
-        return [str(exc)]
+    except (KeyError, OSError, ValueError) as error:
+        return [str(error)]
     return _validate_robot_bundle(name, bundle)
+
+
+__all__ = ["RobotBundle", "RobotPaths", "get_robot", "list_robots", "validate_robot"]

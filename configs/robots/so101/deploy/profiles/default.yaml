@@ -1,0 +1,25 @@
+schema_version: 1
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+composition:
+  pd:
+    - name: so101_all
+      joints:
+        - Rotation
+        - Pitch
+        - Elbow
+        - Wrist_Pitch
+        - Wrist_Roll
+        - Jaw
+      effort_limits:
+        Rotation: 3.35
+        Pitch: 3.35
+        Elbow: 3.35
+        Wrist_Pitch: 3.35
+        Wrist_Roll: 3.35
+        Jaw: 3.35

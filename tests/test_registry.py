@@ -1,103 +1,90 @@
+"""Tests for the host-safe robot identity registry."""
+
+from __future__ import annotations
 
 from pathlib import Path
-import tempfile
-import unittest
 from unittest.mock import patch
+
+import pytest
 
 from anchor_bench.robots.registry import get_robot, list_robots, validate_robot
 
 
-class RobotRegistryTests(unittest.TestCase):
-    def test_registry_loads_all_reference_robots(self):
-        # Pin the reference robot set so additions stay deliberate.
-        self.assertEqual(list_robots(), ["g1", "h1", "so101", "teststand", "ur10e"])
+def _write_identity(root: Path, name: str, *, document_name: str | None = None) -> Path:
+    """Write one minimal identity and its tracked asset manifest."""
 
-    def test_h1_resolves_native_assets_and_configs(self):
-        robot = get_robot("h1")
-        self.assertEqual(robot.spec.name, "h1")
-        self.assertTrue(robot.paths.actuators.exists())
-        self.assertTrue(robot.paths.bounds.exists())
-        self.assertEqual(validate_robot("h1"), [])
-
-    def test_so101_resolves_native_assets_and_configs(self):
-        robot = get_robot("so101")
-        self.assertEqual(robot.spec.name, "so101")
-        self.assertEqual(robot.spec.joint_names, ["Rotation", "Pitch", "Elbow", "Wrist_Pitch", "Wrist_Roll", "Jaw"])
-        self.assertTrue(robot.paths.actuators.exists())
-        self.assertTrue(robot.paths.bounds.exists())
-        self.assertEqual(validate_robot("so101"), [])
-
-    def test_g1_resolves_right_arm_training_defaults(self):
-        robot = get_robot("g1")
-        self.assertEqual(robot.spec.name, "g1")
-        self.assertEqual(
-            robot.spec.joint_names,
-            ["right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow"],
+    config_root = root / "configs/robots"
+    robot_dir = config_root / name
+    robot_dir.mkdir(parents=True)
+    asset_dir = root / "assets/robots" / name
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "manifest.yaml").write_text(
+        f"name: {name}\nexpected_assets: [{name}.usd]\n",
+        encoding="utf-8",
+    )
+    (robot_dir / "robot.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                f"name: {document_name or name}",
+                f"display_name: {name.title()}",
+                "fixed_base: true",
+                f"asset_path: assets/robots/{document_name or name}/manifest.yaml",
+                f"runtime_usd: {name}.usd",
+                "joint_names: [elbow]",
+                "joint_aliases: {}",
+                "ee_frame: elbow",
+            ]
         )
-        self.assertEqual(robot.run_config.training.model, "hybrid_residual")
-        self.assertEqual(robot.run_config.training.joint_type, "right_shoulder_pitch")
-        self.assertEqual(validate_robot("g1"), [])
-
-    def test_get_robot_rejects_inconsistent_joint_configs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg_root = root / "configs"
-            robot_dir = cfg_root / "badbot"
-            asset_dir = root / "assets" / "badbot"
-            robot_dir.mkdir(parents=True)
-            asset_dir.mkdir(parents=True)
-            (asset_dir / "manifest.yaml").write_text("source: test\n", encoding="utf-8")
-            (robot_dir / "robot.yaml").write_text(
-                "\n".join(
-                    [
-                        "schema_version: 1",
-                        "name: badbot",
-                        "display_name: Bad Bot",
-                        "fixed_base: true",
-                        "asset_path: assets/badbot/manifest.yaml",
-                        "joint_names: [elbow]",
-                        "joint_aliases: {}",
-                        "actuator_file: actuators.yaml",
-                        "bounds_file: bounds.yaml",
-                        "ee_frame: elbow",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            (robot_dir / "run.yaml").write_text("sysid: {cmaes: {sigma: 0.5}}\n", encoding="utf-8")
-            (robot_dir / "actuators.yaml").write_text(
-                "\n".join(
-                    [
-                        "schema_version: 2",
-                        "backend: newton",
-                        "actuators:",
-                        "  - name: bad_actuator",
-                        "    joints: [missing_joint]",
-                        "    controller: {type: pd, parameters: {stiffness: 1.0, damping: 0.1}}",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            (robot_dir / "bounds.yaml").write_text(
-                "\n".join(
-                    [
-                        "schema_version: 2",
-                        "mirror: false",
-                        "joint_types: [elbow]",
-                        "parameters:",
-                        "  armature: {lower: 0.0, upper: 1.0}",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            with (
-                patch("anchor_bench.robots.registry.robot_config_root", return_value=cfg_root),
-                patch("anchor_bench.robots.registry.repo_root", return_value=root),
-            ):
-                with self.assertRaisesRegex(ValueError, "missing_joint"):
-                    get_robot("badbot")
-                self.assertRegex("\n".join(validate_robot("badbot")), "missing_joint")
+        + "\n",
+        encoding="utf-8",
+    )
+    return config_root
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_registry_loads_all_reference_robot_identities() -> None:
+    """Keep the checked-in robot set deliberate and identity-only."""
+
+    assert list_robots() == ["g1", "h1", "so101", "teststand", "ur10e"]
+    for name in list_robots():
+        bundle = get_robot(name)
+        assert bundle.spec.name == name
+        assert bundle.paths.asset.is_file()
+        assert validate_robot(name) == []
+        assert not hasattr(bundle, "run_config")
+        assert not hasattr(bundle.paths, "actuators")
+        assert not hasattr(bundle.paths, "bounds")
+
+
+def test_registry_does_not_require_external_runtime_usd_bytes() -> None:
+    """Allow host-only inspection when the manifest exists but the USD does not."""
+
+    bundle = get_robot("g1")
+    assert bundle.spec.runtime_usd == "g1.usd"
+    assert not (bundle.paths.asset.parent / "files" / bundle.spec.runtime_usd).exists()
+
+
+def test_registry_rejects_directory_identity_mismatch(tmp_path: Path) -> None:
+    """Bind the identity name to its configuration directory."""
+
+    config_root = _write_identity(tmp_path, "badbot", document_name="other")
+    with (
+        patch("anchor_bench.robots.registry.robot_config_root", return_value=config_root),
+        patch("anchor_bench.robots.registry.repo_root", return_value=tmp_path),
+    ):
+        with pytest.raises(ValueError, match="must match its configuration directory"):
+            get_robot("badbot")
+
+
+def test_registry_reports_missing_asset_manifest_without_resolving_usd(tmp_path: Path) -> None:
+    """Require the tracked manifest while leaving external asset resolution to runtime."""
+
+    config_root = _write_identity(tmp_path, "demo")
+    (tmp_path / "assets/robots/demo/manifest.yaml").unlink()
+    with (
+        patch("anchor_bench.robots.registry.robot_config_root", return_value=config_root),
+        patch("anchor_bench.robots.registry.repo_root", return_value=tmp_path),
+    ):
+        assert "missing asset manifest" in "\n".join(validate_robot("demo"))
+        with pytest.raises(ValueError, match="missing asset manifest"):
+            get_robot("demo")

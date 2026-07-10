@@ -1,0 +1,43 @@
+schema_version: 1
+data: inputs/datasets/so101/so101_arm_50motion/train/figure-eight
+joints:
+  - Rotation
+  - Pitch
+  - Elbow
+  - Wrist_Pitch
+  - Wrist_Roll
+  - Jaw
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 64
+buffer_time: 2.0
+seed: 42
+optimizer:
+  type: cmaes
+  sigma: 0.5
+  max_iterations: 100
+  epsilon: 0.001
+parameters:
+  stiffness:
+    mode: per_joint
+    bounds: {lower: 1.0, upper: 80.0}
+  damping:
+    mode: per_joint
+    bounds: {lower: 0.01, upper: 5.0}
+  armature:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 0.10}
+  dry_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 1.0}
+  viscous_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 2.0}
+loss:
+  position: 1.0
+  velocity: 0.0

@@ -1,0 +1,40 @@
+schema_version: 1
+revision: 0
+parameters:
+  stiffness:
+    shoulder_pan_joint: 120.0
+    shoulder_lift_joint: 120.0
+    elbow_joint: 120.0
+    wrist_1_joint: 120.0
+    wrist_2_joint: 120.0
+    wrist_3_joint: 120.0
+  damping:
+    shoulder_pan_joint: 8.0
+    shoulder_lift_joint: 8.0
+    elbow_joint: 8.0
+    wrist_1_joint: 8.0
+    wrist_2_joint: 8.0
+    wrist_3_joint: 8.0
+  armature:
+    shoulder_pan_joint: 0.01
+    shoulder_lift_joint: 0.01
+    elbow_joint: 0.01
+    wrist_1_joint: 0.01
+    wrist_2_joint: 0.01
+    wrist_3_joint: 0.01
+  dry_friction:
+    shoulder_pan_joint: 0.1
+    shoulder_lift_joint: 0.1
+    elbow_joint: 0.1
+    wrist_1_joint: 0.1
+    wrist_2_joint: 0.1
+    wrist_3_joint: 0.1
+  viscous_friction:
+    shoulder_pan_joint: 0.1
+    shoulder_lift_joint: 0.1
+    elbow_joint: 0.1
+    wrist_1_joint: 0.1
+    wrist_2_joint: 0.1
+    wrist_3_joint: 0.1
+provenance:
+  history: []

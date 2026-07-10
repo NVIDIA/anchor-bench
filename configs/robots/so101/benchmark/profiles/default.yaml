@@ -1,0 +1,15 @@
+schema_version: 1
+data: inputs/datasets/so101/so101_arm_50motion/train
+motions: [figure-eight]
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 1
+buffer_time: 2.0
+sync_initial_state: true
+signals: [position, velocity]
+output_root: outputs/sim2real_benchmark

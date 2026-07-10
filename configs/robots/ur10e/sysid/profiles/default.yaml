@@ -1,0 +1,37 @@
+schema_version: 1
+data: inputs/sysid_data/ur10e
+joints:
+  - shoulder_pan_joint
+  - shoulder_lift_joint
+  - elbow_joint
+  - wrist_1_joint
+  - wrist_2_joint
+  - wrist_3_joint
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 64
+buffer_time: 2.0
+seed: 42
+optimizer:
+  type: cmaes
+  sigma: 0.5
+  max_iterations: 200
+  epsilon: 0.01
+parameters:
+  armature:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 0.05}
+  dry_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 1.0}
+  viscous_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 1.0}
+loss:
+  position: 1.0
+  velocity: 0.0

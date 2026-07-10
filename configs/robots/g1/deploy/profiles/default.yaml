@@ -1,0 +1,21 @@
+schema_version: 1
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+composition:
+  pd:
+    - name: g1_right_arm
+      joints:
+        - right_shoulder_pitch
+        - right_shoulder_roll
+        - right_shoulder_yaw
+        - right_elbow
+      effort_limits:
+        right_shoulder_pitch: 25.0
+        right_shoulder_roll: 25.0
+        right_shoulder_yaw: 25.0
+        right_elbow: 25.0

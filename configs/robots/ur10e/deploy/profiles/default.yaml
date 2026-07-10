@@ -1,0 +1,25 @@
+schema_version: 1
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+composition:
+  pd:
+    - name: ur10e_arm
+      joints:
+        - shoulder_pan_joint
+        - shoulder_lift_joint
+        - elbow_joint
+        - wrist_1_joint
+        - wrist_2_joint
+        - wrist_3_joint
+      effort_limits:
+        shoulder_pan_joint: 150.0
+        shoulder_lift_joint: 150.0
+        elbow_joint: 150.0
+        wrist_1_joint: 150.0
+        wrist_2_joint: 150.0
+        wrist_3_joint: 150.0

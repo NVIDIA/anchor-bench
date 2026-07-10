@@ -3,12 +3,6 @@ import unittest
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-import yaml
-
-from anchor_bench.actuators.loader import load_actuator_file
-from anchor_bench.core.paths import repo_root
-
-
 def _valid_robot_spec() -> dict:
     return {
         "schema_version": 1,
@@ -37,11 +31,6 @@ def _valid_bounds_file() -> dict:
 
 
 class NativeActuatorSchemaTests(unittest.TestCase):
-    def test_robot_actuator_configs_use_supported_schema(self):
-        for path in (repo_root() / "configs" / "robots").glob("*/actuators.yaml"):
-            text = path.read_text()
-            self.assertNotIn("model_type:", text, f"{path} still uses legacy model_type")
-
     def test_external_config_models_are_frozen_pydantic_models(self):
         from pydantic import BaseModel, ValidationError
         from anchor_bench.core.schemas import RobotSpec
@@ -50,15 +39,6 @@ class NativeActuatorSchemaTests(unittest.TestCase):
         self.assertIsInstance(spec, BaseModel)
         with self.assertRaises(ValidationError):
             spec.name = "changed"
-
-    def test_so101_uses_newton_component_schema(self):
-        spec = load_actuator_file(repo_root() / "configs" / "robots" / "so101" / "actuators.yaml")
-        actuator = spec.actuators[0]
-        self.assertEqual(spec.backend, "newton")
-        self.assertEqual(actuator.controller.type, "pd")
-        self.assertGreater(len(actuator.clamps), 0)
-        self.assertIn("armature", actuator.physical_parameters)
-        self.assertIn("viscous_friction", actuator.physical_parameters)
 
     def test_delay_schema_rejects_unknown_keys(self):
         from anchor_bench.core.schemas import DelaySpec
@@ -425,32 +405,6 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             "stage, articulation_prim_path, joint_names, num_envs, num_joints, and device",
         ):
             instantiate_newton_actuators(spec)
-
-    def test_robot_registry_loads_validated_run_config(self):
-        from anchor_bench.robots.registry import get_robot
-
-        bundle = get_robot("so101")
-
-        self.assertEqual(100, bundle.run_config.sysid.cmaes.max_iterations)
-        self.assertFalse(hasattr(bundle.run_config.sysid, "max_iter"))
-
-    def test_bounds_configs_do_not_contain_cmaes_policy(self):
-        for path in (repo_root() / "configs" / "robots").glob("*/bounds.yaml"):
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            self.assertNotIn("cmaes", data, f"{path} should keep CMA-ES policy in run.yaml")
-
-    def test_run_configs_use_nested_cmaes_policy(self):
-        for path in (repo_root() / "configs" / "robots").glob("*/run.yaml"):
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            sysid = data.get("sysid")
-            if not sysid:
-                continue
-            self.assertNotIn("sigma", sysid, f"{path} should use sysid.cmaes.sigma")
-            self.assertNotIn("epsilon", sysid, f"{path} should use sysid.cmaes.epsilon")
-            self.assertNotIn("max_iter", sysid, f"{path} should use sysid.cmaes.max_iterations")
-            self.assertIn("cmaes", sysid, f"{path} should define sysid.cmaes")
-
-
 
 if __name__ == "__main__":
     unittest.main()

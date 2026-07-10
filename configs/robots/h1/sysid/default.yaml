@@ -1,0 +1,50 @@
+schema_version: 1
+revision: 0
+parameters:
+  stiffness:
+    left_shoulder_pitch: 60.0
+    left_shoulder_roll: 60.0
+    left_shoulder_yaw: 60.0
+    left_elbow: 60.0
+    right_shoulder_pitch: 60.0
+    right_shoulder_roll: 60.0
+    right_shoulder_yaw: 60.0
+    right_elbow: 60.0
+  damping:
+    left_shoulder_pitch: 2.0
+    left_shoulder_roll: 2.0
+    left_shoulder_yaw: 2.0
+    left_elbow: 2.0
+    right_shoulder_pitch: 2.0
+    right_shoulder_roll: 2.0
+    right_shoulder_yaw: 2.0
+    right_elbow: 2.0
+  armature:
+    left_shoulder_pitch: 0.02
+    left_shoulder_roll: 0.02
+    left_shoulder_yaw: 0.02
+    left_elbow: 0.02
+    right_shoulder_pitch: 0.02
+    right_shoulder_roll: 0.02
+    right_shoulder_yaw: 0.02
+    right_elbow: 0.02
+  dry_friction:
+    left_shoulder_pitch: 0.8
+    left_shoulder_roll: 0.8
+    left_shoulder_yaw: 0.8
+    left_elbow: 0.8
+    right_shoulder_pitch: 0.8
+    right_shoulder_roll: 0.8
+    right_shoulder_yaw: 0.8
+    right_elbow: 0.8
+  viscous_friction:
+    left_shoulder_pitch: 1.5
+    left_shoulder_roll: 1.5
+    left_shoulder_yaw: 1.5
+    left_elbow: 1.5
+    right_shoulder_pitch: 1.5
+    right_shoulder_roll: 1.5
+    right_shoulder_yaw: 1.5
+    right_elbow: 1.5
+provenance:
+  history: []

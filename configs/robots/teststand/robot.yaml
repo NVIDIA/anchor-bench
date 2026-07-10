@@ -1,11 +1,10 @@
-
 schema_version: 1
 name: teststand
 display_name: Single-Motor Teststand
 fixed_base: true
 asset_path: assets/robots/teststand/manifest.yaml
-joint_names: [elbow]
+runtime_usd: teststand.usda
+joint_names:
+  - elbow
 joint_aliases: {}
-actuator_file: actuators.yaml
-bounds_file: bounds.yaml
 ee_frame: arm_bar

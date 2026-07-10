@@ -1,0 +1,40 @@
+schema_version: 1
+revision: 0
+parameters:
+  stiffness:
+    Rotation: 48.419899
+    Pitch: 47.782635
+    Elbow: 14.715496
+    Wrist_Pitch: 43.607166
+    Wrist_Roll: 54.873917
+    Jaw: 68.250793
+  damping:
+    Rotation: 3.334595
+    Pitch: 2.563165
+    Elbow: 0.343250
+    Wrist_Pitch: 4.139243
+    Wrist_Roll: 2.968392
+    Jaw: 2.818730
+  armature:
+    Rotation: 0.067620
+    Pitch: 0.027645
+    Elbow: 0.037720
+    Wrist_Pitch: 0.050714
+    Wrist_Roll: 0.054898
+    Jaw: 0.077625
+  dry_friction:
+    Rotation: 0.347432
+    Pitch: 0.344793
+    Elbow: 0.411190
+    Wrist_Pitch: 0.248233
+    Wrist_Roll: 0.221761
+    Jaw: 0.083458
+  viscous_friction:
+    Rotation: 1.590709
+    Pitch: 0.561425
+    Elbow: 0.796639
+    Wrist_Pitch: 1.071871
+    Wrist_Roll: 1.637671
+    Jaw: 0.958565
+provenance:
+  history: []

@@ -1,8 +1,0 @@
-
-schema_version: 2
-mirror: true
-joint_types: [shoulder_pitch, shoulder_roll, shoulder_yaw, elbow]
-parameters:
-  armature: {lower: 0.0, upper: 0.05}
-  dry_friction: {lower: 0.0, upper: 2.0}
-  viscous_friction: {lower: 0.0, upper: 3.0}

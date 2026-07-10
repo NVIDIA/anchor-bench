@@ -1,0 +1,40 @@
+schema_version: 1
+sysid_state: default
+data: inputs/datasets/so101/so101_arm_50motion/train
+sample_dt_s: 0.002
+network:
+  type: gru
+  hidden_size: 64
+  num_layers: 1
+  dropout: 0.0
+target: torque
+mappings:
+  - input_joints: [Rotation]
+    output_joints: [Rotation]
+  - input_joints: [Pitch]
+    output_joints: [Pitch]
+  - input_joints: [Elbow]
+    output_joints: [Elbow]
+  - input_joints: [Wrist_Pitch]
+    output_joints: [Wrist_Pitch]
+  - input_joints: [Wrist_Roll]
+    output_joints: [Wrist_Roll]
+  - input_joints: [Jaw]
+    output_joints: [Jaw]
+input_features:
+  - name: position
+    domain: input
+    components: [value]
+  - name: position_error
+    domain: input
+    components: [value]
+  - name: velocity
+    domain: input
+    components: [value]
+fit:
+  skip_optuna: true
+  trials: 20
+  trial_epochs: 5
+  final_epochs: 50
+  noise_std: 0.0
+  seed: 42

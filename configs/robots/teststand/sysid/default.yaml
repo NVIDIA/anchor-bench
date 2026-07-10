@@ -1,0 +1,15 @@
+schema_version: 1
+revision: 0
+parameters:
+  stiffness:
+    elbow: 60.0
+  damping:
+    elbow: 2.0
+  armature:
+    elbow: 0.02
+  dry_friction:
+    elbow: 0.8
+  viscous_friction:
+    elbow: 1.5
+provenance:
+  history: []

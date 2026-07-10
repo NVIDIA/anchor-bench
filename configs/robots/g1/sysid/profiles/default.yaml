@@ -1,0 +1,41 @@
+schema_version: 1
+data: inputs/datasets/g1/g1_arm_multi_joint/csv
+joints:
+  - right_shoulder_pitch
+  - right_shoulder_roll
+  - right_shoulder_yaw
+  - right_elbow
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 64
+buffer_time: 2.0
+seed: 42
+optimizer:
+  type: cmaes
+  sigma: 0.5
+  max_iterations: 100
+  epsilon: 0.001
+parameters:
+  stiffness:
+    mode: per_joint
+    bounds: {lower: 1.0, upper: 80.0}
+  damping:
+    mode: per_joint
+    bounds: {lower: 0.01, upper: 5.0}
+  armature:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 0.02}
+  dry_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 1.0}
+  viscous_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 2.0}
+loss:
+  position: 1.0
+  velocity: 0.0

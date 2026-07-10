@@ -1,0 +1,32 @@
+schema_version: 1
+data: inputs/motion_files/h1/motor_benchtop
+joints:
+  - elbow
+simulation:
+  physics_freq: 2000
+  control_freq: 2000
+  render_freq: 2000
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 64
+buffer_time: 2.0
+seed: 42
+optimizer:
+  type: cmaes
+  sigma: 0.5
+  max_iterations: 200
+  epsilon: 0.01
+parameters:
+  armature:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 0.05}
+  dry_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 2.0}
+  viscous_friction:
+    mode: per_joint
+    bounds: {lower: 0.0, upper: 3.0}
+loss:
+  position: 1.0
+  velocity: 0.0

@@ -1,11 +1,15 @@
-
 schema_version: 1
 name: ur10e
 display_name: UR10e
 fixed_base: true
 asset_path: assets/robots/ur10e/manifest.yaml
-joint_names: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint, wrist_3_joint]
+runtime_usd: ur10.usd
+joint_names:
+  - shoulder_pan_joint
+  - shoulder_lift_joint
+  - elbow_joint
+  - wrist_1_joint
+  - wrist_2_joint
+  - wrist_3_joint
 joint_aliases: {}
-actuator_file: actuators.yaml
-bounds_file: bounds.yaml
 ee_frame: wrist_3_link

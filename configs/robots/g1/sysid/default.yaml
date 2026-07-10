@@ -1,0 +1,30 @@
+schema_version: 1
+revision: 0
+parameters:
+  stiffness:
+    right_shoulder_pitch: 30.0
+    right_shoulder_roll: 33.57
+    right_shoulder_yaw: 62.61
+    right_elbow: 27.47
+  damping:
+    right_shoulder_pitch: 0.71
+    right_shoulder_roll: 0.41
+    right_shoulder_yaw: 0.692
+    right_elbow: 0.572
+  armature:
+    right_shoulder_pitch: 0.00109
+    right_shoulder_roll: 0.00101
+    right_shoulder_yaw: 0.00574
+    right_elbow: 0.00119
+  dry_friction:
+    right_shoulder_pitch: 0.462
+    right_shoulder_roll: 0.783
+    right_shoulder_yaw: 0.521
+    right_elbow: 0.270
+  viscous_friction:
+    right_shoulder_pitch: 0.037
+    right_shoulder_roll: 0.482
+    right_shoulder_yaw: 1.125
+    right_elbow: 0.079
+provenance:
+  history: []

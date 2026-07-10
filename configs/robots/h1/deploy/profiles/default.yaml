@@ -1,0 +1,29 @@
+schema_version: 1
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+composition:
+  pd:
+    - name: h1_arms
+      joints:
+        - left_shoulder_pitch
+        - left_shoulder_roll
+        - left_shoulder_yaw
+        - left_elbow
+        - right_shoulder_pitch
+        - right_shoulder_roll
+        - right_shoulder_yaw
+        - right_elbow
+      effort_limits:
+        left_shoulder_pitch: 300.0
+        left_shoulder_roll: 300.0
+        left_shoulder_yaw: 300.0
+        left_elbow: 300.0
+        right_shoulder_pitch: 300.0
+        right_shoulder_roll: 300.0
+        right_shoulder_yaw: 300.0
+        right_elbow: 300.0

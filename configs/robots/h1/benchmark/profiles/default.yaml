@@ -1,0 +1,15 @@
+schema_version: 1
+data: inputs/motion_files/h1/arm_march2026
+motions: [elbow]
+simulation:
+  physics_freq: 500
+  control_freq: 500
+  render_freq: 500
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 1
+buffer_time: 2.0
+sync_initial_state: false
+signals: [position, velocity]
+output_root: outputs/sim2real_benchmark

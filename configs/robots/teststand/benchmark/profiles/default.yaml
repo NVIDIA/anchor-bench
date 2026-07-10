@@ -1,0 +1,15 @@
+schema_version: 1
+data: inputs/motion_files/h1
+motions: [motor_benchtop]
+simulation:
+  physics_freq: 2000
+  control_freq: 2000
+  render_freq: 2000
+  integrator: implicitfast
+  solver_iterations: 10
+  line_search_iterations: 10
+num_envs: 1
+buffer_time: 2.0
+sync_initial_state: false
+signals: [position, velocity]
+output_root: outputs/sim2real_benchmark

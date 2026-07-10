@@ -1,0 +1,30 @@
+schema_version: 1
+sysid_state: default
+data: inputs/datasets/g1/g1_arm_multi_joint/csv
+sample_dt_s: 0.002
+network:
+  type: gru
+  hidden_size: 64
+  num_layers: 1
+  dropout: 0.0
+target: torque_residual
+mappings:
+  - input_joints: [right_shoulder_pitch]
+    output_joints: [right_shoulder_pitch]
+input_features:
+  - name: position
+    domain: input
+    components: [value]
+  - name: position_error
+    domain: input
+    components: [value]
+  - name: velocity
+    domain: input
+    components: [value]
+fit:
+  skip_optuna: true
+  trials: 20
+  trial_epochs: 5
+  final_epochs: 5
+  noise_std: 0.0
+  seed: 42

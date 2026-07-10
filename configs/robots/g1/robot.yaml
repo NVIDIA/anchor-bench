@@ -3,12 +3,15 @@ name: g1
 display_name: Unitree G1 Right Arm
 fixed_base: true
 asset_path: assets/robots/g1/manifest.yaml
-joint_names: [right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+runtime_usd: g1.usd
+joint_names:
+  - right_shoulder_pitch
+  - right_shoulder_roll
+  - right_shoulder_yaw
+  - right_elbow
 joint_aliases:
   shoulder_pitch: right_shoulder_pitch
   shoulder_roll: right_shoulder_roll
   shoulder_yaw: right_shoulder_yaw
   elbow: right_elbow
-actuator_file: actuators.yaml
-bounds_file: bounds.yaml
 ee_frame: right_hand
