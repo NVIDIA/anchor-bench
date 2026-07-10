@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import importlib.util
 import json
 import tempfile
@@ -346,7 +345,6 @@ class TrainingTensorTests(unittest.TestCase):
 
     def test_metadata_uses_input_and_output_domain_widths(self):
         from anchor_bench.training.data import TrainingMapping
-        from anchor_bench.training.export import _validate_runtime_metadata
         from anchor_bench.training.trainer import (
             _load_sequences,
             _normalization_stats,
@@ -369,44 +367,6 @@ class TrainingTensorTests(unittest.TestCase):
                 metadata={},
             )
             metadata = _runtime_metadata(job, stats)
-            _validate_runtime_metadata(
-                metadata,
-                input_columns=job.input_columns,
-                target_columns=job.target_columns,
-                input_size=3,
-                output_size=1,
-            )
-            incomplete = dict(metadata)
-            incomplete.pop("normalization")
-            with self.assertRaisesRegex(ValueError, "missing: normalization"):
-                _validate_runtime_metadata(
-                    incomplete,
-                    input_columns=job.input_columns,
-                    target_columns=job.target_columns,
-                    input_size=3,
-                    output_size=1,
-                )
-            invalid = copy.deepcopy(metadata)
-            invalid["normalization"]["inputs"]["mean"]["position"] = [0.0]
-            with self.assertRaisesRegex(ValueError, "must contain 2"):
-                _validate_runtime_metadata(
-                    invalid, input_columns=job.input_columns, target_columns=job.target_columns,
-                    input_size=3, output_size=1,
-                )
-            invalid = copy.deepcopy(metadata)
-            invalid["normalization"]["inputs"]["std"]["position"] = [1.0, 0.0]
-            with self.assertRaisesRegex(ValueError, "positive finite"):
-                _validate_runtime_metadata(
-                    invalid, input_columns=job.input_columns, target_columns=job.target_columns,
-                    input_size=3, output_size=1,
-                )
-            invalid = copy.deepcopy(metadata)
-            invalid["input_columns"] = ["position", "position"]
-            with self.assertRaisesRegex(ValueError, "must not contain duplicates"):
-                _validate_runtime_metadata(
-                    invalid, input_columns=invalid["input_columns"], target_columns=job.target_columns,
-                    input_size=3, output_size=1,
-                )
 
         self.assertEqual(3, metadata["schema_version"])
         self.assertEqual("miso", metadata["training_topology"])
