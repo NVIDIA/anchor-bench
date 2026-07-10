@@ -1,49 +1,190 @@
-# G1 Neural Actuator Recipes
+# G1 neural actuator recipes
 
-Anchor Bench keeps G1 neural actuator support declarative and artifact-light.
-Do not commit G1 `.pt`, `.pth`, `.onnx`, raw datasets, or generated benchmark
-outputs. Store generated runs under `outputs/training/g1/...`; promote only
-small non-weight metadata under `inputs/actuator_models/g1/`.
+G1 neural actuator experiments are training profiles. One profile produces one
+immutable artifact, one weight set, and one pooled set of normalization
+statistics. The profile filename becomes its accepted model key when promoted.
 
-## Production Arm Full-Torque Enriched GRU
+Keep G1 datasets, checkpoints, TorchScript archives, benchmark output, and plots
+under `inputs/` or `outputs/` as appropriate; do not commit generated weights or
+runs.
+
+## Checked-in baseline
+
+`configs/robots/g1/train/profiles/default.yaml` is a one-joint residual SISO
+baseline for `right_shoulder_pitch`. It uses:
 
 ```text
-[q, position_error, velocity, SDK_PD_hint, qfrc_bias, previous_torque]
+features: position, position_error, velocity
+target:   torque_residual
+mapping:  1 input joint -> 1 output joint
 ```
 
-For the four right-arm joints this is a 24-input recurrent model. The actuator
-YAML disables solver PD, so the network predicts total torque. The current
-trainer does not generate this enriched feature set. Keep it as an experimental
-design note until those signals are represented in the canonical SAGE-to-training
-mapping; do not infer the feature contract from checkpoints or statistics alone.
+It is deliberately small. To train another independent SISO model, create a
+separate named profile. To share one scalar model across several physical
+joints, put several 1-to-1 mappings of identical shape in one profile.
 
-## Arm Hybrid Residual GRU
+## Coupled right-arm recipes
 
-The current `train-actuator --model hybrid_residual` path implements the
-hybrid idea: keep the native solver PD/friction actuator active, compute
-residual torque by subtracting those terms from measured torque, and train a GRU on
-`[position, position_error, velocity]` to add the remaining correction.
-The runtime side should use the shared GRU network with residual actuator
-semantics: preserve position targets for implicit PD and add the predicted
-`torque_residual` as feed-forward effort.
+For the four configured right-arm joints, one mapping determines topology:
+
+- MISO: four input joints and one output joint;
+- MIMO: four input joints and four output joints.
+
+Example MIMO mapping:
+
+```yaml
+mappings:
+  - input_joints:
+      - right_shoulder_pitch
+      - right_shoulder_roll
+      - right_shoulder_yaw
+      - right_elbow
+    output_joints:
+      - right_shoulder_pitch
+      - right_shoulder_roll
+      - right_shoulder_yaw
+      - right_elbow
+```
+
+Example MISO mapping:
+
+```yaml
+mappings:
+  - input_joints:
+      - right_shoulder_pitch
+      - right_shoulder_roll
+      - right_shoulder_yaw
+      - right_elbow
+    output_joints: [right_elbow]
+```
+
+Outputs must be a subset of inputs. Runtime tensor dimensions come from this one
+mapping, not the number of physical mappings in the profile.
+
+## Enriched feature contract
+
+The supported enriched feature family is:
+
+```yaml
+input_features:
+  - {name: position, domain: input, components: [value]}
+  - {name: position_error, domain: input, components: [value]}
+  - {name: velocity, domain: input, components: [value]}
+  - {name: solver_pd, domain: input, components: [value]}
+  - {name: dynamic_bias, domain: input, components: [value]}
+  - {name: previous_torque, domain: output, components: [value]}
+```
+
+`dynamic_bias` is Newton/MuJoCo `qfrc_bias` evaluated from synchronized position
+and velocity without stepping the simulation. Anchor Bench calls
+`SolverMuJoCo.eval_dynamic_bias()` lazily when the feature is requested.
+
+`previous_torque` lives on the output axis. It is the previous denormalized
+target with physical zero at the start of each recorded-episode/mapping
+sequence. For a residual model it therefore means previous residual torque.
+
+With five scalar input-domain blocks and `previous_torque`, the flattened width
+is:
+
+```text
+D = 5 * I + O
+```
+
+The four-joint MIMO recipe has `D = 24`; the four-to-one MISO recipe has
+`D = 21`. Feature order in YAML is runtime order and is frozen in schema-v3
+metadata.
+
+## Full-torque versus residual
+
+Use `target: torque` when the network should own total output torque. Deployment
+disables solver-native PD on those output joints and clamps total network
+output.
+
+Use `target: torque_residual` when the network should learn:
+
+```text
+measured torque - PD baseline - friction baseline
+```
+
+The selected SysID state supplies per-joint stiffness, damping, dry friction,
+and viscous friction. Those mapping-specific values are embedded in the
+artifact and remain authoritative after promotion. At runtime the frozen
+baseline and network residual are added, while only the residual is subject to
+the neural clamp.
+
+Neural per-output effort limits come from the training-time G1 asset and are
+also frozen in metadata. A deploy profile cannot replace either the residual
+baseline or neural effort limits.
+
+## Run, benchmark, and promote
+
+Create a named profile such as
+`configs/robots/g1/train/profiles/right_arm_mimo.yaml`, then preview it:
+
+```bash
+anchor-bench train-actuator --robot g1 --profile right_arm_mimo --dry-run
+```
+
+Actual training may use accepted SysID values or a specific unpromoted SysID
+candidate:
 
 ```bash
 anchor-bench train-actuator \
   --robot g1 \
-  --model hybrid_residual \
-  --data <g1-sage-motion-or-dataset-root> \
-  --joint-type right_shoulder_pitch \
-  --output outputs/training/g1/right_shoulder_pitch \
-  --input-columns position,position_error,velocity \
-  --target-column torque \
-  --skip-optuna
+  --profile right_arm_mimo \
+  --sysid-state outputs/sysid/g1/default/seed-42/<hash>/sysid_state.yaml
 ```
 
-## Leg Full-Torque GRU Experiment
+Benchmark and promotion always name the exact completed training run:
 
-The G1 leg full-torque enriched experiment uses the same enriched family as the
-arm path, with six leg joints and a 36-input contract. It mechanically works,
-but should remain secondary to the lag10 SysID actuator recipe because the branch
-results showed position and velocity regressions even when torque improved
-slightly. Treat this as an experimental benchmark comparison, not the default G1
-leg actuator path.
+```bash
+anchor-bench benchmark \
+  --robot g1 \
+  --run outputs/train/g1/right_arm_mimo/seed-42/<run-input-sha256> \
+  --headless
+
+anchor-bench promote train \
+  --robot g1 \
+  --run outputs/train/g1/right_arm_mimo/seed-42/<run-input-sha256>
+```
+
+Training promotion adds the `right_arm_mimo` model key to
+`train/default.yaml`. It fails if another accepted model already owns any of the
+same output joints.
+
+## Deployment ownership
+
+A neural G1 deploy profile must select the accepted mapping index and repeat its
+exact axes:
+
+```yaml
+composition:
+  neural:
+    - name: right_arm_network
+      model: right_arm_mimo
+      mappings:
+        - index: 0
+          input_joints:
+            - right_shoulder_pitch
+            - right_shoulder_roll
+            - right_shoulder_yaw
+            - right_elbow
+          output_joints:
+            - right_shoulder_pitch
+            - right_shoulder_roll
+            - right_shoulder_yaw
+            - right_elbow
+  pd: []
+```
+
+PD and neural actuators may coexist only on disjoint output joints. Context
+inputs may overlap. Omitted joints retain asset-defined behavior. Freeze the
+composition only after the model is accepted:
+
+```bash
+anchor-bench promote deploy --robot g1 --profile <deploy-profile> --dry-run
+anchor-bench promote deploy --robot g1 --profile <deploy-profile>
+```
+
+The network's `sample_dt_s` must equal `1 / control_freq`; deployment does not
+resample recurrent inference.

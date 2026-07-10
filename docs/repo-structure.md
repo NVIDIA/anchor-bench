@@ -1,132 +1,153 @@
-# Repository Structure
+# Repository structure
 
-Anchor Bench separates robot definitions, runtime assets, run inputs, generated
-outputs, and third-party dependencies. Keeping those boundaries clear makes runs
-reproducible and keeps generated or private files out of robot config.
-
-```text
-anchor_bench/          Python package: CLI, loaders, runners, runtime helpers
-configs/
-  robots/<robot>/      Declarative robot defaults: joints, actuators, bounds, run defaults
-  experiments/         Reusable experiment recipes that reference inputs and outputs
-assets/robots/         Robot asset manifests plus the SO-101 quick-check USD
-inputs/                Measured datasets, curated params, and non-weight actuator metadata
-outputs/               Generated SysID, training, benchmark, and analysis artifacts
-third_party/           Ignored local artifacts and optional vendor checkouts
-docker/                Container entrypoints and GUI/headless/persistent run helpers
-docs/                  CLI, plugin, artifact, and test guidance
-examples/              Small smoke-test data/results
-tests/                 Host-safe unit tests and dry-run command checks
-versions/              Runtime compatibility pins
-```
-
-## Configs
-
-`configs/` contains declarative robot and experiment configuration. These files
-describe what a robot is and how a workflow should be assembled; they should not
-contain measured datasets, generated results, or private/binary assets.
+The repository separates robot identity, editable recipes, accepted state,
+runtime assets, measured inputs, and generated evidence.
 
 ```text
-configs/
-  robots/
-    so101/
-      robot.yaml        # robot identity, asset manifest, joint names, aliases
-      actuators.yaml    # canonical/default actuator model
-      bounds.yaml       # SysID parameter search bounds
-      run.yaml          # default workflow settings for this robot
-  experiments/
-    so101_anchor_lab_figure_eight.yaml
+anchor_bench/          Schemas, resolution, execution, promotion, and runtime adapters
+configs/robots/        Robot identity, phase profiles, accepted state, frozen deploy state
+assets/robots/         Asset manifests and small public assets
+inputs/datasets/       Measured SAGE trajectories
+outputs/               Immutable candidates and benchmark evidence
+third_party/           Ignored binary artifacts and optional source checkouts
+docker/                Container entrypoints
+docs/                  Workflow and contributor guidance
+tests/                 Host-safe contracts and opt-in runtime tests
+versions/              Supported runtime pins
 ```
 
-Use `robot.yaml` as the single source of truth for supported joint names and
-aliases. Use `configs/robots/<robot>/actuators.yaml` as the canonical/default
-actuator model for that robot. Use `configs/robots/<robot>/bounds.yaml` to
-define what SysID is allowed to tune. `configs/experiments/*.yaml` should
-reference `configs/robots/...` for robot defaults, `inputs/datasets/...` for
-measured data, and `outputs/...` for generated artifacts.
+## Robot configuration
+
+Each robot is self-contained under `configs/robots/<robot>/`:
+
+```text
+configs/robots/<robot>/
+  robot.yaml
+  sysid/
+    profiles/default.yaml
+    profiles/<recipe>.yaml
+    default.yaml
+  train/
+    profiles/default.yaml
+    profiles/<recipe>.yaml
+    default.yaml
+  benchmark/
+    profiles/default.yaml
+    profiles/<recipe>.yaml
+  deploy/
+    profiles/default.yaml
+    profiles/<recipe>.yaml
+    default.yaml             # created only by promote deploy
+```
+
+Not every robot needs every optional named profile. A robot must have the
+identity and accepted state needed by the phases it supports.
+
+`robot.yaml` contains only stable identity:
+
+- robot and display names;
+- fixed-base setting;
+- asset manifest and runtime USD name;
+- canonical joint order and aliases;
+- optional end-effector frame.
+
+Phase recipes live in their own `profiles/` directories. A selected named
+profile replaces `profiles/default.yaml`; it is not layered on top. SysID and
+training CLI overrides then replace typed fields in that selected profile.
+
+`sysid/default.yaml` is the accepted physical-parameter state.
+`train/default.yaml` is the accepted neural-model catalog. They are written only
+by their explicit promotion commands. `deploy/default.yaml` is a frozen runtime
+composition materialized from accepted state; it is not a mutable recipe.
+
+Generated files and neural weights never belong in `configs/`.
 
 ## Assets
 
-SO-101 includes `assets/robots/so101/files/so101.usd` for quick checks.
-For other robots, provide USD/MJCF/mesh files either by placing them under
-`assets/robots/<robot>/files/` or by setting `ANCHOR_BENCH_ASSET_DIR` to a
-directory containing the assets. Use `ANCHOR_BENCH_ASSET_DIR` when assets are
-local, private, large, or shared across repos.
+Asset metadata lives at `assets/robots/<robot>/manifest.yaml`. Small public
+assets may be checked into `assets/robots/<robot>/files/`. Large, licensed,
+private, or generated assets should be supplied through
+`ANCHOR_BENCH_ASSET_DIR`.
 
-Asset lookup checks `ANCHOR_BENCH_ASSET_DIR` first, then the repo-local
-`assets/robots/<robot>/files/` directory. Do not put robot USDs or meshes under
-`inputs/`.
+Runtime asset lookup checks the configured override and repository asset
+locations. `robot.yaml` names the runtime USD; profiles do not select a different
+robot asset. Actual runs hash the resolved asset as part of semantic identity.
+Dry runs use the manifest fingerprint and do not resolve or import the runtime
+asset.
+
+Do not place USDs, meshes, or FMUs under `inputs/`.
 
 ## Inputs
 
-Inputs are run data or frozen parameter files, not robot definitions.
+Measured data uses the SAGE layout:
 
 ```text
-inputs/
-  datasets/
-    <robot>/
-      <dataset>/
-        train/<motion>/
-          control.csv
-          state_motor.csv
-          joint_list.txt
-          metadata.yaml
-        heldout/<motion>/
-  actuator_params/
-    so101/
-      fitted_seed42.yaml  # optional frozen known params for publishing/replay
-  actuator_models/
-    <robot>/
-      README.md           # non-weight neural actuator metadata and recipes
+inputs/datasets/<robot>/<dataset>/<split>/<motion>/
+  control.csv
+  state_motor.csv
+  joint_list.txt
+  metadata.yaml
 ```
 
-Only put actuator params under `inputs/actuator_params/` when they are deliberate
-run inputs, such as a published fitted file. Generated SysID results should stay
-in `outputs/sysid/...` unless you intentionally promote one into
-`inputs/actuator_params/`. Neural checkpoints remain generated artifacts; only
-small metadata belongs under `inputs/actuator_models/`.
+`joint_list.txt` should use canonical robot names. Profile and CLI selectors may
+use configured aliases, but resolved runs and artifacts persist canonical names.
+Keep training and held-out motions separate. Datasets are fingerprinted as
+semantic run inputs and are not copied into output directories.
+
+Inputs are measured data, not a place for accepted actuator parameters or
+neural model descriptors. Accepted state lives with the robot config; generated
+candidate state and weights live in immutable runs.
 
 ## Outputs
 
-Outputs are generated run artifacts and should not be treated as robot config.
+SysID and training candidates have deterministic directories:
 
 ```text
-outputs/
-  sysid/
-    <robot>/<run>/
-      best_params.yaml
-      run_summary.yaml
-  training/
-    <robot>/<run>/
-      *_best.pt           # ignored generated checkpoint
-      *_stats.json        # normalization and metric metadata
-      *_network.pt        # ignored TorchScript runtime network
-  sim2real_benchmark/
-    sim/<robot>/<dataset>/<actuator_model>/<motion>/
-    real/<robot>/<dataset>/<motion>/
-  sim2real_analysis/
-    metrics/
-    plots/
+outputs/sysid/<robot>/<profile>/seed-<seed>/<run-input-sha256>/
+outputs/train/<robot>/<profile>/seed-<seed>/<run-input-sha256>/
 ```
 
-Use `outputs/sysid/.../best_params.yaml` directly for local replay, or copy a
-chosen frozen file into `inputs/actuator_params/<robot>/` when it becomes a
-published input. Fitted files use the same schema-v2 actuator document as
-`configs/robots/<robot>/actuators.yaml`, with run provenance under the optional
-top-level `metadata` mapping. Benchmark and analysis outputs can be regenerated
-and should stay separate from `configs/`.
+Benchmark evidence binds an exact source-run manifest:
 
-## Third Party
+```text
+<benchmark-output-root>/<robot>/<sysid|train>/<benchmark-profile>/
+  <source-manifest-sha256>/<benchmark-input-sha256>/
+```
+
+The checked-in benchmark profiles use `outputs/sim2real_benchmark` as this
+root. `--output-root` may choose another repository-contained location without
+changing benchmark identity.
+
+Every completed run writes `manifest.yaml` last. The manifest authenticates the
+semantic input, generated files, upstream state, source tree, assets, and
+dependencies. Reusing a valid complete directory is a no-op; a partial or
+corrupt directory is an error rather than an overwrite target.
+
+Output paths referenced by accepted training state, accepted promotion
+provenance, benchmark evidence, or frozen deployment must be retained. Anchor
+Bench does not currently garbage-collect them.
+
+## Third-party files
 
 Use `third_party/` for local binary artifacts and optional vendor checkouts:
 
 ```text
 third_party/
-  artifacts/h1/nvidia-motor.fmu
-  IsaacLab/        # optional local checkout
+  artifacts/<robot>/...
+  IsaacLab/
 ```
 
-The actual FMU and checkout contents are ignored by git.
-The full container image uses /opt/IsaacLab by default; `third_party/IsaacLab`
-is only used when explicitly selected with the local development workflow in
-`docs/cli.md`.
+These contents are ignored. The full container uses its pinned Isaac Lab by
+default; select a host-editable checkout only through the documented setup
+workflow.
+
+## Repository rules
+
+- Keep robot support declarative under `configs/robots/<robot>/`.
+- Keep heavy Newton, Isaac Lab, Isaac Sim, Warp, and Torch imports behind actual
+  execution boundaries.
+- Use `anchor-bench ... --dry-run` for host-safe construction tests.
+- Do not commit datasets, neural weights, FMUs, generated runs, plots, or
+  third-party checkouts.
+- Do not manually edit machine-managed accepted or frozen state to imitate a
+  promotion.

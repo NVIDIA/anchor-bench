@@ -1,201 +1,181 @@
-# End-to-End Pipeline Tests
+# Verifying the phase pipeline
 
-Anchor Bench has two end-to-end pipeline layers:
+The authoritative workflow has two verification layers:
 
-- `tests/test_pipeline_contract.py` is the default, host-safe contract test for
-  SO-101 SysID, benchmark, and analysis wiring.
-- `tests/test_runtime_pipeline.py` is an opt-in full runtime smoke test that
-  launches the actual Isaac Sim / Isaac Lab / Newton / GPU path.
+- host-safe contract tests exercise resolution, immutable outputs, promotion,
+  metadata, and runtime boundaries with fakes;
+- full-runtime checks exercise the pinned Newton, Isaac, MuJoCo, Torch, and GPU
+  stack with real assets and trajectories.
 
-The host-safe test should stay in the normal unit suite. The full runtime smoke
-should be enabled only on machines with the full container, CUDA, and SO-101
-runtime assets.
+Keep host-safe coverage in the default suite. Full-runtime execution belongs in
+the full container and must not be required by ordinary unit tests.
 
-## Host-Safe Contract Test
+## Host-safe contract suite
 
-`tests/test_pipeline_contract.py` verifies the pipeline boundary without
-launching Isaac Sim or Newton.
-
-### What It Proves
-
-- A schema-v2 SysID `best_params.yaml` can be consumed by benchmark
-  actuator-parameter loading.
-- Experiment benchmark expansion passes the expected seed, output folder,
-  actuator params, dataset, actuator model, motion name, and headless setting
-  into the benchmark runtime boundary.
-- Benchmark outputs in CSV trajectory directories can be consumed by the real
-  analysis reader.
-- Analysis writes `so101_metrics.csv` rows for the selected dataset, motion,
-  actuator model, seed, and joints.
-- Plot dependencies stay lazy: `_load_pyplot()` is not called when joint and
-  end-effector plots are disabled.
-
-### What It Does Not Prove
-
-- CMA-ES optimizer convergence.
-- Isaac Sim, Isaac Lab, Newton, Torch, or Warp runtime availability.
-- Physical accuracy of the simulated trajectory.
-- GUI, GPU, or container behavior.
-
-Those checks belong in the opt-in runtime smoke test, not the normal host-safe
-unit-test suite.
-
-### Test Shape
-
-The test creates all inputs in a temporary directory:
-
-```text
-datasets/custom_motion/
-  control.csv
-  state_motor.csv
-  joint_list.txt
-  metadata.yaml
-sysid/
-  seed_42/best_params.yaml
-  seed_7/best_params.yaml
-benchmark/
-  seed_42/
-    real/so101/synthetic/custom_motion/
-    sim/so101/synthetic/fitted_implicit/custom_motion/
-analysis/
-  metrics/so101_metrics.csv
-```
-
-The experiment config uses two benchmark seeds so the experiment layer is
-required to create seed-specific benchmark output roots:
-
-```yaml
-seeds: [42, 7]
-
-actuator_models:
-  fitted_implicit:
-    type: implicit
-    fitted_params: <tmp>/sysid/seed_{seed}/best_params.yaml
-    benchmark_params: fitted
-
-analysis:
-  seeds: [42]
-  plots:
-    joints: false
-    end_effector: false
-```
-
-Using `analysis.seeds: [42]` proves that the analysis stage can select one
-seed from a multi-seed benchmark layout.
-
-### Runtime Boundary
-
-The test patches `anchor_bench.benchmark.newton_runner.run_benchmark_batch`.
-That keeps the unit test host-safe while still checking the exact arguments that
-would be handed to the Newton benchmark runtime.
-
-After the patched benchmark call is verified, the test writes synthetic
-benchmark artifacts and calls `run_experiment_analysis(..., dry_run=False)` so
-the real analysis implementation reads the generated trajectory directories and
-writes metrics.
-
-## Full Runtime Smoke Test
-
-`tests/test_runtime_pipeline.py` verifies the same SO-101 workflow through the
-real public CLI entrypoints:
-
-```text
-anchor-bench sysid
-anchor-bench benchmark
-anchor-bench analyze --require-end-effector
-```
-
-It is skipped by default. Set `ANCHOR_BENCH_RUN_RUNTIME_E2E=1` to enable it.
-
-### What It Proves
-
-- The full runtime modules can be imported: `isaaclab`, `isaaclab_newton`,
-  `newton`, `torch`, and `cmaes`.
-- CUDA is visible inside the full runtime container.
-- The SO-101 runtime USD can be resolved.
-- Actual SysID optimization writes `best_params.yaml`, `optimization_log.csv`,
-  and `run_summary.yaml`.
-- Actual benchmark replay consumes the generated fitted params and writes real
-  and simulated SAGE folders plus a benchmark `run_summary.yaml`.
-- Actual analysis consumes the benchmark output, requires end-effector FK, and
-  writes joint metrics, end-effector metrics, joint plots, and
-  `end_effector.png`.
-
-This is a runtime contract smoke, not a physical accuracy benchmark. It checks
-that the full stack runs and produces the expected artifacts.
-
-### Runtime Test Shape
-
-The test creates a tiny all-joint SO-101 SAGE motion with two timestamps. By
-default it uses a temporary directory. To preserve artifacts for debugging, set
-`ANCHOR_BENCH_RUNTIME_OUTPUT_DIR`; the test will create a fresh
-`runtime_pipeline_<uuid>` subdirectory under it.
-
-```text
-runtime_pipeline_<uuid>/
-  inputs/runtime_smoke_motion/
-  sysid/
-    best_params.yaml
-    optimization_log.csv
-    run_summary.yaml
-  benchmark/
-    real/so101/runtime_smoke_dataset/runtime_smoke_motion/
-    sim/so101/runtime_smoke_dataset/fitted_implicit/runtime_smoke_motion/
-  analysis/
-    metrics/so101_metrics.csv
-    metrics/so101_end_effector_metrics.csv
-    plots/runtime_smoke_dataset/runtime_smoke_motion/
-```
-
-If the opt-in flag is set but prerequisites are missing, the test skips with an
-actionable reason naming missing runtime modules, CUDA, or the SO-101 asset. With
-the full image and GPU runtime available, the test executes the complete
-SysID → benchmark → analysis pipeline.
-
-## Run It
-
-Host-safe contract test:
+Run the phase-focused suite from the repository root:
 
 ```bash
-./setup.sh --shell python3 -m pytest -q tests/test_pipeline_contract.py
+python3 -m pytest -q \
+  tests/test_robot_identity.py \
+  tests/test_robot_phase_configs.py \
+  tests/test_core_hashing.py \
+  tests/test_core_profiles.py \
+  tests/test_core_manifest_schema.py \
+  tests/test_core_artifacts.py \
+  tests/test_phase_paths.py \
+  tests/test_sysid_schema.py \
+  tests/test_sysid_state.py \
+  tests/test_sysid_execution.py \
+  tests/test_sysid_runtime_backend.py \
+  tests/test_training_contract.py \
+  tests/test_training_episode.py \
+  tests/test_training_engine.py \
+  tests/test_training_phase.py \
+  tests/test_benchmark_schema.py \
+  tests/test_benchmark_phase.py \
+  tests/test_benchmark_replay.py \
+  tests/test_deploy_schema.py \
+  tests/test_deploy_promotion.py \
+  tests/test_deploy_runtime.py \
+  tests/test_authoritative_cli.py
 ```
 
-Adjacent coverage:
+Then run the full suite and static checks:
 
 ```bash
-./setup.sh --shell python3 -m pytest -q tests/test_experiments.py tests/test_runtime_workflows.py tests/test_cli_dry_run.py
+python3 -m pytest -q
+python3 -m ruff check anchor_bench tests scripts
+python3 -m pyright
+git diff --check
 ```
 
-Default container suite, with the runtime smoke discovered but skipped:
+Torch-dependent tests skip when Torch is not installed. Tests that inspect a
+TorchScript ZIP directly remain host-safe and do not import Torch.
+
+## What the contracts prove
+
+### Cross-cutting artifact protocol
+
+The core tests cover strict YAML, duplicate-key rejection, canonical semantic
+hashes, repository path containment, source fingerprints, stable locks, atomic
+installation, manifest-last completion, verified no-ops, and corruption
+failures.
+
+### SysID
+
+The SysID tests cover profile validation, shared and per-joint optimizer layout,
+accepted revision-zero state, authenticated parent-state selection, the
+`parent + fitted patch = candidate` equation, immutable run output, sparse
+promotion, and optional exact benchmark evidence.
+
+The backend tests use injected simulation and optimizer boundaries. They prove
+that execution consumes the resolved profile and frozen parent state without
+requiring Isaac Sim or Newton on the host.
+
+### Training and metadata
+
+Training tests cover SISO, shared mappings, MISO, and MIMO dimensions without a
+separate topology tag. They verify episode splitting before mapping expansion,
+linear command interpolation, recurrent resets, previous-target shifting,
+full-torque and residual targets, multi-component feature ordering, pooled
+normalization, dynamic-bias provider behavior, and training-asset effort limits.
+
+Schema-v3 tests authenticate mapping axes, tensor dimensions, feature domains,
+normalization, target-specific clamping, residual baselines, dynamic-bias and
+previous-torque derivations, and source hashes embedded in `network.pt`.
+
+### Benchmark
+
+Benchmark tests prove that `--run` selects one exact completed SysID or training
+candidate. They validate source manifests and artifacts before runtime, enforce
+joint and timestep contracts, ignore output root for semantic identity, produce
+real and simulated trajectories plus metrics, and return a pre-runtime no-op for
+valid existing evidence.
+
+Replay tests use fake Newton/Torch boundaries to cover PD candidates, schema-v3
+GRUs, mapping-local recurrent state, dynamic bias, candidate-only metrics, and
+omitted-joint behavior.
+
+### Deployment
+
+Deployment tests cover explicit PD and neural ownership, accepted-source
+resolution, mapping and artifact authentication, output-overlap rejection,
+frozen baseline and effort-limit values, atomic promotion, and no-op behavior.
+
+Runtime tests prove that the frozen state—not mutable SysID or training YAML—is
+the runtime authority. They cover native explicit PD, full-torque and residual
+neural semantics, mapping-local recurrent state, shared dynamic-bias evaluation,
+and leaving omitted asset joints untouched.
+
+### CLI and lazy imports
+
+`tests/test_authoritative_cli.py` verifies the public command tree, typed
+overrides, exact-candidate forwarding, dry-run behavior, explicit promotion, and
+host-safe phase exports. Dry runs must not resolve a runtime USD or import Torch,
+Newton, Isaac Lab, or simulation modules.
+
+## Full-runtime check
+
+Run this in a disposable worktree or clone: promotion intentionally modifies
+accepted YAML under `configs/robots/<robot>/`.
+
+Start with the full environment and a real SAGE dataset:
 
 ```bash
-./setup.sh --shell python3 -m pytest -q
+./setup.sh --shell
+./setup.sh --check
+anchor-bench robots describe so101
+anchor-bench sysid --robot so101 --dry-run
+anchor-bench train-actuator --robot so101 --dry-run
 ```
 
-Opt-in full runtime smoke:
+Then exercise each boundary, using the exact run directory printed by the prior
+command:
 
 ```bash
-HEADLESS=1 ./setup.sh --shell env \
-  ANCHOR_BENCH_RUN_RUNTIME_E2E=1 \
-  ANCHOR_BENCH_RUNTIME_OUTPUT_DIR=/tmp/anchor-bench-runtime-e2e \
-  python3 -m pytest -v tests/test_runtime_pipeline.py
+# 1. Produce an immutable physical candidate.
+anchor-bench sysid --robot so101 --num-envs 2 \
+  --optimizer '{"type":"cmaes","sigma":0.5,"max_iterations":1,"epsilon":0.001}'
+
+# 2. Replay that exact candidate on held-out data.
+anchor-bench benchmark --robot so101 --run <completed-sysid-run> --headless
+
+# 3. Preview, then accept the candidate if desired.
+anchor-bench promote sysid --robot so101 --run <completed-sysid-run> --dry-run
+anchor-bench promote sysid --robot so101 --run <completed-sysid-run>
+
+# 4. Train and replay one exact schema-v3 network artifact.
+anchor-bench train-actuator --robot so101 --final-epochs 1 --skip-optuna
+anchor-bench benchmark --robot so101 --run <completed-training-run> --headless
+
+# 5. Preview and accept the model, then freeze deployment.
+anchor-bench promote train --robot so101 --run <completed-training-run> --dry-run
+anchor-bench promote train --robot so101 --run <completed-training-run>
+anchor-bench promote deploy --robot so101 --dry-run
+anchor-bench promote deploy --robot so101
 ```
 
-## Test Directory Summary
+The checked-in SO-101 deploy profile is PD-only. To test neural deployment, add
+a temporary deploy profile that explicitly references the promoted model key and
+its exact metadata mapping; do not overlap its output joints with a PD owner.
 
-| Test module | Coverage summary | Runtime level |
-| --- | --- | --- |
-| `tests/test_actuator_net_gru.py` | Host-safe import/config checks for GRU actuator config classes and input-column validation. | Host-safe unit |
-| `tests/test_actuator_schema.py` | Declarative actuator, run, experiment, and Newton adapter schema behavior. | Host-safe unit |
-| `tests/test_cli_dry_run.py` | CLI command construction for robots, SysID, benchmark, analysis, and train-actuator dry-runs. | Host-safe subprocess |
-| `tests/test_docker_setup.py` | Docker-first setup script, persistent shell, docs, cache, UID/GID, and artifact-layout expectations. | Host-safe dry-run/docs |
-| `tests/test_experiments.py` | Experiment config expansion, batching, seed layout, fitted/initial params, analysis selectors, and CLI dry-runs. | Host-safe unit/subprocess |
-| `tests/test_pipeline_contract.py` | End-to-end host-safe SysID params -> benchmark boundary -> analysis artifact contract. | Host-safe contract |
-| `tests/test_generic_runtime.py` | Robot-parameterized dispatch and non-SO-101 analysis behavior. | Host-safe unit |
-| `tests/test_registry.py` | Robot registry discovery, configured robot bundles, and invalid robot diagnostics. | Host-safe unit |
-| `tests/test_runtime_pipeline.py` | Opt-in actual SO-101 SysID optimization → benchmark replay → FK analysis smoke. | Full runtime opt-in |
-| `tests/test_runtime_simulation.py` | Runtime simulation timing and scene integration contracts with fakes. | Host-safe unit |
-| `tests/test_sage.py` | SAGE loader ordering, initial-state extraction, timestamp scaling, interpolation, and validation errors. | Host-safe unit |
-| `tests/test_runtime_workflows.py` | runtime workflow helpers, asset preflights, optimizer behavior, benchmark row/layout helpers, and analysis behavior with fakes. | Host-safe unit |
-| `tests/test_training.py` | SAGE training-source discovery, feature mapping, tiny GRU training, and TorchScript export. | Host-safe; Torch tests require torch |
-| `tests/test_versions.py` | Compatibility manifest pins for Isaac Sim, Isaac Lab, and Newton. | Host-safe unit |
+## Inspecting results
+
+For every completed run:
+
+1. verify that `manifest.yaml` exists and was written last;
+2. compare its `run_input_sha256` with the directory name;
+3. confirm generated-file hashes match the bytes on disk;
+4. rerun the identical command and expect `status: no-op`;
+5. confirm no artifact was copied under `configs/`.
+
+For promotion, inspect the revision, exact source path and hashes, affected
+parameter cells or model key, and optional benchmark provenance. For deployment,
+confirm every output has exactly one owner and every frozen value came from
+accepted SysID state or authenticated neural metadata.
+
+## What these checks do not prove
+
+Contract completion does not establish optimizer convergence, model quality,
+sim-to-real accuracy, hardware safety, or a benchmark acceptance threshold.
+Those are experiment and review decisions, not implicit pipeline side effects.
