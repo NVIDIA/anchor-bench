@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 import yaml
 
 from anchor_bench.benchmark.phase import (
@@ -22,6 +23,7 @@ from anchor_bench.benchmark.replay import (
     run_benchmark_replay,
 )
 from anchor_bench.benchmark.schema import BenchmarkProfile
+from anchor_bench.core.hashing import tree_fingerprint
 from anchor_bench.training.metadata import RuntimeGRUMetadata
 
 
@@ -77,7 +79,7 @@ def _motion_source(path: Path, name: str = "reach") -> BenchmarkMotionSource:
         repository_path=f"inputs/{name}",
         joint_names=("joint_a", "joint_b"),
         canonical_joint_names=("joint_a", "joint_b"),
-        fingerprint={"tree_sha256": SHA_A},
+        fingerprint=tree_fingerprint(path),
     )
 
 
@@ -135,12 +137,17 @@ def _resolved(
 ) -> Any:
     """Build the resolved fields consumed by the replay backend."""
 
+    dataset_path = motions[0].path.parent
     return SimpleNamespace(
         robot="demo",
         candidate=candidate,
+        dataset_path=dataset_path,
         motions=motions,
         resolved_profile=profile or _profile(),
-        fingerprints={"asset": {"asset_sha256": SHA_A}},
+        fingerprints={
+            "asset": {"asset_sha256": SHA_A},
+            "dataset": {"path": "inputs", **tree_fingerprint(dataset_path)},
+        },
     )
 
 
@@ -390,6 +397,24 @@ def test_sysid_replay_resamples_linearly_syncs_state_and_limits_metrics(tmp_path
     assert header == ["timestamp_s", "position/joint_a", "velocity/joint_a"]
     assert all("torque" not in column for column in header)
     assert adapter.closed
+
+
+def test_replay_rejects_trajectory_changes_after_resolution(tmp_path: Path) -> None:
+    """Do not install results under an identity for older trajectory bytes."""
+
+    motion_path = tmp_path / "reach"
+    _write_motion(motion_path)
+    resolved = _resolved(_sysid_candidate(), (_motion_source(motion_path),))
+    with (motion_path / "control.csv").open("a", encoding="utf-8") as stream:
+        stream.write("CONTROL,0.03,\"[3.0, 15.0]\"\n")
+
+    with pytest.raises(RuntimeError, match="dataset changed after resolution"):
+        run_benchmark_replay(
+            resolved,
+            adapter_factory=lambda _resolved: (_ for _ in ()).throw(
+                AssertionError("runtime adapter must not start for stale input")
+            ),
+        )
 
 
 def test_candidate_overrides_freeze_sysid_and_residual_values() -> None:

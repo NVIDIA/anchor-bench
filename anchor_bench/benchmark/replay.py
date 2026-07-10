@@ -28,7 +28,7 @@ from anchor_bench.benchmark.phase import (
     SysIdBenchmarkCandidate,
     TrainingBenchmarkCandidate,
 )
-from anchor_bench.core.hashing import sha256_file
+from anchor_bench.core.hashing import sha256_file, tree_fingerprint
 from anchor_bench.data.motion import uniform_time_grid
 from anchor_bench.data.sage import load_sage_motion
 from anchor_bench.training.metadata import RuntimeGRUMetadata, RuntimeMapping, StatValue
@@ -353,6 +353,23 @@ def _candidate_outputs(
     if isinstance(candidate, SysIdBenchmarkCandidate):
         return candidate.selected_joints
     return candidate.output_joints
+
+
+def _verify_replay_inputs(resolved: ResolvedBenchmarkRun) -> None:
+    """Reject dataset or selected-motion changes made after resolution."""
+
+    expected_dataset = resolved.fingerprints.get("dataset")
+    if not isinstance(expected_dataset, Mapping):
+        raise ValueError("resolved benchmark is missing its dataset fingerprint")
+    actual_dataset = tree_fingerprint(resolved.dataset_path)
+    if actual_dataset.get("tree_sha256") != expected_dataset.get("tree_sha256"):
+        raise RuntimeError("benchmark dataset changed after resolution")
+    for source in resolved.motions:
+        actual_motion = tree_fingerprint(source.path)
+        if actual_motion != source.fingerprint:
+            raise RuntimeError(
+                f"benchmark motion {source.name!r} changed after resolution"
+            )
 
 
 def _prepare_motion(
@@ -1286,6 +1303,7 @@ def run_benchmark_replay(
 ) -> BenchmarkExecutionResult:
     """Replay an exact SysID or schema-v3 neural candidate on held-out motions."""
 
+    _verify_replay_inputs(resolved)
     sample_dt_s = _candidate_sample_dt(resolved.candidate)
     prepared = tuple(
         _prepare_motion(

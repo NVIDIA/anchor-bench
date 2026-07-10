@@ -169,6 +169,7 @@ class ResolvedBenchmarkRun:
     source_reference: BenchmarkCandidateReference
     source_manifest: RunManifest
     candidate: BenchmarkCandidate
+    dataset_path: Path
     motions: tuple[BenchmarkMotionSource, ...]
     fingerprints: dict[str, Any]
     run_input: dict[str, Any]
@@ -805,6 +806,11 @@ def resolve_benchmark_run(
         source_reference=source_reference,
         source_manifest=source_manifest,
         candidate=candidate,
+        dataset_path=contained_path(
+            repository_root,
+            resolved_profile.data,
+            must_exist=True,
+        ),
         motions=motions,
         fingerprints=fingerprints,
         run_input=run_input,
