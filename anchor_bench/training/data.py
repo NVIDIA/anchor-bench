@@ -121,7 +121,9 @@ def split_training_sources(
 
 
 @lru_cache(maxsize=32)
-def _load_training_motion(path: Path) -> MotionData:
+def load_training_motion(path: Path) -> MotionData:
+    """Load and cache one full-width SAGE motion."""
+
     from anchor_bench.data.sage import load_sage_motion
 
     return load_sage_motion(path)
@@ -130,19 +132,13 @@ def _load_training_motion(path: Path) -> MotionData:
 def read_training_header(source: TrainingSource, joint: str) -> list[str]:
     """Return scalar training columns available for one recorded joint."""
 
-    return list(_load_training_motion(source.path).training_columns(source.joint or joint))
-
-
-def load_training_motion(source: TrainingSource) -> MotionData:
-    """Load one cached full-width motion for derived episode features."""
-
-    return _load_training_motion(source.path)
+    return list(load_training_motion(source.path).training_columns(source.joint or joint))
 
 
 def load_training_episode(source: TrainingSource, mapping: TrainingMapping) -> TrainingEpisode:
     """Align commands, velocity, and torque to recorded state timestamps."""
 
-    motion = load_training_motion(source)
+    motion = load_training_motion(source.path)
     input_indices = motion.joints.indices(mapping.input_joints)
     output_indices = motion.joints.indices(mapping.output_joints)
     state_time = np.asarray(motion.position.time, dtype=np.float64)
@@ -179,7 +175,7 @@ def load_training_table(
 ) -> dict[str, np.ndarray]:
     """Load selected scalar columns for legacy callers."""
 
-    available = _load_training_motion(source.path).training_columns(source.joint or joint)
+    available = load_training_motion(source.path).training_columns(source.joint or joint)
     missing = [column for column in columns if column not in available]
     if missing:
         raise ValueError(f"{source.path} missing required training signals: {', '.join(missing)}")

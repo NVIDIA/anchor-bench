@@ -133,7 +133,7 @@ def _recorded_sample_dt(job: TrainingJob) -> float:
         if source.path in seen:
             continue
         seen.add(source.path)
-        timestamps = np.asarray(load_training_motion(source).position.time, dtype=np.float64)
+        timestamps = np.asarray(load_training_motion(source.path).position.time, dtype=np.float64)
         if len(timestamps) < 2:
             raise ValueError(f"{source.path} needs at least two state rows to infer sample_dt_s")
         deltas = np.diff(timestamps)
@@ -185,7 +185,7 @@ def _load_sequences(
         if cached is None:
             if job.dynamic_bias_provider is None:
                 raise ValueError("dynamic_bias input requires a dynamic-bias provider")
-            motion = load_training_motion(source)
+            motion = load_training_motion(source.path)
             result = job.dynamic_bias_provider.compute(motion, union_joints)
             values = np.asarray(result.values, dtype=np.float32)
             if values.shape != (len(motion.position.time), len(union_joints)):
