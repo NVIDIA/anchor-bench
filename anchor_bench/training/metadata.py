@@ -30,7 +30,14 @@ def _names(value: Any, *, label: str) -> tuple[str, ...]:
     return result
 
 
-def _values(value: StatValue | None, width: int, *, label: str, positive: bool = False) -> tuple[float, ...]:
+def _values(
+    value: StatValue | None,
+    width: int,
+    *,
+    label: str,
+    positive: bool = False,
+    nonnegative: bool = False,
+) -> tuple[float, ...]:
     """Validate and expand one scalar/vector metadata value."""
 
     raw = (value,) if not isinstance(value, tuple) else value
@@ -41,6 +48,8 @@ def _values(value: StatValue | None, width: int, *, label: str, positive: bool =
         raise ValueError(f"{label} must contain finite values")
     if positive and not all(item > 0.0 for item in result):
         raise ValueError(f"{label} must contain positive values")
+    if nonnegative and not all(item >= 0.0 for item in result):
+        raise ValueError(f"{label} must contain non-negative values")
     return result
 
 
@@ -195,21 +204,42 @@ class RuntimeMapping(ConfigModel):
         if self.pd_baseline is not None:
             if self.pd_baseline.joint_names != self.input_joints:
                 raise ValueError("pd_baseline.joint_names must match input_joints in order")
-            _values(self.pd_baseline.kp, len(self.input_joints), label="pd_baseline.kp")
-            _values(self.pd_baseline.kd, len(self.input_joints), label="pd_baseline.kd")
+            _values(
+                self.pd_baseline.kp,
+                len(self.input_joints),
+                label="pd_baseline.kp",
+                nonnegative=True,
+            )
+            _values(
+                self.pd_baseline.kd,
+                len(self.input_joints),
+                label="pd_baseline.kd",
+                nonnegative=True,
+            )
         if self.friction_baseline is not None:
             if self.friction_baseline.joint_names != self.output_joints:
                 raise ValueError("friction_baseline.joint_names must match output_joints in order")
-            _values(self.friction_baseline.dry, len(self.output_joints), label="friction_baseline.dry")
+            _values(
+                self.friction_baseline.dry,
+                len(self.output_joints),
+                label="friction_baseline.dry",
+                nonnegative=True,
+            )
             _values(
                 self.friction_baseline.viscous,
                 len(self.output_joints),
                 label="friction_baseline.viscous",
+                nonnegative=True,
             )
         if self.armature is not None:
             if self.armature.joint_names != self.output_joints:
                 raise ValueError("armature.joint_names must match output_joints in order")
-            _values(self.armature.values, len(self.output_joints), label="armature.values")
+            _values(
+                self.armature.values,
+                len(self.output_joints),
+                label="armature.values",
+                nonnegative=True,
+            )
         return self
 
 

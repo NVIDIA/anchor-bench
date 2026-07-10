@@ -57,11 +57,15 @@ def _validate_parameter_input(value: Any, *, sparse: bool) -> Any:
 
 
 def _validate_parameter_maps(parameters: ParameterMaps) -> ParameterMaps:
-    """Validate all joint names in parsed parameter maps."""
+    """Validate canonical names and non-negative physical parameter values."""
 
-    for joint_map in parameters.values():
-        for joint in joint_map:
+    for parameter, joint_map in parameters.items():
+        for joint, value in joint_map.items():
             _validate_joint_name(joint)
+            if value < 0.0:
+                raise ValueError(
+                    f"SysID parameter {parameter}/{joint} must be non-negative"
+                )
     return parameters
 
 

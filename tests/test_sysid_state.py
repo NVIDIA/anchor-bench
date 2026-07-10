@@ -144,6 +144,36 @@ def test_accepted_state_rejects_invalid_complete_state(mutate, message: str) -> 
         AcceptedSysIdState.from_dict(data, "default.yaml")
 
 
+@pytest.mark.parametrize(
+    ("model_name", "payload"),
+    [
+        ("accepted", _accepted_payload),
+        ("patch", _patch_payload),
+        ("candidate", _candidate_payload),
+    ],
+)
+def test_sysid_authority_artifacts_reject_negative_physical_values(
+    model_name: str,
+    payload,
+) -> None:
+    from anchor_bench.sysid.state import (
+        AcceptedSysIdState,
+        SysIdCandidateState,
+        SysIdFittedPatch,
+    )
+
+    models = {
+        "accepted": AcceptedSysIdState,
+        "patch": SysIdFittedPatch,
+        "candidate": SysIdCandidateState,
+    }
+    data = payload()
+    data["parameters"]["stiffness"]["joint_b"] = -1.0
+
+    with pytest.raises(ValueError, match="must be non-negative"):
+        models[model_name].from_dict(data, f"{model_name}.yaml")
+
+
 def test_complete_state_allows_parameter_specific_joint_subsets() -> None:
     from anchor_bench.sysid.state import AcceptedSysIdState, require_parameter_cells
 

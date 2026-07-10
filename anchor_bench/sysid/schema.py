@@ -50,8 +50,8 @@ def _validate_joint_names(joints: Sequence[str], *, name: str = "joints") -> tup
 class ParameterBounds(ConfigModel):
     """Inclusive physical bounds for one optimizer variable."""
 
-    lower: FiniteFloat
-    upper: FiniteFloat
+    lower: FiniteFloat = Field(ge=0.0)
+    upper: FiniteFloat = Field(ge=0.0)
 
     @model_validator(mode="after")
     def _validate_order(self) -> "ParameterBounds":

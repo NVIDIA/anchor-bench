@@ -70,6 +70,10 @@ def test_sysid_profile_round_trip_is_strict_and_host_safe() -> None:
             lambda data: data["parameters"]["stiffness"]["bounds"].update(lower=math.inf),
             "finite number",
         ),
+        (
+            lambda data: data["parameters"]["stiffness"]["bounds"].update(lower=-1.0),
+            "must be >= 0.0",
+        ),
         (lambda data: data.update(joints=["joint_a", "joint_a"]), "duplicate joint"),
         (lambda data: data.update(joints=["joint_a", ""]), "joint names must be non-empty"),
         (lambda data: data.update(loss={"position": 0.0, "velocity": 0.0}), "at least one loss weight"),

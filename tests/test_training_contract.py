@@ -211,6 +211,34 @@ class RuntimeMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "requires clamping 'residual_output'"):
             RuntimeGRUMetadata.model_validate(payload)
 
+    def test_schema_v3_rejects_negative_physical_parameters(self):
+        mutations = (
+            (
+                "pd_baseline.kp",
+                lambda mapping: mapping["pd_baseline"].update(kp=[-1.0, 30.0]),
+            ),
+            (
+                "pd_baseline.kd",
+                lambda mapping: mapping["pd_baseline"].update(kd=[-1.0, 0.75]),
+            ),
+            (
+                "friction_baseline.dry",
+                lambda mapping: mapping["friction_baseline"].update(dry=-1.0),
+            ),
+            (
+                "friction_baseline.viscous",
+                lambda mapping: mapping["friction_baseline"].update(viscous=-1.0),
+            ),
+            ("armature.values", lambda mapping: mapping["armature"].update(values=-1.0)),
+        )
+
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                payload = _valid_metadata()
+                mutate(payload["mappings"][0])
+                with self.assertRaisesRegex(ValidationError, "must contain non-negative values"):
+                    RuntimeGRUMetadata.model_validate(payload)
+
     def test_dynamic_bias_requires_matching_derivation(self):
         payload = _valid_metadata()
         payload["input_features"].insert(
