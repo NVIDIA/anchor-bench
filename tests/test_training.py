@@ -1,7 +1,5 @@
-
 from __future__ import annotations
 
-import csv
 import importlib.util
 import json
 import tempfile
@@ -9,72 +7,105 @@ import unittest
 from pathlib import Path
 
 
-def _write_csv(path: Path, rows: list[dict[str, float]]) -> None:
-    fieldnames = list(rows[0])
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _demo_rows(length: int = 8) -> list[dict[str, float]]:
-    rows = []
+def _write_sage_motion(root: Path, length: int = 8) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "joint_list.txt").write_text("Rotation\n", encoding="utf-8")
+    (root / "metadata.yaml").write_text(
+        "schema: sage\ntime_unit: seconds\nposition_unit: rad\n"
+        "velocity_unit: rad/s\ntorque_unit: N*m\n",
+        encoding="utf-8",
+    )
+    control = ["type,timestamp,positions"]
+    state = ["type,timestamp,positions,velocities,torques"]
     for index in range(length):
         position = 0.1 * index
-        error = 1.0 - position
+        command = 1.0
         velocity = 0.05 * index
-        torque = 2.0 * error - 0.25 * velocity
-        rows.append(
-            {
-                "position": position,
-                "position_error": error,
-                "velocity": velocity,
-                "torque": torque,
-            }
+        torque = 2.0 * (command - position) - 0.25 * velocity
+        control.append(f'CONTROL,{index},"[{command}]"')
+        state.append(
+            f'STATE_MOTOR,{index},"[{position}]","[{velocity}]","[{torque}]"'
         )
-    return rows
+    (root / "control.csv").write_text("\n".join(control) + "\n", encoding="utf-8")
+    (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
 
 
 class TrainingDataTests(unittest.TestCase):
-    def test_csv_discovery_split_and_stats_are_deterministic(self):
+    def test_sage_discovery_and_split_are_deterministic(self):
         from anchor_bench.training.data import (
-            compute_normalization_stats,
-            discover_csv_files,
-            split_csv_files,
-            write_stats_json,
+            discover_training_sources,
+            expand_joint_sources,
+            split_training_sources,
         )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index in range(5):
-                _write_csv(root / f"sample_{index}.csv", _demo_rows())
+                _write_sage_motion(root / f"motion_{index}")
 
-            csvs = discover_csv_files(root)
-            self.assertEqual([f"sample_{i}.csv" for i in range(5)], [path.name for path in csvs])
-
-            train_a, val_a = split_csv_files(csvs, seed=123, val_fraction=0.4)
-            train_b, val_b = split_csv_files(csvs, seed=123, val_fraction=0.4)
-            self.assertEqual(train_a, train_b)
-            self.assertEqual(val_a, val_b)
-            self.assertEqual(3, len(train_a))
-            self.assertEqual(2, len(val_a))
-
-            stats = compute_normalization_stats(
-                train_a,
-                input_columns=["position", "position_error", "velocity"],
-                target_columns=["torque"],
-                metadata={"model": "gru", "joint_type": "Rotation"},
+            sources = discover_training_sources(root)
+            expanded = expand_joint_sources(sources, ["Rotation"])
+            train_a, val_a = split_training_sources(
+                expanded, seed=123, val_fraction=0.4
             )
-            self.assertEqual(1, stats["schema_version"])
-            self.assertEqual("gru", stats["model"])
-            self.assertEqual(["position", "position_error", "velocity"], stats["input_columns"])
-            self.assertEqual(["torque"], stats["target_columns"])
-            self.assertIn("position", stats["normalization"]["inputs"]["mean"])
-            self.assertIn("torque", stats["normalization"]["targets"]["std"])
+            train_b, val_b = split_training_sources(
+                expanded, seed=123, val_fraction=0.4
+            )
 
-            stats_path = write_stats_json(root / "stats.json", stats)
-            loaded = json.loads(stats_path.read_text(encoding="utf-8"))
-            self.assertEqual(stats, loaded)
+        self.assertEqual(5, len(sources))
+        self.assertEqual(train_a, train_b)
+        self.assertEqual(val_a, val_b)
+        self.assertEqual(3, len(train_a))
+        self.assertEqual(2, len(val_a))
+
+    def test_sage_motion_is_one_training_source_with_derived_joint_columns(self):
+        import numpy as np
+
+        from anchor_bench.training.data import (
+            discover_training_sources,
+            expand_joint_sources,
+            load_training_table,
+            read_training_header,
+            split_training_sources,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+            (root / "metadata.yaml").write_text(
+                "schema: sage\ntime_unit: seconds\nposition_unit: rad\nvelocity_unit: rad/s\ntorque_unit: N*m\n",
+                encoding="utf-8",
+            )
+            (root / "control.csv").write_text(
+                'type,timestamp,positions\nCONTROL,0.0,"[1.0, 2.0]"\nCONTROL,1.0,"[1.5, 2.5]"\n',
+                encoding="utf-8",
+            )
+            (root / "state_motor.csv").write_text(
+                "type,timestamp,positions,velocities,torques\n"
+                'STATE_MOTOR,0.0,"[0.5, 1.5]","[0.1, 0.2]","[3.0, 4.0]"\n'
+                'STATE_MOTOR,1.0,"[1.0, 2.0]","[0.3, 0.4]","[5.0, 6.0]"\n',
+                encoding="utf-8",
+            )
+
+            sources = discover_training_sources(root)
+            expanded = expand_joint_sources(sources, ["Rotation", "Pitch"])
+            train_sources, val_sources = split_training_sources(expanded, seed=7)
+            header = read_training_header(expanded[1], "full")
+            table = load_training_table(
+                sources[0],
+                joint="Pitch",
+                columns=["position", "position_error", "velocity", "torque"],
+            )
+
+        self.assertEqual(1, len(sources))
+        self.assertEqual(["Rotation", "Pitch"], [source.joint for source in expanded])
+        self.assertEqual(2, len(train_sources))
+        self.assertEqual([], val_sources)
+        self.assertIn("position_error", header)
+        np.testing.assert_allclose(table["position"], [1.5, 2.0])
+        np.testing.assert_allclose(table["position_error"], [0.5, 0.5])
+        np.testing.assert_allclose(table["velocity"], [0.2, 0.4])
+        np.testing.assert_allclose(table["torque"], [4.0, 6.0])
 
     def test_column_resolution_uses_model_defaults_and_validates_headers(self):
         from anchor_bench.training.data import resolve_training_columns
@@ -88,7 +119,7 @@ class TrainingDataTests(unittest.TestCase):
         self.assertEqual(["position", "position_error", "velocity"], hybrid.input_columns)
         self.assertEqual(["torque_residual"], hybrid.target_columns)
 
-        with self.assertRaisesRegex(ValueError, "missing required CSV columns: velocity"):
+        with self.assertRaisesRegex(ValueError, "missing required training signals: velocity"):
             resolve_training_columns(["position", "position_error", "torque"], model="gru")
 
     def test_column_resolution_accepts_custom_columns_and_rejects_unsupported_inputs(self):
@@ -127,12 +158,11 @@ class TrainingRunnerTests(unittest.TestCase):
         from anchor_bench.core.schemas import TrainActuatorRunConfig
         from anchor_bench.training.runner import resolve_train_actuator_run_config
 
-        resolved = resolve_train_actuator_run_config(
-            TrainActuatorRunConfig(robot="so101", dry_run=True)
-        )
+        resolved = resolve_train_actuator_run_config(TrainActuatorRunConfig(robot="so101", dry_run=True))
 
         self.assertEqual("so101", resolved.robot)
         self.assertEqual("gru", resolved.model)
+        self.assertTrue(resolved.data.endswith("so101_arm_50motion/train"))
         self.assertTrue(resolved.output.endswith("outputs/training/so101"))
         self.assertEqual("full", resolved.joint_type)
         self.assertTrue(resolved.skip_optuna)
@@ -158,22 +188,21 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual("measured_torque", resolved.target_column)
 
     @unittest.skipUnless(
-        importlib.util.find_spec("torch") and importlib.util.find_spec("pandas"),
-        "training smoke test requires torch and pandas",
+        importlib.util.find_spec("torch"),
+        "training smoke test requires torch",
     )
     def test_tiny_gru_training_smoke_writes_checkpoint_and_stats(self):
         from anchor_bench.core.schemas import TrainActuatorRunConfig
-        from anchor_bench.training.runner import run_train_actuator
+        from anchor_bench.training.runner import resolve_train_actuator_run_config, run_resolved_train_actuator
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = root / "data"
             output_dir = root / "out"
-            data_dir.mkdir()
-            _write_csv(data_dir / "a.csv", _demo_rows(length=12))
-            _write_csv(data_dir / "b.csv", _demo_rows(length=12))
+            _write_sage_motion(data_dir / "a", length=12)
+            _write_sage_motion(data_dir / "b", length=12)
 
-            plan = run_train_actuator(
+            resolved = resolve_train_actuator_run_config(
                 TrainActuatorRunConfig(
                     robot="so101",
                     model="gru",
@@ -187,6 +216,7 @@ class TrainingRunnerTests(unittest.TestCase):
                     dry_run=False,
                 )
             )
+            plan = run_resolved_train_actuator(resolved)
 
             self.assertFalse(plan.dry_run)
             self.assertTrue((output_dir / "gru_Rotation_best.pt").exists())

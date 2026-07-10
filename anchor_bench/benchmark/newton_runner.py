@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from anchor_bench.core.plan import CommandPlan
 from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text
 from anchor_bench.core.schemas import BenchmarkRunConfig
+from anchor_bench.core.versions import load_external_versions
 from anchor_bench.robots.registry import get_robot
 
 
@@ -30,25 +31,24 @@ class ResolvedBenchmarkRunConfig:
 
 def resolve_benchmark_run_config(config: BenchmarkRunConfig) -> ResolvedBenchmarkRunConfig:
     bundle = get_robot(config.robot)
-    benchmark_cfg = bundle.run_config.get("benchmark", {})
-    motion = resolve_required_text(config.motion, benchmark_cfg.get("motion_files"), None, "--motion")
-    output = resolve_required_text(config.output, benchmark_cfg.get("output_folder"), "outputs/sim2real_benchmark", "--output")
+    benchmark_cfg = bundle.run_config.benchmark
+    motion = resolve_required_text(config.motion, benchmark_cfg.motion_files, None, "--motion")
+    output = resolve_required_text(config.output, benchmark_cfg.output_folder, "outputs/sim2real_benchmark", "--output")
     return ResolvedBenchmarkRunConfig(
         robot=config.robot,
         motion=resolve_repo_path_text(motion),
         output=resolve_repo_path_text(output),
         dry_run=config.dry_run,
         headless=config.headless,
-        motion_name=config.motion_name or benchmark_cfg.get("motion_name"),
+        motion_name=config.motion_name or benchmark_cfg.motion_name,
         actuator_params=resolve_repo_path_text(config.actuator_params) if config.actuator_params is not None else None,
-        dataset=config.dataset or benchmark_cfg.get("dataset"),
+        dataset=config.dataset or benchmark_cfg.dataset,
         actuator_model=config.actuator_model,
         seed=config.seed,
     )
 
 
-def build_benchmark_command(config: BenchmarkRunConfig) -> CommandPlan:
-    resolved = resolve_benchmark_run_config(config)
+def build_resolved_benchmark_command(resolved: ResolvedBenchmarkRunConfig) -> CommandPlan:
     command = [
         "anchor-bench", "benchmark",
         "--robot", resolved.robot,
@@ -69,18 +69,18 @@ def build_benchmark_command(config: BenchmarkRunConfig) -> CommandPlan:
         command.extend(["--actuator-params", resolved.actuator_params])
     if resolved.dry_run:
         command.append("--dry-run")
+    newton_version = load_external_versions().newton_version
     return CommandPlan(
         workflow="benchmark",
         robot=resolved.robot,
         command=command,
         dry_run=resolved.dry_run,
-        notes=["uses Newton 1.2 composable actuator descriptions from configs/robots"],
+        notes=[f"uses Newton {newton_version} composable actuator descriptions from configs/robots"],
     )
 
 
-def run_benchmark(config: BenchmarkRunConfig) -> CommandPlan:
-    plan = build_benchmark_command(config)
-    resolved = resolve_benchmark_run_config(config)
+def run_resolved_benchmark(resolved: ResolvedBenchmarkRunConfig) -> CommandPlan:
+    plan = build_resolved_benchmark_command(resolved)
     if resolved.dry_run:
         return plan
     run_benchmark_batch(
@@ -117,16 +117,15 @@ def run_benchmark_batch(
     from anchor_bench.runtime.environment import require_full_runtime
 
     require_full_runtime(("isaaclab", "isaaclab_newton", "newton"), workflow="benchmark")
-    if robot != "so101":
-        raise ValueError("Full runtime execution currently supports only robot=so101")
     from anchor_bench.runtime.assets import resolve_runtime_asset
 
     resolve_runtime_asset(get_robot(robot))
-    from anchor_bench.benchmark.so101_runtime import So101BenchmarkMotion, run_so101_benchmark_batch
+    from anchor_bench.benchmark.runtime import RobotBenchmarkMotion, run_robot_benchmark_batch
 
-    run_so101_benchmark_batch(
+    run_robot_benchmark_batch(
+        robot,
         motions=[
-            So101BenchmarkMotion(motion=motion.motion, motion_name=motion.motion_name)
+            RobotBenchmarkMotion(motion=motion.motion, motion_name=motion.motion_name)
             for motion in motions
         ],
         output=output,

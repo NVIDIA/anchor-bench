@@ -10,6 +10,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
+import yaml
+
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -25,9 +27,42 @@ def run_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     )
 
 
-class So101RuntimeTests(unittest.TestCase):
+def write_sage_metadata(folder: Path, time_unit: str = "seconds") -> None:
+    (folder / "metadata.yaml").write_text(
+        "schema: sage\n"
+        f"time_unit: {time_unit}\n"
+        "position_unit: rad\n"
+        "velocity_unit: rad/s\n"
+        "torque_unit: N*m\n",
+        encoding="utf-8",
+    )
+
+
+class RuntimeWorkflowTests(unittest.TestCase):
+    def test_to_torch_accepts_isaac_lab_proxy_array(self):
+        from anchor_bench.runtime.robot_scene import to_torch
+
+        class FakeTensor:
+            pass
+
+        class FakeWarp:
+            class array:
+                pass
+
+            @staticmethod
+            def to_torch(value):
+                raise AssertionError("ProxyArray should use its explicit .torch accessor")
+
+        tensor = FakeTensor()
+        proxy = SimpleNamespace(torch=tensor)
+        fake_torch = ModuleType("torch")
+        fake_torch.Tensor = FakeTensor
+
+        with patch.dict(sys.modules, {"torch": fake_torch}):
+            self.assertIs(to_torch(proxy, FakeWarp), tensor)
+
     def test_actuator_file_converts_to_isaac_implicit_params(self):
-        from anchor_bench.runtime.so101_config import build_implicit_actuator_params
+        from anchor_bench.runtime.robot_config import build_implicit_actuator_params
         from anchor_bench.robots.registry import get_robot
 
         params = build_implicit_actuator_params(get_robot("so101"))
@@ -43,30 +78,30 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertEqual(params["viscous_friction"]["Pitch"], 0.561425)
         self.assertEqual(params["motor_lag_ms"], 0.0)
 
-    def test_best_params_overlay_preserves_static_limits(self):
-        from anchor_bench.runtime.so101_config import load_implicit_actuator_params
+    def test_fitted_actuator_document_preserves_static_limits(self):
+        from anchor_bench.runtime.robot_config import (
+            build_fitted_actuator_document,
+            load_implicit_actuator_params,
+        )
         from anchor_bench.robots.registry import get_robot
 
+        bundle = get_robot("so101")
         with tempfile.TemporaryDirectory() as tmp:
             params_path = Path(tmp) / "best_params.yaml"
+            document = build_fitted_actuator_document(
+                bundle,
+                {
+                    "stiffness": {"Rotation": 10.0},
+                    "damping": {"Jaw": 1.5},
+                },
+                metadata={"source": "sysid", "best_mse": 0.01},
+            )
             params_path.write_text(
-                "provenance:\n"
-                "  source: sysid\n"
-                "  intended_use: benchmark_replay\n"
-                "stiffness:\n"
-                "  Rotation: 10.0\n"
-                "damping:\n"
-                "  Jaw: 1.5\n"
-                "best_mse: 0.01\n"
-                "robot_name: so101\n"
-                "mode: all_joints\n"
-                "joints:\n"
-                "  - Rotation\n"
-                "data_source: inputs/example\n",
+                yaml.safe_dump(document, sort_keys=False),
                 encoding="utf-8",
             )
 
-            params = load_implicit_actuator_params(get_robot("so101"), params_path)
+            params = load_implicit_actuator_params(bundle, params_path)
 
         self.assertEqual(params["stiffness"]["Rotation"], 10.0)
         self.assertEqual(params["stiffness"]["Pitch"], 47.782635)
@@ -77,7 +112,7 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertNotIn("joints", params)
 
     def test_bounds_loader_returns_typed_bounds_file(self):
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.robots.registry import get_robot
 
         bounds = load_sysid_bounds(get_robot("so101"))
@@ -121,18 +156,21 @@ class So101RuntimeTests(unittest.TestCase):
     def test_sysid_command_preflights_so101_asset(self):
         from anchor_bench.core.schemas import SysIdRunConfig
         from anchor_bench.runtime.assets import AssetNotFoundError
-        from anchor_bench.sysid.runner import run_sysid
+        from anchor_bench.sysid.runner import resolve_sysid_run_config, run_resolved_sysid
 
         with tempfile.TemporaryDirectory() as tmp:
             with patch("anchor_bench.runtime.environment.require_full_runtime"):
                 with patch("anchor_bench.runtime.assets._candidate_roots", return_value=[Path(tmp)]):
                     with self.assertRaises(AssetNotFoundError) as ctx:
-                        run_sysid(SysIdRunConfig(
-                            robot="so101",
-                            data="inputs/datasets/so101/custom_figure8_with_camera",
-                            output="outputs/sysid/so101/smoke",
-                            dry_run=False,
-                        ))
+                        resolved = resolve_sysid_run_config(
+                            SysIdRunConfig(
+                                robot="so101",
+                                data="inputs/datasets/so101/custom_figure8_with_camera",
+                                output="outputs/sysid/so101/smoke",
+                                dry_run=False,
+                            )
+                        )
+                        run_resolved_sysid(resolved)
 
         self.assertIn("Missing asset 'so101.usd' for robot so101.", str(ctx.exception))
 
@@ -152,7 +190,7 @@ class So101RuntimeTests(unittest.TestCase):
 
         self.assertIn("Missing asset 'so101.usd' for robot so101.", str(ctx.exception))
 
-    def test_cli_accepts_so101_runtime_options_in_dry_run(self):
+    def test_cli_accepts_runtime_options_in_dry_run(self):
         result = run_cli(
             "sysid",
             "--robot",
@@ -226,7 +264,7 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertIn("num_envs must be >= 1", result.stderr)
 
     def test_sysid_runtime_rejects_non_positive_numeric_inputs(self):
-        from anchor_bench.sysid.so101_runtime import _resolve_optional_positive_int, _resolve_positive_int
+        from anchor_bench.sysid.runtime import _resolve_optional_positive_int, _resolve_positive_int
 
         self.assertEqual(64, _resolve_positive_int("num_envs", None, 64))
         self.assertEqual(2, _resolve_positive_int("num_envs", 2, 64))
@@ -240,13 +278,14 @@ class So101RuntimeTests(unittest.TestCase):
 
     def test_simulation_timing_uses_render_freq(self):
         from anchor_bench.core.run_config import resolve_simulation_timing
+        from anchor_bench.core.schemas import SimulationDefaults
 
         timing = resolve_simulation_timing(
-            {
-                "physics_freq": 500,
-                "control_freq": 100,
-                "render_freq": 50,
-            },
+            SimulationDefaults(
+                physics_freq=500,
+                control_freq=100,
+                render_freq=50,
+            ),
             "run.yaml.simulation",
         )
 
@@ -257,16 +296,16 @@ class So101RuntimeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "physics_freq divisible by render_freq"):
             resolve_simulation_timing(
-                {
-                    "physics_freq": 500,
-                    "control_freq": 100,
-                    "render_freq": 333,
-                },
+                SimulationDefaults(
+                    physics_freq=500,
+                    control_freq=100,
+                    render_freq=333,
+                ),
                 "run.yaml.simulation",
             )
 
     def test_sysid_joint_selection_uses_run_yaml_value(self):
-        from anchor_bench.sysid.so101_runtime import _resolve_sysid_joint_names
+        from anchor_bench.sysid.runtime import _resolve_sysid_joint_names
 
         bundle = SimpleNamespace(
             spec=SimpleNamespace(
@@ -283,7 +322,7 @@ class So101RuntimeTests(unittest.TestCase):
             _resolve_sysid_joint_names(bundle, [])
 
     def test_sysid_runtime_rejects_invalid_numeric_inputs_before_isaac_launch(self):
-        from anchor_bench.sysid.so101_runtime import run_so101_sysid
+        from anchor_bench.sysid.runtime import run_robot_sysid
 
         def fail_launch(*_args, **_kwargs):
             raise AssertionError("invalid sysid inputs should be validated before Isaac Sim launch")
@@ -291,7 +330,8 @@ class So101RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("anchor_bench.runtime.app_launcher.launch_isaac_sim", fail_launch):
                 with self.assertRaisesRegex(ValueError, "num_envs must be >= 1"):
-                    run_so101_sysid(
+                    run_robot_sysid(
+                        "so101",
                         data="inputs/datasets/so101/custom_figure8_with_camera",
                         output=tmp,
                         num_envs=0,
@@ -302,17 +342,18 @@ class So101RuntimeTests(unittest.TestCase):
         import yaml
 
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
-        from anchor_bench.sysid.so101_runtime import _write_summary
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
+        from anchor_bench.sysid.runtime import _write_summary
 
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)
             _write_summary(
                 output,
-                run_cfg={},
+                run_cfg=get_robot("so101").run_config,
                 bounds=load_sysid_bounds(get_robot("so101")),
                 actuator_params={"stiffness": {"Rotation": 1.0}},
                 args={"num_envs": 1, "config_sources": {"num_envs": "cli"}},
+                robot_name="so101",
             )
             summary = yaml.safe_load((output / "run_summary.yaml").read_text(encoding="utf-8"))
 
@@ -401,8 +442,8 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("Missing asset 'so101.usd'", stderr.getvalue())
 
-    def test_so101_runtime_helpers_use_configured_joint_names(self):
-        from anchor_bench.runtime.so101_scene import _matrix_from_param_map, so101_joint_names
+    def test_runtime_helpers_use_configured_joint_names(self):
+        from anchor_bench.runtime.robot_scene import _matrix_from_param_map, robot_joint_names
 
         bundle = SimpleNamespace(spec=SimpleNamespace(joint_names=["JointA", "JointB"]))
 
@@ -415,13 +456,13 @@ class So101RuntimeTests(unittest.TestCase):
 
         params = {"stiffness": {"JointA": 1.0, "JointB": 2.0}}
 
-        values = _matrix_from_param_map(params, "stiffness", so101_joint_names(bundle), 2, FakeTorch, "cpu")
+        values = _matrix_from_param_map(params, "stiffness", robot_joint_names(bundle), 2, FakeTorch, "cpu")
 
-        self.assertEqual(so101_joint_names(bundle), ["JointA", "JointB"])
+        self.assertEqual(robot_joint_names(bundle), ["JointA", "JointB"])
         self.assertEqual(values["values"], [[1.0, 2.0], [1.0, 2.0]])
 
-    def test_so101_runtime_helper_rejects_missing_configured_joint_params(self):
-        from anchor_bench.runtime.so101_scene import _matrix_from_param_map
+    def test_runtime_helper_rejects_missing_configured_joint_params(self):
+        from anchor_bench.runtime.robot_scene import _matrix_from_param_map
 
         class FakeTorch:
             float32 = "float32"
@@ -434,7 +475,7 @@ class So101RuntimeTests(unittest.TestCase):
             _matrix_from_param_map({"stiffness": {"JointA": 1.0}}, "stiffness", ["JointA", "JointB"], 1, FakeTorch, "cpu")
 
     def test_matching_fixed_base_config_does_not_override_usd_root_mode(self):
-        from anchor_bench.runtime.so101_scene import resolve_fix_root_override
+        from anchor_bench.runtime.robot_scene import resolve_fix_root_override
 
         self.assertIsNone(resolve_fix_root_override(True, True))
         self.assertIsNone(resolve_fix_root_override(False, False))
@@ -442,7 +483,7 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertTrue(resolve_fix_root_override(True, False))
 
     def test_scene_builder_passes_fix_root_link_to_usd_spawn(self):
-        from anchor_bench.runtime.so101_scene import build_scene_class
+        from anchor_bench.runtime.robot_scene import build_scene_class
 
         class FakeUsdFileCfg:
             def __init__(self, **kwargs):
@@ -497,7 +538,7 @@ class So101RuntimeTests(unittest.TestCase):
     def test_write_viscous_friction_uses_newton_manager_without_root_view_search(self):
         import numpy as np
 
-        from anchor_bench.runtime.so101_scene import _write_viscous_friction
+        from anchor_bench.runtime.robot_scene import _write_viscous_friction
 
         class FakeTensor:
             def __init__(self, values):
@@ -559,7 +600,7 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertEqual(changes, ["joint_dof_properties"])
 
     def test_write_viscous_friction_fails_fast_without_passive_damping(self):
-        from anchor_bench.runtime.so101_scene import _write_viscous_friction
+        from anchor_bench.runtime.robot_scene import _write_viscous_friction
 
         class FakeNewtonManager:
             @classmethod
@@ -578,7 +619,7 @@ class So101RuntimeTests(unittest.TestCase):
 
 
     def test_isaac_actuator_kwargs_maps_dry_friction_to_upstream_keyword(self):
-        from anchor_bench.runtime.so101_scene import _isaac_implicit_actuator_kwargs
+        from anchor_bench.runtime.robot_scene import _isaac_implicit_actuator_kwargs
 
         kwargs = _isaac_implicit_actuator_kwargs(
             {
@@ -592,7 +633,7 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertNotIn("dry_friction", kwargs)
 
     def test_fk_startup_closes_sim_app_when_post_launch_setup_fails(self):
-        from anchor_bench.analysis.so101_analysis import EndEffectorFkUnavailable, IsaacLabNewtonSo101Fk
+        from anchor_bench.analysis.runtime import EndEffectorFkUnavailable, IsaacLabNewtonRobotFk
 
         class FakeApp:
             closed = False
@@ -647,15 +688,15 @@ class So101RuntimeTests(unittest.TestCase):
         }
         with patch("anchor_bench.runtime.assets.resolve_runtime_asset", return_value=Path("robot.usd")):
             with patch("anchor_bench.runtime.app_launcher.launch_isaac_sim", return_value=(object(), fake_app)):
-                with patch("anchor_bench.runtime.so101_scene.build_scene_class", return_value=fake_scene_cfg):
+                with patch("anchor_bench.runtime.robot_scene.build_scene_class", return_value=fake_scene_cfg):
                     with patch.dict(sys.modules, fake_modules):
                         with self.assertRaises(EndEffectorFkUnavailable):
-                            IsaacLabNewtonSo101Fk(ee_frame="jaw")
+                            IsaacLabNewtonRobotFk("so101", ee_frame="jaw")
 
         self.assertTrue(fake_app.closed)
 
     def test_benchmark_run_summary_uses_actual_num_envs(self):
-        from anchor_bench.benchmark.so101_runtime import _build_run_summary
+        from anchor_bench.benchmark.runtime import _build_run_summary
 
         summary = _build_run_summary(
             motion_path=Path("inputs/motion"),
@@ -670,6 +711,7 @@ class So101RuntimeTests(unittest.TestCase):
             env_index=0,
             actuator_values={"stiffness": {"Rotation": 1.0}},
             actuator_params="best_params.yaml",
+            robot_name="so101",
         )
 
         self.assertEqual(summary["num_envs"], 1)
@@ -690,10 +732,10 @@ class So101RuntimeTests(unittest.TestCase):
             "configs/robots/example/run.yaml",
         )
 
-        self.assertTrue(run_file.benchmark["real_init_pose_sync"])
+        self.assertTrue(run_file.benchmark.real_init_pose_sync)
 
     def test_benchmark_sample_rows_preserve_motion_timestamps(self):
-        from anchor_bench.benchmark.so101_runtime import _append_benchmark_sample, _buffer_substeps
+        from anchor_bench.benchmark.runtime import _append_benchmark_sample, _buffer_substeps
 
         control_rows: list[list[object]] = []
         state_rows: list[list[object]] = []
@@ -708,6 +750,7 @@ class So101RuntimeTests(unittest.TestCase):
             command=[0.0, 0.1],
             position=[0.0, 0.1],
             velocity=[0.0, 0.0],
+            effort=[0.0, 0.0],
         )
 
         self.assertEqual(["CONTROL", "0.0", [0.0, 0.1]], control_rows[0])
@@ -720,16 +763,73 @@ class So101RuntimeTests(unittest.TestCase):
             command=[0.01, 0.11],
             position=[0.01, 0.12],
             velocity=[5.0, 10.0],
+            effort=[0.5, -0.25],
         )
 
         self.assertEqual(["CONTROL", "2000.0", [0.01, 0.11]], control_rows[1])
         self.assertAlmostEqual(state_rows[1][3][0], 5.0)
         self.assertAlmostEqual(state_rows[1][3][1], 10.0)
 
+    def test_benchmark_sample_rows_preserve_effort(self):
+        from anchor_bench.benchmark.runtime import _append_benchmark_sample
+
+        control_rows: list[list[object]] = []
+        state_rows: list[list[object]] = []
+
+        _append_benchmark_sample(
+            control_rows,
+            state_rows,
+            timestamp_s=0.002,
+            command=[0.01, 0.11],
+            position=[0.01, 0.12],
+            velocity=[5.0, 10.0],
+            effort=[0.5, -0.25],
+        )
+
+        self.assertEqual([0.5, -0.25], state_rows[0][4])
+
+    def test_benchmark_state_reads_applied_torque(self):
+        import numpy as np
+
+        from anchor_bench.benchmark import runtime
+
+        reader = getattr(runtime, "_read_benchmark_state", None)
+        self.assertIsNotNone(reader)
+
+        class FakeTensor:
+            def __init__(self, values):
+                self.values = np.asarray(values, dtype=float)
+
+            def __getitem__(self, key):
+                return FakeTensor(self.values[key])
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return self.values
+
+        robot = SimpleNamespace(
+            data=SimpleNamespace(
+                joint_pos=FakeTensor([[1.0, 2.0, 3.0]]),
+                joint_vel=FakeTensor([[4.0, 5.0, 6.0]]),
+                applied_torque=FakeTensor([[7.0, 8.0, 9.0]]),
+            )
+        )
+        with patch("anchor_bench.benchmark.runtime.to_torch", side_effect=lambda value, _wp: value):
+            position, velocity, effort = reader(robot, object(), [2, 0])
+
+        np.testing.assert_allclose(position, [[3.0, 1.0]])
+        np.testing.assert_allclose(velocity, [[6.0, 4.0]])
+        np.testing.assert_allclose(effort, [[9.0, 7.0]])
+
     def test_optimizer_requires_cmaes_unless_random_fallback_is_explicit(self):
         from anchor_bench.core.schemas import CMAESConfig
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.sysid.optimizer import CMAESOptimizer
 
         bounds = load_sysid_bounds(get_robot("so101"))
@@ -740,7 +840,7 @@ class So101RuntimeTests(unittest.TestCase):
     def test_optimizer_sampling_is_seed_deterministic(self):
         from anchor_bench.core.schemas import CMAESConfig
         from anchor_bench.sysid.optimizer import CMAESOptimizer
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.robots.registry import get_robot
 
         bounds = load_sysid_bounds(get_robot("so101"))
@@ -754,7 +854,7 @@ class So101RuntimeTests(unittest.TestCase):
     def test_optimizer_tell_tracks_best_candidate(self):
         from anchor_bench.core.schemas import CMAESConfig
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.sysid.optimizer import CMAESOptimizer
 
         bounds = load_sysid_bounds(get_robot("so101"))
@@ -768,7 +868,7 @@ class So101RuntimeTests(unittest.TestCase):
     def test_optimizer_does_not_stop_on_same_generation_score_spread(self):
         from anchor_bench.core.schemas import CMAESConfig
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.sysid.optimizer import CMAESOptimizer
 
         bounds = load_sysid_bounds(get_robot("so101"))
@@ -781,7 +881,7 @@ class So101RuntimeTests(unittest.TestCase):
     def test_optimizer_stops_after_best_score_stalls_beyond_minimum_window(self):
         from anchor_bench.core.schemas import CMAESConfig
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.sysid.optimizer import CMAESOptimizer, _MIN_CONVERGENCE_GENERATIONS
 
         bounds = load_sysid_bounds(get_robot("so101"))
@@ -802,7 +902,7 @@ class So101RuntimeTests(unittest.TestCase):
 
         from anchor_bench.core.schemas import CMAESConfig
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_sysid_bounds
+        from anchor_bench.runtime.robot_config import load_sysid_bounds
         from anchor_bench.sysid.optimizer import CMAESOptimizer
 
         class FakeCMA:
@@ -843,7 +943,7 @@ class So101RuntimeTests(unittest.TestCase):
     def test_batched_fk_helper_preserves_order_and_uses_chunks(self):
         import numpy as np
 
-        from anchor_bench.analysis.so101_analysis import _batched_fk_positions
+        from anchor_bench.analysis.runtime import _batched_fk_positions
 
         positions = np.arange(10, dtype=float).reshape(5, 2)
         calls = []
@@ -869,7 +969,7 @@ class So101RuntimeTests(unittest.TestCase):
         self.assertEqual([call.shape[0] for call in calls], [2, 2, 1])
 
     def test_analysis_writes_full_metrics_and_plots_for_sage_benchmark_layout(self):
-        from anchor_bench.analysis.so101_analysis import run_so101_analysis
+        from anchor_bench.analysis.runtime import run_robot_analysis
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -879,6 +979,7 @@ class So101RuntimeTests(unittest.TestCase):
             for folder in (real, sim, sim_lstm):
                 folder.mkdir(parents=True)
                 (folder / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+                write_sage_metadata(folder)
                 (folder / "control.csv").write_text(
                     'type,timestamp,positions\nCONTROL,0.0,"[0.0, 0.0]"\nCONTROL,1000.0,"[1.0, 2.0]"\n',
                     encoding="utf-8",
@@ -901,7 +1002,7 @@ class So101RuntimeTests(unittest.TestCase):
             def fake_fk(joint_names, positions):
                 return positions[:, :2].sum(axis=1, keepdims=True).repeat(3, axis=1)
 
-            run_so101_analysis(root / "bench", output, ee_fk=fake_fk)
+            run_robot_analysis("so101", root / "bench", output, ee_fk=fake_fk)
 
             metrics = (output / "metrics" / "so101_metrics.csv").read_text(encoding="utf-8")
             self.assertIn(
@@ -927,11 +1028,12 @@ class So101RuntimeTests(unittest.TestCase):
             self.assertIn("example,motion,implicit,", ee_metrics)
 
     def test_analysis_sample_dt_resamples_trace_vectors(self):
-        from anchor_bench.analysis.so101_analysis import _read_trace
+        from anchor_bench.analysis.runtime import _read_trace
 
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             (folder / "joint_list.txt").write_text("Rotation\n", encoding="utf-8")
+            write_sage_metadata(folder)
             (folder / "control.csv").write_text(
                 'type,timestamp,positions\n'
                 'CONTROL,0.0,"[0.0]"\n'
@@ -947,15 +1049,15 @@ class So101RuntimeTests(unittest.TestCase):
 
             trace = _read_trace(folder, sample_dt=0.5)
 
-        self.assertEqual(trace.control_time.tolist(), [0.0, 0.5, 1.0])
-        self.assertEqual(trace.state_time.tolist(), [0.0, 0.5, 1.0])
-        self.assertEqual(trace.control_positions[:, 0].tolist(), [0.0, 0.5, 1.0])
-        self.assertEqual(trace.positions[:, 0].tolist(), [0.0, 1.0, 2.0])
-        self.assertEqual(trace.velocities[:, 0].tolist(), [0.0, 2.0, 4.0])
-        self.assertEqual(trace.torques[:, 0].tolist(), [1.0, 3.0, 5.0])
+        self.assertEqual(trace.command_position.time.tolist(), [0.0, 0.5, 1.0])
+        self.assertEqual(trace.position.time.tolist(), [0.0, 0.5, 1.0])
+        self.assertEqual(trace.command_position.values[:, 0].tolist(), [0.0, 0.5, 1.0])
+        self.assertEqual(trace.position.values[:, 0].tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(trace.velocity.values[:, 0].tolist(), [0.0, 2.0, 4.0])
+        self.assertEqual(trace.effort.values[:, 0].tolist(), [1.0, 3.0, 5.0])
 
     def test_analysis_motion_filter_supports_globs(self):
-        from anchor_bench.analysis.so101_analysis import run_so101_analysis
+        from anchor_bench.analysis.runtime import run_robot_analysis
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -965,6 +1067,7 @@ class So101RuntimeTests(unittest.TestCase):
                 for folder in (real, sim):
                     folder.mkdir(parents=True)
                     (folder / "joint_list.txt").write_text("Rotation\n", encoding="utf-8")
+                    write_sage_metadata(folder)
                     (folder / "control.csv").write_text(
                         'type,timestamp,positions\nCONTROL,0.0,"[0.0]"\nCONTROL,1000.0,"[1.0]"\n',
                         encoding="utf-8",
@@ -977,14 +1080,14 @@ class So101RuntimeTests(unittest.TestCase):
                     )
 
             output = root / "analysis"
-            run_so101_analysis(root / "bench", output, motions=["*sweep*"], make_end_effector_plots=False)
+            run_robot_analysis("so101", root / "bench", output, motions=["*sweep*"], make_end_effector_plots=False)
             metrics = (output / "metrics" / "so101_metrics.csv").read_text(encoding="utf-8")
 
         self.assertIn("example,elbow_sweep,implicit,", metrics)
         self.assertNotIn("example,hold,implicit,", metrics)
 
     def test_analysis_skips_end_effector_when_fk_runtime_is_missing(self):
-        from anchor_bench.analysis.so101_analysis import EndEffectorFkUnavailable, run_so101_analysis
+        from anchor_bench.analysis.runtime import EndEffectorFkUnavailable, run_robot_analysis
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -993,6 +1096,7 @@ class So101RuntimeTests(unittest.TestCase):
             for folder in (real, sim):
                 folder.mkdir(parents=True)
                 (folder / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+                write_sage_metadata(folder)
                 (folder / "control.csv").write_text(
                     'type,timestamp,positions\nCONTROL,0.0,"[0.0, 0.0]"\nCONTROL,1000.0,"[1.0, 2.0]"\n',
                     encoding="utf-8",
@@ -1008,14 +1112,14 @@ class So101RuntimeTests(unittest.TestCase):
                 raise EndEffectorFkUnavailable("isaaclab-newton runtime unavailable")
 
             output = root / "analysis"
-            run_so101_analysis(root / "bench", output, ee_fk=missing_fk)
+            run_robot_analysis("so101", root / "bench", output, ee_fk=missing_fk)
 
             self.assertTrue((output / "metrics" / "so101_metrics.csv").exists())
             self.assertTrue((output / "plots" / "example" / "motion" / "joints" / "Rotation.png").exists())
             self.assertFalse((output / "metrics" / "so101_end_effector_metrics.csv").exists())
 
     def test_analysis_requires_end_effector_when_requested(self):
-        from anchor_bench.analysis.so101_analysis import EndEffectorFkUnavailable, run_so101_analysis
+        from anchor_bench.analysis.runtime import EndEffectorFkUnavailable, run_robot_analysis
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1024,6 +1128,7 @@ class So101RuntimeTests(unittest.TestCase):
             for folder in (real, sim):
                 folder.mkdir(parents=True)
                 (folder / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+                write_sage_metadata(folder)
                 (folder / "control.csv").write_text(
                     'type,timestamp,positions\nCONTROL,0.0,"[0.0, 0.0]"\nCONTROL,1000.0,"[1.0, 2.0]"\n',
                     encoding="utf-8",
@@ -1039,10 +1144,10 @@ class So101RuntimeTests(unittest.TestCase):
                 raise EndEffectorFkUnavailable("isaaclab-newton runtime unavailable")
 
             with self.assertRaisesRegex(EndEffectorFkUnavailable, "isaaclab-newton runtime unavailable"):
-                run_so101_analysis(root / "bench", root / "analysis", ee_fk=missing_fk, require_end_effector=True)
+                run_robot_analysis("so101", root / "bench", root / "analysis", ee_fk=missing_fk, require_end_effector=True)
 
     def test_analysis_places_multi_seed_plots_above_dataset(self):
-        from anchor_bench.analysis.so101_analysis import run_so101_analysis
+        from anchor_bench.analysis.runtime import run_robot_analysis
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1051,6 +1156,7 @@ class So101RuntimeTests(unittest.TestCase):
             for folder in (real, sim):
                 folder.mkdir(parents=True)
                 (folder / "joint_list.txt").write_text("Rotation\n", encoding="utf-8")
+                write_sage_metadata(folder)
                 (folder / "control.csv").write_text(
                     'type,timestamp,positions\nCONTROL,0.0,"[0.0]"\nCONTROL,1000.0,"[1.0]"\n',
                     encoding="utf-8",
@@ -1063,7 +1169,7 @@ class So101RuntimeTests(unittest.TestCase):
                 )
             output = root / "analysis"
 
-            run_so101_analysis(root / "bench", output, make_end_effector_plots=False, seeds=[42])
+            run_robot_analysis("so101", root / "bench", output, make_end_effector_plots=False, seeds=[42])
 
             metrics = (output / "metrics" / "so101_metrics.csv").read_text(encoding="utf-8")
             self.assertIn("example,motion,implicit,42,Rotation", metrics)

@@ -1,17 +1,17 @@
 # Anchor Bench
 
 Anchor Bench is a focused system identification (SysID) and sim-to-real benchmark package for robot
-actuator models on Isaac Sim 6.0, Newton 1.2, and Isaac Lab `develop`.
+actuator models on the Isaac Sim, Newton, and Isaac Lab versions pinned in
+[`versions/compatibility.toml`](versions/compatibility.toml).
 
 The repo provides robot configs, data loaders, SysID command builders, Newton
 benchmark command builders, and analysis helpers around the actuator-identification workflow.
 
 ## Compatibility
 
-- Isaac Sim: `6.0.0.0`
-- Newton: `1.2.0`
-- Isaac Lab: `develop` at `482d21c936b863e323f0a135c8e8e8e8a9c166b2`
-- Python: `3.12`
+[`versions/compatibility.toml`](versions/compatibility.toml) is the single
+source of truth for supported Isaac Sim, Newton, Isaac Lab, and Python versions.
+`setup.sh` and the Python environment checks consume that manifest.
 
 ## Installation
 
@@ -40,11 +40,22 @@ SO-101 includes `assets/robots/so101/files/so101.usd` for quick checks. Set
 `ANCHOR_BENCH_ASSET_DIR` only when you want to override it with your own USD
 assets.
 
+Download and convert NVIDIA's
+[Anchor-Lab SO-101 motion folder](https://huggingface.co/datasets/nvidia/Anchor-Lab/tree/main/data/so101_arm_50motion)
+before the first run:
+
 ```bash
-# Open container
+# Open the full container.
 ./setup.sh --shell
 
-# SysID
+# Download, verify, and convert every parquet in the folder.
+python scripts/prepare_huggingface_parquets.py \
+  https://huggingface.co/datasets/nvidia/Anchor-Lab/tree/main/data/so101_arm_50motion
+
+# Optional: validate one epoch of real-data actuator training.
+anchor-bench train-actuator --robot so101 --final-epochs 1 --skip-optuna
+
+# SysID uses the converted training figure-eight motion by default.
 anchor-bench sysid \
   --robot so101 \
   --headless --num-envs 2 --max-iter 1 --max-trajectory-len 200
@@ -61,6 +72,11 @@ anchor-bench benchmark \
 anchor-bench analyze --robot so101
 ```
 
+The importer infers `so101` from the folder name and writes converted motions
+under `inputs/datasets/so101/so101_arm_50motion/`. The 42 upstream
+`train-*` motions remain under `train/`; the 8 `heldout-*` motions remain
+under `heldout/` and must not influence normalization or model selection.
+
 Robot `run.yaml` supplies the default SysID dataset/output, benchmark
 motion/output, simulation timing, and analysis output/filter settings. CLI
 arguments override those defaults when you need a one-off run.
@@ -72,8 +88,8 @@ anchor-bench robots list
 anchor-bench robots describe so101
 
 # Full experiments (multiple configs)
-anchor-bench experiment benchmark configs/experiments/so101_custom_figure8_with_camera.yaml
-anchor-bench experiment analyze configs/experiments/so101_custom_figure8_with_camera.yaml
+anchor-bench experiment benchmark configs/experiments/so101_anchor_lab_figure_eight.yaml
+anchor-bench experiment analyze configs/experiments/so101_anchor_lab_figure_eight.yaml
 ```
 
 See [CLI commands](docs/cli.md) for the full command reference.
@@ -85,7 +101,7 @@ anchor_bench/   Python package: CLI, loaders, runners, runtime helpers
 configs/        Declarative robot and experiment configuration
 assets/         Robot USD/MJCF/mesh assets and manifests
 inputs/         Measured datasets and curated frozen actuator params
-outputs/        Generated SysID, benchmark, and analysis artifacts
+outputs/        Generated SysID, training, benchmark, and analysis artifacts
 third_party/    Ignored local artifacts and optional vendor checkouts
 ```
 
@@ -98,7 +114,7 @@ See [repo structure](docs/repo-structure.md) for the detailed rules.
 - [Artifacts](docs/artifacts.md): large files, SO-101 USD handling, and generated output locations.
 - [Host-safe end-to-end test](docs/end-to-end-test.md): SysID to benchmark to analysis contract coverage.
 - [Robot plugins](docs/robot-plugin.md): files required to add a new robot.
-- [Newton 1.2 migration](docs/migration-newton-1.2.md): actuator schema migration notes.
+- [G1 neural actuator recipes](docs/g1-neural-actuator-recipes.md): supported and experimental G1 training paths.
 
 ## Acknowledgements
 

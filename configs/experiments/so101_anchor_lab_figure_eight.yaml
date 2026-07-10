@@ -12,9 +12,9 @@ benchmark:
   headless: true
 
 datasets:
-  example:
-    real_root: inputs/datasets/so101
-    motions: [custom_figure8_with_camera]
+  so101_arm_50motion:
+    real_root: inputs/datasets/so101/so101_arm_50motion/train
+    motions: [figure-eight]
 
 actuator_models:
   implicit:
@@ -25,7 +25,7 @@ actuator_models:
 
 analysis:
   seeds: [42]
-  datasets: [example]
+  datasets: [so101_arm_50motion]
   motions: "*"
   actuator_models: "*"
   plots:

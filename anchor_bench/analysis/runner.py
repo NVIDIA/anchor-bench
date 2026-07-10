@@ -28,14 +28,13 @@ def resolve_analysis_run_config(
     motions: str | list[str] | None = None,
 ) -> ResolvedAnalysisRunConfig:
     bundle = get_robot(robot)
-    run_cfg = bundle.run_config
-    benchmark_cfg = run_cfg.get("benchmark", {})
-    analysis_cfg = run_cfg.get("analysis", {})
-    result = resolve_required_text(result_folder, benchmark_cfg.get("output_folder"), "outputs/sim2real_benchmark", "--result-folder")
-    output_value = resolve_required_text(output, analysis_cfg.get("output_dir"), "outputs/sim2real_analysis", "--output")
-    sample_dt_value = analysis_cfg.get("sample_dt")
+    benchmark_cfg = bundle.run_config.benchmark
+    analysis_cfg = bundle.run_config.analysis
+    result = resolve_required_text(result_folder, benchmark_cfg.output_folder, "outputs/sim2real_benchmark", "--result-folder")
+    output_value = resolve_required_text(output, analysis_cfg.output_dir, "outputs/sim2real_analysis", "--output")
+    sample_dt_value = analysis_cfg.sample_dt
     sample_dt = float(sample_dt_value) if sample_dt_value is not None else None
-    motion_names = defaulted_value(motions, analysis_cfg.get("motion_names"), None)
+    motion_names = defaulted_value(motions, analysis_cfg.motion_names, None)
     return ResolvedAnalysisRunConfig(
         robot=robot,
         result_folder=resolve_repo_path_text(result),
@@ -55,28 +54,13 @@ def _selector_to_cli_values(value: str | list[str] | None) -> list[str]:
     return [str(value)]
 
 
-def build_analysis_command(
-    robot: str,
-    result_folder: str | None = None,
-    output: str | None = None,
-    dry_run: bool = True,
-    require_end_effector: bool = False,
-    motions: str | list[str] | None = None,
-) -> CommandPlan:
-    resolved = resolve_analysis_run_config(
-        robot,
-        result_folder=result_folder,
-        output=output,
-        dry_run=dry_run,
-        require_end_effector=require_end_effector,
-        motions=motions,
-    )
+def build_resolved_analysis_command(resolved: ResolvedAnalysisRunConfig) -> CommandPlan:
     command = ["anchor-bench", "analyze", "--robot", resolved.robot, "--result-folder", resolved.result_folder, "--output", resolved.output]
     for motion in _selector_to_cli_values(resolved.motion_names):
         command.extend(["--motion", motion])
-    if require_end_effector:
+    if resolved.require_end_effector:
         command.append("--require-end-effector")
-    if dry_run:
+    if resolved.dry_run:
         command.append("--dry-run")
     metadata = {
         "sample_dt": resolved.sample_dt,
@@ -92,35 +76,11 @@ def build_analysis_command(
     )
 
 
-def run_analysis(
-    robot: str,
-    result_folder: str | None = None,
-    output: str | None = None,
-    dry_run: bool = True,
-    require_end_effector: bool = False,
-    motions: str | list[str] | None = None,
-) -> CommandPlan:
-    plan = build_analysis_command(
-        robot,
-        result_folder,
-        output,
-        dry_run=dry_run,
-        require_end_effector=require_end_effector,
-        motions=motions,
-    )
-    resolved = resolve_analysis_run_config(
-        robot,
-        result_folder=result_folder,
-        output=output,
-        dry_run=dry_run,
-        require_end_effector=require_end_effector,
-        motions=motions,
-    )
+def run_resolved_analysis(resolved: ResolvedAnalysisRunConfig) -> CommandPlan:
+    plan = build_resolved_analysis_command(resolved)
     if resolved.dry_run:
         return plan
-    if resolved.robot != "so101":
-        raise ValueError("Full runtime execution currently supports only robot=so101")
-    from anchor_bench.analysis.so101_analysis import run_so101_analysis
+    from anchor_bench.analysis.runtime import run_robot_analysis
 
     motions: Iterable[str] | None
     if resolved.motion_names is None or resolved.motion_names == "*":
@@ -129,7 +89,8 @@ def run_analysis(
         motions = [str(item) for item in resolved.motion_names]
     else:
         motions = [str(resolved.motion_names)]
-    run_so101_analysis(
+    run_robot_analysis(
+        resolved.robot,
         result_folder=resolved.result_folder,
         output=resolved.output,
         motions=motions,

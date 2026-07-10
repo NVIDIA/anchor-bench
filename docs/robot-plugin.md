@@ -42,7 +42,6 @@ Optional curated input parameter files can live under:
 inputs/
   actuator_params/
     <robot>/
-      initial.yaml
       fitted_seed42.yaml
 ```
 
@@ -86,7 +85,7 @@ than reintroducing another copy of the base joint order.
 
 ### `actuators.yaml`
 
-Use the Newton-native schema. Do not add legacy `model_type` keys.
+Use the canonical schema-v2 actuator document. Do not add unsupported `model_type` keys.
 
 ```yaml
 schema_version: 2
@@ -242,7 +241,7 @@ Do not put USDs, meshes, FMUs, or other robot assets under `inputs/`.
 
 ## Input Datasets
 
-Benchmark and SysID input datasets use the SAGE-style folder layout:
+SysID, benchmark, analysis, and training use the SAGE-style folder layout:
 
 ```text
 inputs/datasets/<robot>/<dataset>/<motion>/
@@ -266,10 +265,17 @@ torque_unit: N*m
 source: measured run or synthetic fixture
 ```
 
+All workflows load this layout into the same canonical motion model. Timestamp
+units come only from `metadata.yaml`; joint selection is compiled once from
+`joint_list.txt`; vector widths, finite values, duplicate joints, and duplicate
+timestamps are validated at the boundary.
+
 When `target_dt` is used, the loader normalizes timestamps to seconds and
-interpolates control/state positions over their overlapping time range. If the
-traces do not overlap, fix the dataset rather than forcing analysis to compare
-misaligned signals.
+interpolates command position, state position, velocity, and torque over their
+common time range. Training derives per-joint `position`, `position_error`,
+`velocity`, and `torque` columns from the same in-memory motion, so robot
+plugins should not generate a second set of training CSVs. If traces do not
+overlap, fix the dataset rather than forcing a comparison of misaligned signals.
 
 ## Outputs From First Runs
 
@@ -282,7 +288,10 @@ outputs/sysid/<robot>/<run>/
   run_summary.yaml
 ```
 
-Use `best_params.yaml` directly for local replay:
+`best_params.yaml` is a complete schema-v2 actuator document. Its actuator
+structure matches `configs/robots/<robot>/actuators.yaml`, while fit metrics and
+provenance are recorded under its optional top-level `metadata` mapping. Use it
+directly for local replay:
 
 ```bash
 anchor-bench benchmark \
@@ -300,19 +309,20 @@ under `outputs/`.
 ## Runtime Support
 
 Host-safe registration and dry-run planning work for any robot with valid
-config files. Full simulation execution currently needs robot-specific runtime
-support:
+config files. Full simulation execution uses the shared robot-parameterized
+runtime:
 
 - SysID dispatch lives in `anchor_bench/sysid/runner.py`.
 - Benchmark dispatch lives in `anchor_bench/benchmark/newton_runner.py`.
 - Analysis dispatch lives in `anchor_bench/analysis/runner.py`.
-- SO-101 runtime implementation is split across `anchor_bench/sysid/so101_runtime.py`,
-  `anchor_bench/benchmark/so101_runtime.py`, and
-  `anchor_bench/analysis/so101_analysis.py`.
+- Runtime implementation is split across `anchor_bench/sysid/runtime.py`,
+  `anchor_bench/benchmark/runtime.py`, and
+  `anchor_bench/analysis/runtime.py`.
 
-When adding a new robot runtime, keep heavy Isaac Sim, Isaac Lab, and Newton
-imports inside the non-dry-run path. Dry-run tests should continue to run on a
-host-only Python.
+New robots should not add robot-named runtime modules. Declare the robot under
+`configs/robots/<robot>/`; the current runtime requires a runtime USD and one
+PD actuator group. Keep heavy Isaac Sim, Isaac Lab, and Newton imports inside
+the non-dry-run path so dry-run tests continue to work on host-only Python.
 
 The runtime should derive joint names from `get_robot("<robot>").spec.joint_names`
 instead of hardcoding them. Use those names consistently for scene construction,
@@ -341,8 +351,9 @@ anchor-bench sysid --robot <robot> --headless
 Before opening a PR or publishing a robot plugin, run:
 
 ```bash
-python3 -m unittest
-python3 -m py_compile anchor_bench/robots/registry.py anchor_bench/actuators/loader.py
+python3 -m pytest -q
+python3 -m ruff check anchor_bench tests scripts
+python3 -m pyright
 git diff --check
 ```
 

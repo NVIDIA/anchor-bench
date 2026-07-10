@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import argparse
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="anchor-bench")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    robots = sub.add_parser("robots")
+    robot_sub = robots.add_subparsers(dest="robot_command", required=True)
+    robot_sub.add_parser("list")
+    describe = robot_sub.add_parser("describe")
+    describe.add_argument("robot")
+
+    sysid = sub.add_parser("sysid")
+    sysid.add_argument("--robot", required=True)
+    sysid.add_argument("--data")
+    sysid.add_argument("--output")
+    sysid.add_argument("--headless", action="store_true")
+    sysid.add_argument("--num-envs", type=int)
+    sysid.add_argument("--max-iter", type=int)
+    sysid.add_argument("--max-trajectory-len", type=int)
+    sysid.add_argument("--seed", type=int)
+    sysid.add_argument("--dry-run", action="store_true")
+
+    train = sub.add_parser("train-actuator")
+    train.add_argument("--robot", required=True)
+    train.add_argument("--model", choices=("gru", "hybrid_residual"))
+    train.add_argument("--data")
+    train.add_argument("--joint-type")
+    train.add_argument("--output")
+    train.add_argument("--input-columns")
+    train.add_argument("--target-column")
+    train.add_argument("--skip-optuna", action="store_true", default=None)
+    train.add_argument("--trials", type=int)
+    train.add_argument("--trial-epochs", type=int)
+    train.add_argument("--final-epochs", type=int)
+    train.add_argument("--n-streams", type=int)
+    train.add_argument("--noise-std", type=float)
+    train.add_argument("--seed", type=int)
+    train.add_argument("--dry-run", action="store_true")
+
+    benchmark = sub.add_parser("benchmark")
+    benchmark.add_argument("--robot", required=True)
+    benchmark.add_argument("--motion")
+    benchmark.add_argument("--output")
+    benchmark.add_argument("--headless", action="store_true")
+    benchmark.add_argument("--dataset")
+    benchmark.add_argument("--motion-name")
+    benchmark.add_argument("--actuator-model")
+    benchmark.add_argument("--seed", type=int)
+    benchmark.add_argument("--actuator-params")
+    benchmark.add_argument("--dry-run", action="store_true")
+
+    analyze = sub.add_parser("analyze")
+    analyze.add_argument("--robot", required=True)
+    analyze.add_argument("--result-folder")
+    analyze.add_argument("--output")
+    analyze.add_argument("--motion", action="append", dest="motions")
+    analyze.add_argument("--require-end-effector", action="store_true")
+    analyze.add_argument("--dry-run", action="store_true")
+
+    experiment = sub.add_parser("experiment")
+    experiment_sub = experiment.add_subparsers(dest="experiment_command", required=True)
+    experiment_benchmark = experiment_sub.add_parser("benchmark")
+    experiment_benchmark.add_argument("config")
+    experiment_benchmark.add_argument("--dry-run", action="store_true")
+    experiment_analyze = experiment_sub.add_parser("analyze")
+    experiment_analyze.add_argument("config")
+    experiment_analyze.add_argument("--dry-run", action="store_true")
+
+    return parser

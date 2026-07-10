@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,17 +10,18 @@ from anchor_bench.core.run_config import resolve_simulation_timing
 from anchor_bench.benchmark.init_sync import (
     BenchmarkInitialState,
     apply_benchmark_initial_states,
-    load_benchmark_initial_state,
 )
-from anchor_bench.data.sage import load_real_data
+from anchor_bench.data.sage import load_sage_motion
+from anchor_bench.data.sage import copy_sage_motion, write_sage_motion
 from anchor_bench.robots.registry import get_robot
 from anchor_bench.runtime.assets import resolve_runtime_asset
-from anchor_bench.runtime.so101_config import load_implicit_actuator_params
-from anchor_bench.runtime.so101_scene import (
+from anchor_bench.runtime.simulation import create_newton_scene, joint_ids_for
+from anchor_bench.runtime.robot_config import load_implicit_actuator_params
+from anchor_bench.runtime.robot_scene import (
     apply_static_actuator_params,
     build_scene_class,
     resolve_fix_root_override,
-    so101_joint_names,
+    robot_joint_names,
     to_torch,
 )
 
@@ -32,28 +31,36 @@ def _log(message: str) -> None:
 
 
 def _write_sage(folder: Path, joint_names: list[str], control_rows, state_rows) -> None:
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "joint_list.txt").write_text("\n".join(joint_names) + "\n", encoding="utf-8")
-    with (folder / "control.csv").open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(["type", "timestamp", "positions"])
-        writer.writerows(control_rows)
-    with (folder / "state_motor.csv").open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
-        writer.writerow(["type", "timestamp", "positions", "velocities", "torques"])
-        writer.writerows(state_rows)
+    write_sage_motion(
+        folder,
+        joint_names,
+        control_rows,
+        state_rows,
+        {
+            "schema": "sage",
+            "time_unit": "microseconds",
+            "position_unit": "rad",
+            "velocity_unit": "rad/s",
+            "torque_unit": "N*m",
+            "source": "anchor-bench simulation",
+        },
+    )
 
 
 def _copy_real_sage(source: Path, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
-    for name in ("control.csv", "state_motor.csv", "joint_list.txt", "metadata.yaml"):
-        src = source / name
-        if src.exists():
-            shutil.copy2(src, destination / name)
+    copy_sage_motion(source, destination)
 
 
 def _timestamp_us_text(timestamp_s: float) -> str:
     return f"{timestamp_s * 1e6:.1f}"
+
+
+def _read_benchmark_state(robot: Any, wp: Any, joint_ids_long: Any) -> tuple[Any, Any, Any]:
+    position = to_torch(robot.data.joint_pos, wp)[:, joint_ids_long].detach().cpu().numpy()
+    velocity = to_torch(robot.data.joint_vel, wp)[:, joint_ids_long].detach().cpu().numpy()
+    # Note: Implicit model's applied_torque is a clipped actuator torque est and not Newton's internal torque 
+    effort = to_torch(robot.data.applied_torque, wp)[:, joint_ids_long].detach().cpu().numpy()
+    return position, velocity, effort
 
 
 def _append_benchmark_sample(
@@ -64,13 +71,14 @@ def _append_benchmark_sample(
     command: list[float],
     position: list[float],
     velocity: list[float],
+    effort: list[float],
 ) -> None:
     position_values = list(position)
     velocity_values = list(velocity)
+    effort_values = list(effort)
     timestamp_text = _timestamp_us_text(timestamp_s)
-    effort = [0.0] * len(position_values)
     control_rows.append(["CONTROL", timestamp_text, list(command)])
-    state_rows.append(["STATE_MOTOR", timestamp_text, position_values, velocity_values, effort])
+    state_rows.append(["STATE_MOTOR", timestamp_text, position_values, velocity_values, effort_values])
 
 
 def _buffer_substeps(buffer_time: float, control_dt: float, control_divisor: int) -> int:
@@ -80,14 +88,14 @@ def _buffer_substeps(buffer_time: float, control_dt: float, control_divisor: int
 
 
 @dataclass(frozen=True)
-class So101BenchmarkMotion:
+class RobotBenchmarkMotion:
     motion: str
     motion_name: str | None = None
 
 
 @dataclass(frozen=True)
 class _LoadedBenchmarkMotion:
-    spec: So101BenchmarkMotion
+    spec: RobotBenchmarkMotion
     path: Path
     motion_name: str
     commands: list[list[float]]
@@ -108,10 +116,11 @@ def _build_run_summary(
     env_index: int,
     actuator_values: dict[str, Any],
     actuator_params: str | None,
+    robot_name: str,
     real_init_pose_sync: bool = False,
 ) -> dict[str, Any]:
     return {
-        "robot_name": "so101",
+        "robot_name": robot_name,
         "dataset": dataset_name,
         "motion": str(motion_path),
         "motion_name": motion_name,
@@ -133,31 +142,9 @@ def _build_run_summary(
     }
 
 
-def run_so101_benchmark(
-    motion: str,
-    output: str = "outputs/sim2real_benchmark",
-    headless: bool = False,
-    motion_name: str | None = None,
-    actuator_params: str | None = None,
-    dataset: str | None = None,
-    actuator_model: str | None = None,
-    seed: int | None = None,
-) -> Path:
-    return run_so101_benchmark_batch(
-        motions=[So101BenchmarkMotion(motion=motion, motion_name=motion_name)],
-        output=output,
-        headless=headless,
-        actuator_params=actuator_params,
-        dataset=dataset,
-        actuator_model=actuator_model,
-        seed=seed,
-        num_envs=1,
-        batch_index=0,
-    )
-
-
-def run_so101_benchmark_batch(
-    motions: list[So101BenchmarkMotion],
+def run_robot_benchmark_batch(  # noqa: C901
+    robot_name: str,
+    motions: list[RobotBenchmarkMotion],
     output: str = "outputs/sim2real_benchmark",
     headless: bool = False,
     actuator_params: str | None = None,
@@ -168,7 +155,7 @@ def run_so101_benchmark_batch(
     batch_index: int = 0,
 ) -> Path:
     if not motions:
-        raise ValueError("SO-101 benchmark batch requires at least one motion")
+        raise ValueError(f"{robot_name} benchmark batch requires at least one motion")
     from anchor_bench.runtime.app_launcher import launch_isaac_sim
 
     simulation_app = None
@@ -177,31 +164,37 @@ def run_so101_benchmark_batch(
 
         import torch
         import warp as wp
-        from isaaclab.scene import InteractiveScene
-        from isaaclab.sim import SimulationCfg, SimulationContext
-        from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 
-        bundle = get_robot("so101")
-        joint_names = so101_joint_names(bundle)
+        bundle = get_robot(robot_name)
+        joint_names = robot_joint_names(bundle)
         run_cfg = bundle.run_config
-        sim_cfg_data = run_cfg.get("simulation", {})
-        benchmark_cfg = run_cfg.get("benchmark", {})
-        real_init_pose_sync = bool(benchmark_cfg.get("real_init_pose_sync", False))
-        timing = resolve_simulation_timing(sim_cfg_data, "SO-101 benchmark simulation")
+        sim_cfg_data = run_cfg.simulation
+        benchmark_cfg = run_cfg.benchmark
+        real_init_pose_sync = bool(benchmark_cfg.real_init_pose_sync or False)
+        timing = resolve_simulation_timing(sim_cfg_data, f"{bundle.spec.display_name} benchmark simulation")
         physics_dt = timing.physics_dt
         control_freq = timing.control_freq
         divisor = timing.control_divisor
-        buffer_time = float(benchmark_cfg.get("buffer_time", 0.0))
+        buffer_time = float(benchmark_cfg.buffer_time or 0.0)
         buffer_substeps = _buffer_substeps(buffer_time, timing.control_dt, timing.control_divisor)
-        fix_root = bool(benchmark_cfg.get("fix_root", bundle.spec.fixed_base))
+        fix_root = bool(benchmark_cfg.fix_root if benchmark_cfg.fix_root is not None else bundle.spec.fixed_base)
 
         loaded_motions: list[_LoadedBenchmarkMotion] = []
         for spec in motions:
             motion_path = Path(spec.motion)
-            real_data = load_real_data(motion_path, target_dt=1.0 / control_freq, joint_names=joint_names)
-            initial_state = load_benchmark_initial_state(motion_path, joint_names) if real_init_pose_sync else None
-            commands = real_data.control_positions
-            timestamps = real_data.control_timestamps
+            source_motion = load_sage_motion(motion_path, joint_names=joint_names)
+            source_initial = source_motion.initial_state() if real_init_pose_sync else None
+            initial_state = (
+                BenchmarkInitialState(
+                    positions=source_initial.positions.tolist(),
+                    velocities=source_initial.velocities.tolist() if source_initial.velocities is not None else None,
+                )
+                if source_initial is not None
+                else None
+            )
+            real_data = source_motion.resample(1.0 / control_freq)
+            commands = real_data.command_position.values.tolist()
+            timestamps = real_data.command_position.time.tolist()
             if not commands:
                 raise ValueError(f"No SAGE rows found in {spec.motion}")
             if len(timestamps) != len(commands):
@@ -217,34 +210,22 @@ def run_so101_benchmark_batch(
                 )
             )
         batch_size = len(loaded_motions)
-        _log(f"Starting SO-101 benchmark: envs={batch_size}, motions={batch_size}")
+        _log(f"Starting {bundle.spec.display_name} benchmark: envs={batch_size}, motions={batch_size}")
         actual_num_envs = batch_size
         configured_batch_size = int(num_envs or batch_size)
 
-        dataset_name = dataset or benchmark_cfg.get("dataset") or benchmark_cfg.get("motion_name", "example")
-        actuator_model_name = actuator_model or "so101_implicit"
+        dataset_name = dataset or benchmark_cfg.dataset or benchmark_cfg.motion_name or "example"
+        actuator_model_name = actuator_model or f"{robot_name}_implicit"
         output_root = Path(output)
 
         actuator_values = load_implicit_actuator_params(bundle, actuator_params)
         usd_path = resolve_runtime_asset(bundle)
         fix_root_override = resolve_fix_root_override(fix_root, bundle.spec.fixed_base)
         SceneCfg = build_scene_class(usd_path, actuator_values, joint_names, fix_root=fix_root_override)
-        sim_cfg = SimulationCfg(dt=physics_dt, render_interval=timing.render_interval, gravity=(0.0, 0.0, -9.81))
-        sim_cfg.physics = NewtonCfg(
-            solver_cfg=MJWarpSolverCfg(
-                integrator=sim_cfg_data.get("integrator", "implicitfast"),
-                ls_iterations=sim_cfg_data.get("ls_iterations", sim_cfg_data.get("line_search_iterations", 10)),
-                iterations=sim_cfg_data.get("solver_iterations", 10),
-            ),
+        sim, scene, robot = create_newton_scene(
+            SceneCfg, sim_cfg_data, timing, num_envs=batch_size
         )
-        sim = SimulationContext(sim_cfg)
-        scene = InteractiveScene(SceneCfg(num_envs=batch_size, env_spacing=4.0))
-        sim.reset()
-        scene.reset()
-        robot = scene["robot"]
-        joint_name_to_idx = {name: i for i, name in enumerate(robot.joint_names)}
-        joint_indices = [joint_name_to_idx[name] for name in joint_names]
-        joint_ids = torch.tensor(joint_indices, dtype=torch.int32, device=robot.device)
+        joint_ids = joint_ids_for(robot, joint_names, torch)
         env_ids = torch.arange(batch_size, dtype=torch.int32, device=robot.device)
         apply_static_actuator_params(robot, actuator_values, joint_ids, env_ids, torch, joint_names)
 
@@ -277,8 +258,7 @@ def run_so101_benchmark_batch(
             )
             _log(f"Init-pose sync: teleported {sync_count} envs to real row-0 state")
 
-        sim_pos = to_torch(robot.data.joint_pos, wp)[:, joint_ids_long].detach().cpu().numpy()
-        sim_vel = to_torch(robot.data.joint_vel, wp)[:, joint_ids_long].detach().cpu().numpy()
+        sim_pos, sim_vel, sim_effort = _read_benchmark_state(robot, wp, joint_ids_long)
         for env_index, motion in enumerate(loaded_motions):
             _append_benchmark_sample(
                 control_rows[env_index],
@@ -287,6 +267,7 @@ def run_so101_benchmark_batch(
                 command=motion.commands[0],
                 position=sim_pos[env_index].tolist(),
                 velocity=sim_vel[env_index].tolist(),
+                effort=sim_effort[env_index].tolist(),
             )
 
         max_steps = max(len(motion.commands) for motion in loaded_motions)
@@ -305,8 +286,7 @@ def run_so101_benchmark_batch(
                 scene.write_data_to_sim()
                 sim.step(render=False)
                 scene.update(physics_dt)
-            sim_pos = to_torch(robot.data.joint_pos, wp)[:, joint_ids_long].detach().cpu().numpy()
-            sim_vel = to_torch(robot.data.joint_vel, wp)[:, joint_ids_long].detach().cpu().numpy()
+            sim_pos, sim_vel, sim_effort = _read_benchmark_state(robot, wp, joint_ids_long)
             for env_index, motion in enumerate(loaded_motions):
                 if not active[env_index]:
                     continue
@@ -317,12 +297,13 @@ def run_so101_benchmark_batch(
                     command=command_batch[env_index],
                     position=sim_pos[env_index].tolist(),
                     velocity=sim_vel[env_index].tolist(),
+                    effort=sim_effort[env_index].tolist(),
                 )
 
         first_sim_output: Path | None = None
         for env_index, motion in enumerate(loaded_motions):
-            sim_output = output_root / "sim" / "so101" / dataset_name / actuator_model_name / motion.motion_name
-            real_output = output_root / "real" / "so101" / dataset_name / motion.motion_name
+            sim_output = output_root / "sim" / robot_name / dataset_name / actuator_model_name / motion.motion_name
+            real_output = output_root / "real" / robot_name / dataset_name / motion.motion_name
             if first_sim_output is None:
                 first_sim_output = sim_output
             _write_sage(sim_output, joint_names, control_rows[env_index], state_rows[env_index])
@@ -341,6 +322,7 @@ def run_so101_benchmark_batch(
                 actuator_values=actuator_values,
                 actuator_params=actuator_params,
                 real_init_pose_sync=real_init_pose_sync,
+                robot_name=robot_name,
             )
             (sim_output / "run_summary.yaml").write_text(
                 yaml.safe_dump(summary, sort_keys=False),

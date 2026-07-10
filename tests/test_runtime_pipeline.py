@@ -124,8 +124,8 @@ class RuntimePipelineTests(unittest.TestCase):
         self.assertTrue((sysid_output / "optimization_log.csv").exists())
         self.assertTrue((sysid_output / "run_summary.yaml").exists())
         best_params_data = yaml.safe_load(best_params.read_text(encoding="utf-8"))
-        self.assertEqual("so101", best_params_data["robot_name"])
-        self.assertIn("best_mse", best_params_data)
+        self.assertEqual("so101", best_params_data["metadata"]["robot_name"])
+        self.assertIn("best_mse", best_params_data["metadata"])
 
         _run_cli(
             "benchmark",

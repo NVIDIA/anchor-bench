@@ -16,7 +16,7 @@ logs
 third_party
 data
 data_storage
-inputs/datasets/g1/g1_arm_multi_joint
+inputs/datasets
 
 *.pt
 *.pth

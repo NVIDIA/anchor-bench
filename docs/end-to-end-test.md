@@ -18,8 +18,8 @@ launching Isaac Sim or Newton.
 
 ### What It Proves
 
-- A SysID-style `best_params.yaml` can be consumed by benchmark actuator-param
-  loading.
+- A schema-v2 SysID `best_params.yaml` can be consumed by benchmark
+  actuator-parameter loading.
 - Experiment benchmark expansion passes the expected seed, output folder,
   actuator params, dataset, actuator model, motion name, and headless setting
   into the benchmark runtime boundary.
@@ -148,28 +148,28 @@ runtime_pipeline_<uuid>/
 ```
 
 If the opt-in flag is set but prerequisites are missing, the test skips with an
-actionable reason. In this checkout, the enabled smoke currently reaches the
-asset preflight and skips if `so101.usd` is not available under
-`assets/robots/so101/files/` or `ANCHOR_BENCH_ASSET_DIR`.
+actionable reason naming missing runtime modules, CUDA, or the SO-101 asset. With
+the full image and GPU runtime available, the test executes the complete
+SysID → benchmark → analysis pipeline.
 
 ## Run It
 
 Host-safe contract test:
 
 ```bash
-./setup.sh --shell python3 scripts/run_unit_tests.py tests.test_pipeline_contract
+./setup.sh --shell python3 -m pytest -q tests/test_pipeline_contract.py
 ```
 
 Adjacent coverage:
 
 ```bash
-./setup.sh --shell python3 scripts/run_unit_tests.py tests.test_experiments tests.test_so101_runtime tests.test_cli_dry_run
+./setup.sh --shell python3 -m pytest -q tests/test_experiments.py tests/test_runtime_workflows.py tests/test_cli_dry_run.py
 ```
 
 Default container suite, with the runtime smoke discovered but skipped:
 
 ```bash
-./setup.sh --shell python3 scripts/run_unit_tests.py
+./setup.sh --shell python3 -m pytest -q
 ```
 
 Opt-in full runtime smoke:
@@ -178,7 +178,7 @@ Opt-in full runtime smoke:
 HEADLESS=1 ./setup.sh --shell env \
   ANCHOR_BENCH_RUN_RUNTIME_E2E=1 \
   ANCHOR_BENCH_RUNTIME_OUTPUT_DIR=/tmp/anchor-bench-runtime-e2e \
-  python3 scripts/run_unit_tests.py tests.test_runtime_pipeline -v
+  python3 -m pytest -v tests/test_runtime_pipeline.py
 ```
 
 ## Test Directory Summary
@@ -186,15 +186,16 @@ HEADLESS=1 ./setup.sh --shell env \
 | Test module | Coverage summary | Runtime level |
 | --- | --- | --- |
 | `tests/test_actuator_net_gru.py` | Host-safe import/config checks for GRU actuator config classes and input-column validation. | Host-safe unit |
-| `tests/test_actuator_schema.py` | Declarative actuator, run, experiment, migration, and Newton adapter schema behavior. | Host-safe unit |
+| `tests/test_actuator_schema.py` | Declarative actuator, run, experiment, and Newton adapter schema behavior. | Host-safe unit |
 | `tests/test_cli_dry_run.py` | CLI command construction for robots, SysID, benchmark, analysis, and train-actuator dry-runs. | Host-safe subprocess |
 | `tests/test_docker_setup.py` | Docker-first setup script, persistent shell, docs, cache, UID/GID, and artifact-layout expectations. | Host-safe dry-run/docs |
 | `tests/test_experiments.py` | Experiment config expansion, batching, seed layout, fitted/initial params, analysis selectors, and CLI dry-runs. | Host-safe unit/subprocess |
 | `tests/test_pipeline_contract.py` | End-to-end host-safe SysID params -> benchmark boundary -> analysis artifact contract. | Host-safe contract |
+| `tests/test_generic_runtime.py` | Robot-parameterized dispatch and non-SO-101 analysis behavior. | Host-safe unit |
 | `tests/test_registry.py` | Robot registry discovery, configured robot bundles, and invalid robot diagnostics. | Host-safe unit |
-| `tests/test_runtime_pipeline.py` | Opt-in actual SO-101 SysID optimization -> benchmark replay -> FK analysis smoke in full runtime. | Full runtime opt-in |
+| `tests/test_runtime_pipeline.py` | Opt-in actual SO-101 SysID optimization → benchmark replay → FK analysis smoke. | Full runtime opt-in |
+| `tests/test_runtime_simulation.py` | Runtime simulation timing and scene integration contracts with fakes. | Host-safe unit |
 | `tests/test_sage.py` | SAGE loader ordering, initial-state extraction, timestamp scaling, interpolation, and validation errors. | Host-safe unit |
-| `tests/test_so101_runtime.py` | SO-101 runtime helpers, asset preflights, optimizer behavior, benchmark row/layout helpers, and analysis behavior with fakes. | Host-safe unit |
-| `tests/test_testing_progress.py` | Progress-bar unittest runner accounting. | Host-safe unit |
-| `tests/test_training.py` | Training data discovery/columns/stats plus optional tiny GRU training and TorchScript export smoke. | Host-safe with optional torch |
+| `tests/test_runtime_workflows.py` | runtime workflow helpers, asset preflights, optimizer behavior, benchmark row/layout helpers, and analysis behavior with fakes. | Host-safe unit |
+| `tests/test_training.py` | SAGE training-source discovery, feature mapping, tiny GRU training, and TorchScript export. | Host-safe; Torch tests require torch |
 | `tests/test_versions.py` | Compatibility manifest pins for Isaac Sim, Isaac Lab, and Newton. | Host-safe unit |

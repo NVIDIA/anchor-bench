@@ -1,21 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable
-
-from anchor_bench.data.sage import load_initial_state
 
 
 @dataclass(frozen=True)
 class BenchmarkInitialState:
     positions: list[float]
     velocities: list[float] | None = None
-
-
-def load_benchmark_initial_state(motion_path: str | Path, joint_names: list[str]) -> BenchmarkInitialState:
-    state = load_initial_state(motion_path, joint_names)
-    return BenchmarkInitialState(positions=state.positions, velocities=state.velocities)
 
 
 def apply_benchmark_initial_states(

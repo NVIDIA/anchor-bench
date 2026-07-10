@@ -1,5 +1,5 @@
 from anchor_bench.experiments.runner import (
-    ExperimentConfig,
+    ResolvedExperimentConfig,
     ExperimentConfigError,
     ExperimentBenchmarkBatch,
     ExperimentBenchmarkRun,
@@ -11,7 +11,7 @@ from anchor_bench.experiments.runner import (
 )
 
 __all__ = [
-    "ExperimentConfig",
+    "ResolvedExperimentConfig",
     "ExperimentConfigError",
     "ExperimentBenchmarkBatch",
     "ExperimentBenchmarkRun",

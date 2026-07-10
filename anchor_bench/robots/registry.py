@@ -27,7 +27,7 @@ class RobotPaths:
 class RobotBundle:
     spec: RobotSpec
     paths: RobotPaths
-    run_config: dict[str, Any]
+    run_config: RobotRunFile
 
 
 def list_robots() -> list[str]:
@@ -51,7 +51,7 @@ def _load_robot_bundle(name: str) -> RobotBundle:
     run_config = RobotRunFile.from_dict(
         _load_yaml(run_file) if run_file.exists() else {},
         run_file,
-    ).to_dict()
+    )
     paths = RobotPaths(
         config_dir=cfg_dir,
         robot=robot_file,
@@ -60,7 +60,7 @@ def _load_robot_bundle(name: str) -> RobotBundle:
         bounds=cfg_dir / spec.bounds_file,
         asset=repo_root() / spec.asset_path,
     )
-    return RobotBundle(spec=spec, paths=paths, run_config=run_config or {})
+    return RobotBundle(spec=spec, paths=paths, run_config=run_config)
 
 
 def _validate_robot_bundle(name: str, bundle: RobotBundle) -> list[str]:

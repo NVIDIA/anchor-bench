@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import csv
 import json
-import math
 import random
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+import numpy as np
+
+from anchor_bench.data.motion import MotionData
+from anchor_bench.data.sage import discover_sage_motions
 
 
 DEFAULT_INPUT_COLUMNS = ("position", "position_error", "velocity")
@@ -23,44 +27,83 @@ class TrainingColumns:
     source_target_columns: list[str]
 
 
-def discover_csv_files(root: str | Path) -> list[Path]:
+@dataclass(frozen=True)
+class TrainingSource:
+    path: Path
+    joint: str | None = None
+
+
+def discover_training_sources(root: str | Path) -> list[TrainingSource]:
     path = Path(root).expanduser()
-    if path.is_file():
-        csvs = [path] if path.suffix.lower() == ".csv" else []
-    else:
-        csvs = sorted(item for item in path.rglob("*.csv") if item.is_file()) if path.exists() else []
-    if not csvs:
-        raise ValueError(f"no CSV files found under {path}")
-    return csvs
+    motions = discover_sage_motions(path)
+    if not motions:
+        raise ValueError(f"no SAGE motion folders found under {path}")
+    return [TrainingSource(motion) for motion in motions]
 
 
-def read_csv_header(path: str | Path) -> list[str]:
-    with Path(path).open("r", encoding="utf-8", newline="") as stream:
-        reader = csv.reader(stream)
-        try:
-            return [str(column) for column in next(reader)]
-        except StopIteration as exc:
-            raise ValueError(f"CSV file is empty: {path}") from exc
+def expand_joint_sources(
+    sources: Sequence[TrainingSource],
+    joints: Sequence[str],
+) -> list[TrainingSource]:
+    return [
+        TrainingSource(source.path, joint)
+        for source in sources
+        for joint in joints
+    ]
 
 
-def split_csv_files(
-    csv_files: Sequence[str | Path],
+def split_training_sources(
+    sources: Sequence[TrainingSource],
     *,
     seed: int,
     val_fraction: float = 0.2,
-) -> tuple[list[Path], list[Path]]:
-    files = [Path(path) for path in csv_files]
-    if not files:
-        raise ValueError("cannot split an empty CSV list")
-    shuffled = list(files)
-    random.Random(seed).shuffle(shuffled)
-    if len(shuffled) == 1:
-        return shuffled, []
-    val_count = max(1, int(round(len(shuffled) * val_fraction)))
-    val_count = min(val_count, len(shuffled) - 1)
-    val = sorted(shuffled[:val_count])
-    train = sorted(shuffled[val_count:])
-    return train, val
+) -> tuple[list[TrainingSource], list[TrainingSource]]:
+    if not sources:
+        raise ValueError("cannot split an empty training source list")
+    groups: dict[Path, list[TrainingSource]] = {}
+    for source in sources:
+        groups.setdefault(source.path, []).append(source)
+    paths = list(groups)
+    random.Random(seed).shuffle(paths)
+    if len(paths) == 1:
+        return list(groups[paths[0]]), []
+    val_count = max(1, int(round(len(paths) * val_fraction)))
+    val_count = min(val_count, len(paths) - 1)
+    val_paths = set(paths[:val_count])
+
+    def source_key(source: TrainingSource) -> tuple[str, str]:
+        return str(source.path), source.joint or ""
+
+    train = [source for path in paths if path not in val_paths for source in groups[path]]
+    val = [source for path in paths if path in val_paths for source in groups[path]]
+    return sorted(train, key=source_key), sorted(val, key=source_key)
+
+
+@lru_cache(maxsize=32)
+def _load_training_motion(path: Path) -> MotionData:
+    from anchor_bench.data.sage import load_sage_motion
+
+    return load_sage_motion(path)
+
+
+def read_training_header(source: TrainingSource, joint: str) -> list[str]:
+    return list(_load_training_motion(source.path).training_columns(source.joint or joint))
+
+
+def load_training_table(
+    source: TrainingSource,
+    *,
+    joint: str,
+    columns: Sequence[str],
+) -> dict[str, np.ndarray]:
+    available = _load_training_motion(source.path).training_columns(source.joint or joint)
+    missing = [column for column in columns if column not in available]
+    if missing:
+        raise ValueError(f"{source.path} missing required training signals: {', '.join(missing)}")
+    return {
+        column: np.asarray(available[column], dtype=np.float32)
+        for column in columns
+    }
 
 
 def resolve_training_columns(
@@ -80,78 +123,26 @@ def resolve_training_columns(
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     source_target = [target_column or DEFAULT_TARGET_COLUMN]
     derived = set(derived_columns or ())
-    missing = [column for column in [*inputs, *source_target] if column not in header_set and column not in derived]
+    missing = [
+        column
+        for column in [*inputs, *source_target]
+        if column not in header_set and column not in derived
+    ]
     if missing:
-        raise ValueError(f"missing required CSV columns: {', '.join(missing)}")
+        raise ValueError(f"missing required training signals: {', '.join(missing)}")
     targets = ["torque_residual"] if model == "hybrid_residual" else source_target
-    return TrainingColumns(input_columns=inputs, target_columns=targets, source_target_columns=source_target)
-
-
-def _iter_numeric_rows(csv_files: Sequence[Path], columns: Sequence[str]) -> Iterable[dict[str, float]]:
-    for path in csv_files:
-        with path.open("r", encoding="utf-8", newline="") as stream:
-            reader = csv.DictReader(stream)
-            if reader.fieldnames is None:
-                raise ValueError(f"CSV file is empty: {path}")
-            missing = [column for column in columns if column not in reader.fieldnames]
-            if missing:
-                raise ValueError(f"{path} missing required CSV columns: {', '.join(missing)}")
-            for row in reader:
-                yield {column: float(row[column]) for column in columns}
-
-
-def _stats(values: dict[str, list[float]]) -> tuple[dict[str, float], dict[str, float]]:
-    means: dict[str, float] = {}
-    stds: dict[str, float] = {}
-    for column, column_values in values.items():
-        if not column_values:
-            raise ValueError(f"cannot compute normalization stats for empty column {column}")
-        mean = sum(column_values) / len(column_values)
-        variance = sum((value - mean) ** 2 for value in column_values) / len(column_values)
-        means[column] = mean
-        stds[column] = max(math.sqrt(variance), EPSILON_STD)
-    return means, stds
-
-
-def compute_normalization_stats(
-    csv_files: Sequence[str | Path],
-    *,
-    input_columns: Sequence[str],
-    target_columns: Sequence[str],
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    paths = [Path(path) for path in csv_files]
-    columns = [*input_columns, *target_columns]
-    input_values = {column: [] for column in input_columns}
-    target_values = {column: [] for column in target_columns}
-    row_count = 0
-    for row in _iter_numeric_rows(paths, columns):
-        row_count += 1
-        for column in input_columns:
-            input_values[column].append(row[column])
-        for column in target_columns:
-            target_values[column].append(row[column])
-    if row_count == 0:
-        raise ValueError("cannot compute normalization stats from empty CSV rows")
-    input_mean, input_std = _stats(input_values)
-    target_mean, target_std = _stats(target_values)
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "input_columns": list(input_columns),
-        "target_columns": list(target_columns),
-        "normalization": {
-            "inputs": {"mean": input_mean, "std": input_std},
-            "targets": {"mean": target_mean, "std": target_std},
-        },
-        "data": {"csv_count": len(paths), "row_count": row_count},
-    }
-    if metadata:
-        result.update(metadata)
-    return result
+    return TrainingColumns(
+        input_columns=inputs,
+        target_columns=targets,
+        source_target_columns=source_target,
+    )
 
 
 def write_stats_json(path: str | Path, stats: dict[str, Any]) -> Path:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(stats, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(stats, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return output

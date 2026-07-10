@@ -26,7 +26,3 @@ def output_root() -> Path:
 
 def third_party_root() -> Path:
     return repo_root() / "third_party"
-
-
-def external_root() -> Path:
-    return third_party_root()

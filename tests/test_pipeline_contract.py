@@ -45,21 +45,25 @@ def _write_sage_motion(
 
 
 def _write_sysid_best_params(path: Path) -> Path:
+    from anchor_bench.robots.registry import get_robot
+    from anchor_bench.runtime.robot_config import build_fitted_actuator_document
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    document = build_fitted_actuator_document(
+        get_robot("so101"),
+        {
+            "stiffness": {"Rotation": 12.5},
+            "damping": {"Pitch": 1.75},
+        },
+        metadata={
+            "source": "sysid",
+            "best_mse": 0.001,
+            "robot_name": "so101",
+            "data_source": "synthetic",
+        },
+    )
     path.write_text(
-        yaml.safe_dump(
-            {
-                "best_mse": 0.001,
-                "robot_name": "so101",
-                "mode": "all_joints",
-                "data_source": "synthetic",
-                "provenance": {"source": "sysid"},
-                "stiffness": {"Rotation": 12.5},
-                "damping": {"Pitch": 1.75},
-                "motor_lag_ms": 4.0,
-            },
-            sort_keys=False,
-        ),
+        yaml.safe_dump(document, sort_keys=False),
         encoding="utf-8",
     )
     return path
@@ -128,7 +132,7 @@ class PipelineContractTests(unittest.TestCase):
     def test_sysid_fitted_params_flow_through_benchmark_and_analysis(self):
         from anchor_bench.experiments.runner import run_experiment_analysis, run_experiment_benchmark
         from anchor_bench.robots.registry import get_robot
-        from anchor_bench.runtime.so101_config import load_implicit_actuator_params
+        from anchor_bench.runtime.robot_config import load_implicit_actuator_params
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -141,7 +145,7 @@ class PipelineContractTests(unittest.TestCase):
             self.assertEqual(12.5, loaded_params["stiffness"]["Rotation"])
             self.assertEqual(47.782635, loaded_params["stiffness"]["Pitch"])
             self.assertEqual(1.75, loaded_params["damping"]["Pitch"])
-            self.assertEqual(4.0, loaded_params["motor_lag_ms"])
+            self.assertEqual(0.0, loaded_params["motor_lag_ms"])
             self.assertNotIn("best_mse", loaded_params)
 
             with patch("anchor_bench.benchmark.newton_runner.run_benchmark_batch") as run_batch:
@@ -167,7 +171,7 @@ class PipelineContractTests(unittest.TestCase):
                 motion="custom_motion",
             )
 
-            with patch("anchor_bench.analysis.so101_analysis._load_pyplot") as load_pyplot:
+            with patch("anchor_bench.analysis.runtime._load_pyplot") as load_pyplot:
                 metrics_plan = run_experiment_analysis(config, dry_run=False)
                 load_pyplot.assert_not_called()
 

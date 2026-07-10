@@ -14,5 +14,5 @@ joint_aliases:
   gripper: Jaw
 actuator_file: actuators.yaml
 bounds_file: bounds.yaml
-ee_frame: Jaw
+ee_frame: jaw
 runtime_usd: so101.usd

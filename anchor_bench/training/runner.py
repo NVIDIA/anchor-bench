@@ -1,13 +1,12 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from anchor_bench.actuators.loader import load_actuator_file
 from anchor_bench.core.plan import CommandPlan
-from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text
+from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text, resolve_value_with_source
 from anchor_bench.core.schemas import TrainActuatorRunConfig
 from anchor_bench.robots.registry import get_robot
 from anchor_bench.training.data import (
@@ -15,12 +14,15 @@ from anchor_bench.training.data import (
     DEFAULT_TARGET_COLUMN,
     MODEL_CHOICES,
     SUPPORTED_INPUT_COLUMNS,
-    discover_csv_files,
-    read_csv_header,
+    discover_training_sources,
+    expand_joint_sources,
+    read_training_header,
     resolve_training_columns,
-    split_csv_files,
+    split_training_sources,
 )
-from anchor_bench.training.trainer import ResidualPhysics, TrainingJob, train_stateful_gru
+
+if TYPE_CHECKING:
+    from anchor_bench.training.trainer import ResidualPhysics
 
 
 @dataclass(frozen=True)
@@ -41,14 +43,6 @@ class ResolvedTrainActuatorRunConfig:
     input_columns: list[str]
     target_column: str
     config_sources: dict[str, str]
-
-
-def _defaulted(explicit: Any, default: Any, fallback: Any) -> Any:
-    if explicit is not None:
-        return explicit
-    if default is not None:
-        return default
-    return fallback
 
 
 def _positive_int(name: str, value: Any) -> int:
@@ -79,27 +73,43 @@ def _column_list(value: Any) -> list[str] | None:
 
 
 def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> ResolvedTrainActuatorRunConfig:
-    bundle = get_robot(config.robot)
-    training_cfg = bundle.run_config.get("training", {})
-    model = str(_defaulted(config.model, training_cfg.get("model"), "gru"))
+    training_cfg = get_robot(config.robot).run_config.training
+    values: dict[str, Any] = {}
+    sources: dict[str, str] = {}
+
+    def select(name: str, explicit: Any, fallback: Any) -> Any:
+        values[name], sources[name] = resolve_value_with_source(explicit, getattr(training_cfg, name), fallback)
+        return values[name]
+
+    model = str(select("model", config.model, "gru"))
     if model not in MODEL_CHOICES:
         raise ValueError(f"--model {model!r} must be one of {sorted(MODEL_CHOICES)}")
-    data = resolve_required_text(config.data, training_cfg.get("real_data_dir"), None, "--data")
-    output = resolve_required_text(config.output, training_cfg.get("output_dir"), f"outputs/training/{config.robot}", "--output")
-    joint_type = resolve_required_text(config.joint_type, training_cfg.get("joint_type"), "full", "--joint-type")
-    skip_optuna = bool(_defaulted(config.skip_optuna, training_cfg.get("skip_optuna"), True))
-    trials = _positive_int("trials", _defaulted(config.trials, training_cfg.get("trials"), 20))
-    trial_epochs = _positive_int("trial_epochs", _defaulted(config.trial_epochs, training_cfg.get("trial_epochs"), 5))
-    final_epochs = _positive_int("final_epochs", _defaulted(config.final_epochs, training_cfg.get("final_epochs"), 50))
-    n_streams = _positive_int("n_streams", _defaulted(config.n_streams, training_cfg.get("n_streams"), 4))
-    noise_std = _nonnegative_float("noise_std", _defaulted(config.noise_std, training_cfg.get("noise_std"), 0.0))
-    seed = int(_defaulted(config.seed, training_cfg.get("seed"), 42))
-    input_columns = _column_list(_defaulted(config.input_columns, training_cfg.get("input_columns"), DEFAULT_INPUT_COLUMNS))
-    assert input_columns is not None
+
+    data = resolve_required_text(
+        select("real_data_dir", config.data, None),
+        None,
+        None,
+        "--data",
+    )
+    output = resolve_required_text(
+        select("output_dir", config.output, f"outputs/training/{config.robot}"),
+        None,
+        None,
+        "--output",
+    )
+    joint_type = resolve_required_text(
+        select("joint_type", config.joint_type, "full"),
+        None,
+        None,
+        "--joint-type",
+    )
+    input_columns = _column_list(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
+    if input_columns is None:
+        raise ValueError("input_columns must contain at least one column")
     unsupported_columns = sorted(set(input_columns) - SUPPORTED_INPUT_COLUMNS)
     if unsupported_columns:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported_columns)}")
-    target_column = str(_defaulted(config.target_column, training_cfg.get("target_column"), DEFAULT_TARGET_COLUMN))
+
     return ResolvedTrainActuatorRunConfig(
         robot=config.robot,
         model=model,
@@ -107,49 +117,49 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         output=resolve_repo_path_text(output),
         joint_type=str(joint_type),
         dry_run=config.dry_run,
-        skip_optuna=skip_optuna,
-        trials=trials,
-        trial_epochs=trial_epochs,
-        final_epochs=final_epochs,
-        n_streams=n_streams,
-        noise_std=noise_std,
-        seed=seed,
+        skip_optuna=bool(select("skip_optuna", config.skip_optuna, True)),
+        trials=_positive_int("trials", select("trials", config.trials, 20)),
+        trial_epochs=_positive_int("trial_epochs", select("trial_epochs", config.trial_epochs, 5)),
+        final_epochs=_positive_int("final_epochs", select("final_epochs", config.final_epochs, 50)),
+        n_streams=_positive_int("n_streams", select("n_streams", config.n_streams, 4)),
+        noise_std=_nonnegative_float("noise_std", select("noise_std", config.noise_std, 0.0)),
+        seed=int(select("seed", config.seed, 42)),
         input_columns=input_columns,
-        target_column=target_column,
-        config_sources={
-            "model": "cli" if config.model is not None else ("run.yaml" if training_cfg.get("model") is not None else "fallback"),
-            "real_data_dir": "cli" if config.data is not None else "run.yaml",
-            "output_dir": "cli" if config.output is not None else ("run.yaml" if training_cfg.get("output_dir") is not None else "fallback"),
-            "joint_type": "cli" if config.joint_type is not None else ("run.yaml" if training_cfg.get("joint_type") is not None else "fallback"),
-            "skip_optuna": "cli" if config.skip_optuna is not None else ("run.yaml" if training_cfg.get("skip_optuna") is not None else "fallback"),
-            "trials": "cli" if config.trials is not None else ("run.yaml" if training_cfg.get("trials") is not None else "fallback"),
-            "trial_epochs": "cli" if config.trial_epochs is not None else ("run.yaml" if training_cfg.get("trial_epochs") is not None else "fallback"),
-            "final_epochs": "cli" if config.final_epochs is not None else ("run.yaml" if training_cfg.get("final_epochs") is not None else "fallback"),
-            "n_streams": "cli" if config.n_streams is not None else ("run.yaml" if training_cfg.get("n_streams") is not None else "fallback"),
-            "noise_std": "cli" if config.noise_std is not None else ("run.yaml" if training_cfg.get("noise_std") is not None else "fallback"),
-            "seed": "cli" if config.seed is not None else ("run.yaml" if training_cfg.get("seed") is not None else "fallback"),
-            "input_columns": "cli" if config.input_columns is not None else ("run.yaml" if training_cfg.get("input_columns") is not None else "fallback"),
-            "target_column": "cli" if config.target_column is not None else ("run.yaml" if training_cfg.get("target_column") is not None else "fallback"),
-        },
+        target_column=str(select("target_column", config.target_column, DEFAULT_TARGET_COLUMN)),
+        config_sources=sources,
     )
 
 
 def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str]:
     command = [
-        "anchor-bench", "train-actuator",
-        "--robot", resolved.robot,
-        "--model", resolved.model,
-        "--data", resolved.data,
-        "--joint-type", resolved.joint_type,
-        "--output", resolved.output,
-        "--trials", str(resolved.trials),
-        "--trial-epochs", str(resolved.trial_epochs),
-        "--final-epochs", str(resolved.final_epochs),
-        "--n-streams", str(resolved.n_streams),
-        "--noise-std", str(resolved.noise_std),
-        "--seed", str(resolved.seed),
-        "--input-columns", ",".join(resolved.input_columns),
-        "--target-column", resolved.target_column,
+        "anchor-bench",
+        "train-actuator",
+        "--robot",
+        resolved.robot,
+        "--model",
+        resolved.model,
+        "--data",
+        resolved.data,
+        "--joint-type",
+        resolved.joint_type,
+        "--output",
+        resolved.output,
+        "--trials",
+        str(resolved.trials),
+        "--trial-epochs",
+        str(resolved.trial_epochs),
+        "--final-epochs",
+        str(resolved.final_epochs),
+        "--n-streams",
+        str(resolved.n_streams),
+        "--noise-std",
+        str(resolved.noise_std),
+        "--seed",
+        str(resolved.seed),
+        "--input-columns",
+        ",".join(resolved.input_columns),
+        "--target-column",
+        resolved.target_column,
     ]
     if resolved.skip_optuna:
         command.append("--skip-optuna")
@@ -158,10 +168,9 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
     return command
 
 
-def build_train_actuator_command(config: TrainActuatorRunConfig) -> CommandPlan:
-    resolved = resolve_train_actuator_run_config(config)
+def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConfig) -> CommandPlan:
     notes = [
-        "trains a stateful TBPTT GRU actuator model with torch/pandas imported only during execution",
+        "trains a stateful TBPTT GRU actuator model with torch imported only during execution",
         f"generated checkpoints and stats should stay under outputs/training/{resolved.robot}/ by convention",
         "promote only non-weight metadata into inputs/actuator_models/<robot>/ when needed",
     ]
@@ -201,7 +210,9 @@ def _param_for_joint(value: Any, joint_type: str, default: float = 0.0) -> float
     return float(value)
 
 
-def _residual_physics_for_joint(robot: str, joint_type: str) -> ResidualPhysics:
+def _residual_physics_for_joint(robot: str, joint_type: str) -> "ResidualPhysics":
+    from anchor_bench.training.trainer import ResidualPhysics
+
     bundle = get_robot(robot)
     spec = load_actuator_file(bundle.paths.actuators)
     matching = [actuator for actuator in spec.actuators if joint_type in actuator.joints or actuator.name == joint_type]
@@ -210,7 +221,7 @@ def _residual_physics_for_joint(robot: str, joint_type: str) -> ResidualPhysics:
     actuator = matching[0]
     controller_params = actuator.controller.parameters
     physical = actuator.physical_parameters
-    dry = physical.get("dry_friction", physical.get("dynamic_friction"))
+    dry = physical.get("dry_friction")
     return ResidualPhysics(
         stiffness=_param_for_joint(controller_params.get("stiffness"), joint_type),
         damping=_param_for_joint(controller_params.get("damping"), joint_type),
@@ -219,22 +230,30 @@ def _residual_physics_for_joint(robot: str, joint_type: str) -> ResidualPhysics:
     )
 
 
-def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
-    plan = build_train_actuator_command(config)
-    resolved = resolve_train_actuator_run_config(config)
+def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> CommandPlan:
+    plan = build_resolved_train_actuator_command(resolved)
     if resolved.dry_run:
         return plan
-    csvs = discover_csv_files(resolved.data)
-    train_csvs, val_csvs = split_csv_files(csvs, seed=resolved.seed)
+
+    from anchor_bench.training.trainer import TrainingJob, train_stateful_gru
+
+    sources = discover_training_sources(resolved.data)
+    if resolved.joint_type == "full":
+        sources = expand_joint_sources(sources, get_robot(resolved.robot).spec.joint_names)
+    train_sources, val_sources = split_training_sources(sources, seed=resolved.seed)
     derived_columns = ["solver_pd"] if resolved.model == "hybrid_residual" else []
     columns = resolve_training_columns(
-        read_csv_header(train_csvs[0]),
+        read_training_header(train_sources[0], resolved.joint_type),
         model=resolved.model,
         input_columns=resolved.input_columns,
         target_column=resolved.target_column,
         derived_columns=derived_columns,
     )
-    residual_physics = _residual_physics_for_joint(resolved.robot, resolved.joint_type) if resolved.model == "hybrid_residual" else None
+    residual_physics = (
+        _residual_physics_for_joint(resolved.robot, resolved.joint_type)
+        if resolved.model == "hybrid_residual"
+        else None
+    )
     metadata: dict[str, Any] = {
         "robot": resolved.robot,
         "config_sources": resolved.config_sources,
@@ -247,8 +266,8 @@ def run_train_actuator(config: TrainActuatorRunConfig) -> CommandPlan:
         TrainingJob(
             model=resolved.model,
             joint_type=resolved.joint_type,
-            train_csvs=train_csvs,
-            val_csvs=val_csvs,
+            train_sources=train_sources,
+            val_sources=val_sources,
             output_dir=Path(resolved.output),
             input_columns=columns.input_columns,
             target_columns=columns.target_columns,

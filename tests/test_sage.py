@@ -1,21 +1,16 @@
-
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 
-from anchor_bench.data.sage import load_initial_state, load_real_data
+from anchor_bench.data.sage import load_sage_motion
 
 
 def write_sage(root: Path, control_rows: int = 2, state_rows: int = 2, time_unit: str = "microseconds"):
     (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
     (root / "metadata.yaml").write_text(
-        "schema: sage\n"
-        f"time_unit: {time_unit}\n"
-        "position_unit: rad\n"
-        "velocity_unit: rad/s\n"
-        "torque_unit: N*m\n",
+        f"schema: sage\ntime_unit: {time_unit}\nposition_unit: rad\nvelocity_unit: rad/s\ntorque_unit: N*m\n",
         encoding="utf-8",
     )
     control = ["type,timestamp,positions"]
@@ -33,65 +28,102 @@ class SageLoaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_sage(root)
-            data = load_real_data(root, joint_names=["Pitch", "Rotation"])
-            self.assertEqual(data.joint_names, ["Pitch", "Rotation"])
-            self.assertEqual(data.control_positions[0], [0.2, 0.1])
-            self.assertEqual(data.metadata["time_unit"], "seconds")
-            self.assertEqual(data.control_timestamps, [0.0, 0.002])
+            motion = load_sage_motion(root, joint_names=["Pitch", "Rotation"])
+            self.assertEqual(motion.joint_names, ["Pitch", "Rotation"])
+            self.assertEqual(motion.command_position.values[0].tolist(), [0.2, 0.1])
+            self.assertEqual(motion.metadata["time_unit"], "seconds")
+            self.assertEqual(motion.command_position.time.tolist(), [0.0, 0.002])
+
+    def test_canonical_motion_carries_all_signals_and_derives_training_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_sage(root)
+
+            motion = load_sage_motion(root, joint_names=["Pitch", "Rotation"])
+            columns = motion.training_columns("Pitch")
+
+        self.assertEqual(["Pitch", "Rotation"], motion.joint_names)
+        self.assertEqual((2, 2), motion.velocity.values.shape)
+        self.assertEqual((2, 2), motion.effort.values.shape)
+        np.testing.assert_allclose(columns["command_position"], [0.2, 1.2])
+        np.testing.assert_allclose(columns["position"], [0.4, 1.4])
+        np.testing.assert_allclose(columns["position_error"], [-0.2, -0.2])
+        self.assertFalse(motion.position.values.flags.writeable)
+
+    def test_canonical_motion_rejects_duplicate_joints_and_vector_width_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_sage(root)
+            (root / "joint_list.txt").write_text("Rotation\nRotation\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate joint names"):
+                load_sage_motion(root)
+
+            (root / "joint_list.txt").write_text("Rotation\nPitch\n", encoding="utf-8")
+            (root / "control.csv").write_text(
+                'type,timestamp,positions\nCONTROL,0,"[0.0]"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "joint_list.txt has 2 joints"):
+                load_sage_motion(root)
+
+    def test_canonical_motion_rejects_duplicate_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_sage(root)
+            (root / "control.csv").write_text(
+                'type,timestamp,positions\nCONTROL,0,"[0.0, 0.0]"\nCONTROL,0,"[1.0, 1.0]"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "strictly increasing"):
+                load_sage_motion(root)
 
     def test_initial_state_uses_first_motor_state_in_requested_joint_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_sage(root)
 
-            state = load_initial_state(root, joint_names=["Pitch", "Rotation"])
+            state = load_sage_motion(
+                root, joint_names=["Pitch", "Rotation"]
+            ).initial_state()
 
-        self.assertEqual(state.joint_names, ["Pitch", "Rotation"])
-        self.assertEqual(state.positions, [0.4, 0.3])
-        self.assertEqual(state.velocities, [0.0, 0.0])
-
-    def test_benchmark_initial_state_loader_is_robot_generic(self):
-        from anchor_bench.benchmark.init_sync import load_benchmark_initial_state
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            write_sage(root)
-
-            state = load_benchmark_initial_state(root, joint_names=["Rotation"])
-
-        self.assertEqual(state.positions, [0.3])
-        self.assertEqual(state.velocities, [0.0])
-
-    def test_loader_rejects_large_row_mismatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            write_sage(root, control_rows=2, state_rows=5)
-            with self.assertRaisesRegex(ValueError, "row counts differ"):
-                load_real_data(root)
+        self.assertEqual(list(state.joints.names), ["Pitch", "Rotation"])
+        self.assertEqual(state.positions.tolist(), [0.4, 0.3])
+        self.assertEqual(state.velocities.tolist(), [0.0, 0.0])
 
     def test_loader_interpolates_positions_to_target_dt_on_overlap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_sage(root, control_rows=3, state_rows=3)
 
-            data = load_real_data(root, target_dt=0.001, joint_names=["Rotation"])
+            motion = load_sage_motion(
+                root, target_dt=0.001, joint_names=["Rotation"]
+            )
 
-        self.assertEqual(data.metadata["time_unit"], "seconds")
-        self.assertEqual(data.metadata["target_dt"], 0.001)
-        self.assertEqual(data.control_timestamps, [0.0, 0.001, 0.002, 0.003, 0.004])
-        self.assertEqual(data.state_timestamps, data.control_timestamps)
-        np.testing.assert_allclose(data.control_positions, [[0.1], [0.6], [1.1], [1.6], [2.1]])
-        np.testing.assert_allclose(data.state_positions, [[0.3], [0.8], [1.3], [1.8], [2.3]])
+        self.assertEqual(motion.metadata["time_unit"], "seconds")
+        self.assertEqual(motion.metadata["target_dt"], 0.001)
+        self.assertEqual(
+            motion.command_position.time.tolist(),
+            [0.0, 0.001, 0.002, 0.003, 0.004],
+        )
+        self.assertEqual(motion.position.time.tolist(), motion.command_position.time.tolist())
+        np.testing.assert_allclose(
+            motion.command_position.values,
+            [[0.1], [0.6], [1.1], [1.6], [2.1]],
+        )
+        np.testing.assert_allclose(
+            motion.position.values,
+            [[0.3], [0.8], [1.3], [1.8], [2.3]],
+        )
 
     def test_loader_accepts_seconds_without_scaling(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_sage(root, control_rows=2, state_rows=2, time_unit="seconds")
 
-            data = load_real_data(root)
+            motion = load_sage_motion(root)
 
-        self.assertEqual(data.control_timestamps, [0.0, 2000.0])
-        self.assertEqual(data.state_timestamps, [0.0, 2000.0])
+        self.assertEqual(motion.command_position.time.tolist(), [0.0, 2000.0])
+        self.assertEqual(motion.position.time.tolist(), [0.0, 2000.0])
 
     def test_loader_rejects_unsupported_time_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,21 +131,21 @@ class SageLoaderTests(unittest.TestCase):
             write_sage(root, time_unit="milliseconds")
 
             with self.assertRaisesRegex(ValueError, "time_unit"):
-                load_real_data(root)
+                load_sage_motion(root)
 
     def test_loader_rejects_target_dt_when_traces_do_not_overlap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_sage(root)
             (root / "state_motor.csv").write_text(
-                'type,timestamp,positions,velocities,torques\n'
+                "type,timestamp,positions,velocities,torques\n"
                 'STATE_MOTOR,10000,"[0.3, 0.4]","[0.0, 0.0]","[0.0, 0.0]"\n'
                 'STATE_MOTOR,12000,"[1.3, 1.4]","[0.0, 0.0]","[0.0, 0.0]"\n',
                 encoding="utf-8",
             )
 
             with self.assertRaisesRegex(ValueError, "do not overlap"):
-                load_real_data(root, target_dt=0.001)
+                load_sage_motion(root, target_dt=0.001)
 
 
 if __name__ == "__main__":

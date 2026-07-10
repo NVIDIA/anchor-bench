@@ -54,13 +54,13 @@ class CliDryRunTests(unittest.TestCase):
 
     def test_run_yaml_defaults_expand_in_dry_runs(self):
         result = run_cli("sysid", "--robot", "so101", "--dry-run")
-        self.assertIn("inputs/datasets/so101/custom_figure8_with_camera", result.stdout)
+        self.assertIn("inputs/datasets/so101/so101_arm_50motion/train/figure-eight", result.stdout)
         self.assertIn("outputs/sysid/so101/full", result.stdout)
         self.assertIn("--max-iter", result.stdout)
         self.assertIn("'100'", result.stdout)
 
         result = run_cli("benchmark", "--robot", "so101", "--dry-run")
-        self.assertIn("inputs/datasets/so101/custom_figure8_with_camera", result.stdout)
+        self.assertIn("inputs/datasets/so101/so101_arm_50motion/train/figure-eight", result.stdout)
         self.assertIn("outputs/sim2real_benchmark", result.stdout)
 
         result = run_cli("analyze", "--robot", "so101", "--dry-run")

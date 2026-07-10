@@ -1,8 +1,10 @@
 
 # Anchor Bench Agent Guide
 
-This repo targets Isaac Sim 6.0, Newton 1.2.0, and Isaac Lab `develop` at
-`482d21c936b863e323f0a135c8e8e8e8a9c166b2`.
+This repo targets the Isaac Sim, Newton, and Isaac Lab versions pinned in
+`versions/compatibility.toml` — the single source of truth, consumed by
+`setup.sh` and `anchor_bench.core.versions`. Do not duplicate the pinned
+versions here; read them from that manifest.
 
 ## Rules
 

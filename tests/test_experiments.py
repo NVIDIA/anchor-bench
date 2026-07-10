@@ -39,6 +39,79 @@ def _write_experiment_config(root: Path, text: str) -> Path:
 
 
 class ExperimentConfigTests(unittest.TestCase):
+    def test_discovery_ignores_sage_folder_with_invalid_metadata(self):
+        from anchor_bench.experiments.runner import ExperimentConfigError, expand_benchmark_runs, load_experiment_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_root = root / "datasets" / "joints_all"
+            invalid_motion = dataset_root / "invalid_motion"
+            _write_sage(invalid_motion)
+            (invalid_motion / "metadata.yaml").write_text(
+                "time_unit: milliseconds\n"
+                "position_unit: rad\n"
+                "velocity_unit: rad/s\n"
+                "torque_unit: Nm\n",
+                encoding="utf-8",
+            )
+            initial_params = root / "initial.yaml"
+            initial_params.write_text("actuators: {}\n", encoding="utf-8")
+            config = _write_experiment_config(
+                root,
+                f"""
+schema_version: 1
+robot: so101
+datasets:
+  joints_all:
+    real_root: {dataset_root}
+actuator_models:
+  implicit:
+    type: implicit
+    initial_params: {initial_params}
+    benchmark_params: initial
+""",
+            )
+
+            with self.assertRaisesRegex(ExperimentConfigError, "has no valid SAGE child folders"):
+                expand_benchmark_runs(load_experiment_config(config))
+
+    def test_explicit_motion_reports_invalid_sage_metadata(self):
+        from anchor_bench.experiments.runner import ExperimentConfigError, expand_benchmark_runs, load_experiment_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_root = root / "datasets" / "joints_all"
+            invalid_motion = dataset_root / "invalid_motion"
+            _write_sage(invalid_motion)
+            (invalid_motion / "metadata.yaml").write_text(
+                "time_unit: seconds\n"
+                "position_unit: degrees\n"
+                "velocity_unit: rad/s\n"
+                "torque_unit: Nm\n",
+                encoding="utf-8",
+            )
+            initial_params = root / "initial.yaml"
+            initial_params.write_text("actuators: {}\n", encoding="utf-8")
+            config = _write_experiment_config(
+                root,
+                f"""
+schema_version: 1
+robot: so101
+datasets:
+  joints_all:
+    real_root: {dataset_root}
+    motions: [invalid_motion]
+actuator_models:
+  implicit:
+    type: implicit
+    initial_params: {initial_params}
+    benchmark_params: initial
+""",
+            )
+
+            with self.assertRaisesRegex(ExperimentConfigError, "position_unit"):
+                expand_benchmark_runs(load_experiment_config(config))
+
     def test_benchmark_num_envs_defaults_and_validates(self):
         from anchor_bench.experiments.runner import ExperimentConfigError, load_experiment_config
 
@@ -65,9 +138,9 @@ actuator_models:
 
             loaded = load_experiment_config(config)
 
-            self.assertEqual(1, loaded.benchmark["num_envs"])
-            self.assertEqual("outputs/sim2real_benchmark", loaded.outputs["benchmark"])
-            self.assertEqual("outputs/sim2real_analysis", loaded.outputs["analysis"])
+            self.assertEqual(1, loaded.benchmark.num_envs)
+            self.assertEqual("outputs/sim2real_benchmark", loaded.outputs.benchmark)
+            self.assertEqual("outputs/sim2real_analysis", loaded.outputs.analysis)
 
             config.write_text(
                 f"""
@@ -89,7 +162,7 @@ actuator_models:
 
             loaded = load_experiment_config(config)
 
-            self.assertEqual(2, loaded.benchmark["num_envs"])
+            self.assertEqual(2, loaded.benchmark.num_envs)
 
             config.write_text(
                 f"""
@@ -450,7 +523,7 @@ analysis:
             runs = expand_analysis_runs(loaded)
             plan = build_experiment_analysis_plan(config)
 
-        self.assertTrue(runs[0].plots["require_end_effector"])
+        self.assertTrue(runs[0].plots.require_end_effector)
         self.assertIn("--require-end-effector", plan.runs[0])
 
     def test_experiment_benchmark_cli_dry_run_lists_expanded_runs(self):

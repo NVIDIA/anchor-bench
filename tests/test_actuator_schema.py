@@ -1,6 +1,5 @@
 
 import unittest
-from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
@@ -38,10 +37,19 @@ def _valid_bounds_file() -> dict:
 
 
 class NativeActuatorSchemaTests(unittest.TestCase):
-    def test_no_legacy_model_type_blocks_remain_in_robot_configs(self):
+    def test_robot_actuator_configs_use_supported_schema(self):
         for path in (repo_root() / "configs" / "robots").glob("*/actuators.yaml"):
             text = path.read_text()
             self.assertNotIn("model_type:", text, f"{path} still uses legacy model_type")
+
+    def test_external_config_models_are_frozen_pydantic_models(self):
+        from pydantic import BaseModel, ValidationError
+        from anchor_bench.core.schemas import RobotSpec
+
+        spec = RobotSpec.from_dict(_valid_robot_spec())
+        self.assertIsInstance(spec, BaseModel)
+        with self.assertRaises(ValidationError):
+            spec.name = "changed"
 
     def test_so101_uses_newton_component_schema(self):
         spec = load_actuator_file(repo_root() / "configs" / "robots" / "so101" / "actuators.yaml")
@@ -133,10 +141,24 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             "run.yaml",
         )
 
-        self.assertEqual(run.sysid["num_envs"], 64)
-        self.assertEqual(run.sysid["cmaes"]["sigma"], 0.25)
-        self.assertEqual(run.sysid["cmaes"]["max_iterations"], 30)
-        self.assertEqual(run.sysid["cmaes"]["epsilon"], 0.001)
+        self.assertEqual(run.sysid.num_envs, 64)
+        self.assertEqual(run.sysid.cmaes.sigma, 0.25)
+        self.assertEqual(run.sysid.cmaes.max_iterations, 30)
+        self.assertEqual(run.sysid.cmaes.epsilon, 0.001)
+        self.assertEqual(
+            {
+                "sysid": {
+                    "num_envs": 64,
+                    "buffer_time": 2.0,
+                    "cmaes": {
+                        "sigma": 0.25,
+                        "max_iterations": 30,
+                        "epsilon": 0.001,
+                    },
+                }
+            },
+            run.to_dict(),
+        )
 
     def test_simulation_timing_derives_dependent_values(self):
         from anchor_bench.core.run_config import SimulationTiming, defaulted_value
@@ -182,10 +204,10 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             "run.yaml",
         )
 
-        self.assertEqual("hybrid_residual", run.training["model"])
-        self.assertEqual("outputs/training/demo", run.training["output_dir"])
-        self.assertTrue(run.training["skip_optuna"])
-        self.assertEqual(4, run.training["n_streams"])
+        self.assertEqual("hybrid_residual", run.training.model)
+        self.assertEqual("outputs/training/demo", run.training.output_dir)
+        self.assertTrue(run.training.skip_optuna)
+        self.assertEqual(4, run.training.n_streams)
 
     def test_robot_run_schema_rejects_unknown_training_keys(self):
         from anchor_bench.core.schemas import RobotRunFile
@@ -409,8 +431,8 @@ class NativeActuatorSchemaTests(unittest.TestCase):
 
         bundle = get_robot("so101")
 
-        self.assertEqual(100, bundle.run_config["sysid"]["cmaes"]["max_iterations"])
-        self.assertNotIn("max_iter", bundle.run_config["sysid"])
+        self.assertEqual(100, bundle.run_config.sysid.cmaes.max_iterations)
+        self.assertFalse(hasattr(bundle.run_config.sysid, "max_iter"))
 
     def test_bounds_configs_do_not_contain_cmaes_policy(self):
         for path in (repo_root() / "configs" / "robots").glob("*/bounds.yaml"):
@@ -428,31 +450,6 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             self.assertNotIn("max_iter", sysid, f"{path} should use sysid.cmaes.max_iterations")
             self.assertIn("cmaes", sysid, f"{path} should define sysid.cmaes")
 
-    def test_legacy_migration_utility_removes_model_type(self):
-        from anchor_bench.migration.legacy import migrate_legacy_actuator_config
-
-        migrated = migrate_legacy_actuator_config(
-            {
-                "model_type": "implicit",
-                "yaml_file": "so101/so101_implicit.yaml",
-                "motor_lag_ms": 2.0,
-                "parameters": {
-                    "stiffness": 4.0,
-                    "damping": 0.1,
-                    "effort_limit_sim": 1.5,
-                    "velocity_limit_sim": 6.28,
-                    "dynamic_friction": {"Rotation": 0.25},
-                },
-            },
-            robot_name="so101",
-            joint_names=["Rotation"],
-        )
-        self.assertNotIn("model_type", yaml.safe_dump(migrated))
-        self.assertEqual(migrated["actuators"][0]["controller"]["type"], "pd")
-        self.assertEqual(migrated["actuators"][0]["delay"]["duration_ms"], 2.0)
-        physical = migrated["actuators"][0]["physical_parameters"]
-        self.assertEqual({"Rotation": 0.25}, physical["dry_friction"])
-        self.assertNotIn("dynamic_friction", physical)
 
 
 if __name__ == "__main__":

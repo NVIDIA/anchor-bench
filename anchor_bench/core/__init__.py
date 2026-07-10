@@ -10,7 +10,9 @@ from anchor_bench.core.run_config import (
 )
 from anchor_bench.core.schemas import (
     ActuatorFile,
+    AnalysisDefaults,
     ActuatorSpec,
+    BenchmarkDefaults,
     BenchmarkRunConfig,
     BoundsRange,
     CMAESConfig,
@@ -21,16 +23,21 @@ from anchor_bench.core.schemas import (
     ExperimentFile,
     ResidualSpec,
     RobotRunFile,
+    SimulationDefaults,
     RobotSpec,
     SysIdBoundsFile,
+    SysIdDefaults,
     SysIdRunConfig,
     TrainActuatorRunConfig,
+    TrainingDefaults,
 )
 from anchor_bench.core.versions import ExternalVersions, load_external_versions
 
 __all__ = [
     "ActuatorFile",
+    "AnalysisDefaults",
     "ActuatorSpec",
+    "BenchmarkDefaults",
     "BenchmarkRunConfig",
     "BoundsRange",
     "CMAESConfig",
@@ -43,11 +50,14 @@ __all__ = [
     "ResidualSpec",
     "ExternalVersions",
     "RobotRunFile",
+    "SimulationDefaults",
     "RobotSpec",
     "SimulationTiming",
     "SysIdBoundsFile",
+    "SysIdDefaults",
     "SysIdRunConfig",
     "TrainActuatorRunConfig",
+    "TrainingDefaults",
     "defaulted_value",
     "load_external_versions",
     "resolve_repo_path",

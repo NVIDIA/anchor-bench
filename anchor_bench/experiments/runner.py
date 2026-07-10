@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 import yaml
 
-from anchor_bench.benchmark.newton_runner import build_benchmark_command
+from anchor_bench.benchmark.newton_runner import (
+    ResolvedBenchmarkRunConfig,
+    build_resolved_benchmark_command,
+)
+from anchor_bench.core.experiment_schema import (
+    AnalysisSelector,
+    ExperimentActuatorModel,
+    ExperimentDataset,
+    ExperimentFile,
+)
 from anchor_bench.core.paths import repo_root
-from anchor_bench.core.schemas import BenchmarkRunConfig
-from anchor_bench.core.schemas import ExperimentFile
-from anchor_bench.data.sage import validate_sage_dir
-from anchor_bench.robots.registry import get_robot
 from anchor_bench.core.plan import CommandPlan
+from anchor_bench.data.sage import is_sage_motion, validate_sage_dir
+from anchor_bench.robots.registry import get_robot
 
 
 class ExperimentConfigError(ValueError):
@@ -21,28 +27,47 @@ class ExperimentConfigError(ValueError):
 
 
 @dataclass(frozen=True)
-class ExperimentConfig:
-    path: Path
-    robot: str
-    outputs: dict[str, str]
-    seeds: list[int | None]
-    benchmark: dict[str, Any]
-    datasets: dict[str, dict[str, Any]]
-    actuator_models: dict[str, dict[str, Any]]
-    analysis: dict[str, Any]
+class ResolvedExperimentOutputs:
+    benchmark: str
+    analysis: str
 
 
 @dataclass(frozen=True)
-class ExperimentBenchmarkRun:
-    robot: str
-    dataset: str
-    motion: str
-    motion_name: str
-    actuator_model: str
-    seed: int | None
-    actuator_params: str
-    output: str
+class ResolvedExperimentBenchmark:
+    num_envs: int
     headless: bool
+
+
+@dataclass(frozen=True)
+class ResolvedAnalysisPlots:
+    joints: bool
+    end_effector: bool
+    require_end_effector: bool
+
+
+@dataclass(frozen=True)
+class ResolvedExperimentAnalysis:
+    seeds: list[int] | None
+    datasets: AnalysisSelector
+    motions: AnalysisSelector
+    actuator_models: AnalysisSelector
+    plots: ResolvedAnalysisPlots
+    sample_dt: float | None
+
+
+@dataclass(frozen=True)
+class ResolvedExperimentConfig:
+    path: Path
+    robot: str
+    outputs: ResolvedExperimentOutputs
+    seeds: list[int | None]
+    benchmark: ResolvedExperimentBenchmark
+    datasets: dict[str, ExperimentDataset]
+    actuator_models: dict[str, ExperimentActuatorModel]
+    analysis: ResolvedExperimentAnalysis
+
+
+ExperimentBenchmarkRun = ResolvedBenchmarkRunConfig
 
 
 @dataclass(frozen=True)
@@ -69,7 +94,7 @@ class ExperimentAnalysisRun:
     datasets: list[str]
     motions: list[str] | None
     actuator_models: list[str] | None
-    plots: dict[str, bool]
+    plots: ResolvedAnalysisPlots
     sample_dt: float | None
 
 
@@ -80,37 +105,38 @@ def _as_repo_path(value: str | Path) -> Path:
     return repo_root() / path
 
 
-def _path_text(value: str | Path) -> str:
-    return str(value)
-
-
 def _format_path_template(value: str, seed: int | None) -> str:
     if seed is None:
         return value.replace("{seed}", "")
     return value.format(seed=seed)
 
 
-def _normalize_seeds(value: Any) -> list[int | None]:
-    if value is None:
-        return [None]
-    if not isinstance(value, list):
-        raise ExperimentConfigError("seeds must be a list")
-    return [int(seed) for seed in value]
+def _normalize_seeds(value: list[int] | None) -> list[int | None]:
+    return [None] if value is None else list(value)
 
 
-def _normalize_benchmark(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {"num_envs": 1}
-    if not isinstance(value, dict):
-        raise ExperimentConfigError("benchmark must be a mapping")
-    num_envs = int(value.get("num_envs", 1))
-    if num_envs < 1:
-        raise ExperimentConfigError("benchmark.num_envs must be >= 1")
-    headless = bool(value.get("headless", False))
-    return {"num_envs": num_envs, "headless": headless}
+def _resolved_plots(experiment: ExperimentFile) -> ResolvedAnalysisPlots:
+    plots = experiment.analysis.plots
+    return ResolvedAnalysisPlots(
+        joints=True if plots is None or plots.joints is None else plots.joints,
+        end_effector=True if plots is None or plots.end_effector is None else plots.end_effector,
+        require_end_effector=(
+            False
+            if plots is None or plots.require_end_effector is None
+            else plots.require_end_effector
+        ),
+    )
 
 
-def load_experiment_config(path: str | Path) -> ExperimentConfig:
+def _analysis_motion_default(value: object) -> AnalysisSelector:
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    raise ExperimentConfigError("analysis.motion_names default must be a string or list")
+
+
+def load_experiment_config(path: str | Path) -> ResolvedExperimentConfig:
     config_path = Path(path).expanduser()
     if not config_path.is_absolute():
         config_path = repo_root() / config_path
@@ -119,50 +145,70 @@ def load_experiment_config(path: str | Path) -> ExperimentConfig:
         experiment = ExperimentFile.from_dict(data, config_path)
     except ValueError as exc:
         raise ExperimentConfigError(str(exc)) from exc
-    bundle = get_robot(experiment.robot)
-    run_cfg = bundle.run_config
-    benchmark_defaults = run_cfg.get("benchmark", {})
-    analysis_defaults = run_cfg.get("analysis", {})
-    outputs = {
-        "benchmark": benchmark_defaults.get("output_folder", "outputs/sim2real_benchmark"),
-        "analysis": analysis_defaults.get("output_dir", "outputs/sim2real_analysis"),
-        **experiment.outputs.to_dict(),
-    }
-    analysis = {
-        "motions": analysis_defaults.get("motion_names", "*"),
-        "sample_dt": analysis_defaults.get("sample_dt"),
-        **experiment.analysis.to_dict(),
-    }
-    return ExperimentConfig(
+
+    run_config = get_robot(experiment.robot).run_config
+    benchmark_defaults = run_config.benchmark
+    analysis_defaults = run_config.analysis
+    benchmark_output = experiment.outputs.benchmark or str(
+        benchmark_defaults.output_folder or "outputs/sim2real_benchmark"
+    )
+    analysis_output = experiment.outputs.analysis or str(
+        analysis_defaults.output_dir or "outputs/sim2real_analysis"
+    )
+    sample_dt_value = analysis_defaults.sample_dt
+    sample_dt = float(sample_dt_value) if sample_dt_value is not None else None
+    motions = experiment.analysis.motions
+    if motions is None:
+        motions = _analysis_motion_default(
+            analysis_defaults.motion_names
+            if analysis_defaults.motion_names is not None
+            else "*"
+        )
+
+    return ResolvedExperimentConfig(
         path=config_path,
         robot=experiment.robot,
-        outputs={key: str(value) for key, value in outputs.items()},
+        outputs=ResolvedExperimentOutputs(
+            benchmark=benchmark_output,
+            analysis=analysis_output,
+        ),
         seeds=_normalize_seeds(experiment.seeds),
-        benchmark=_normalize_benchmark(experiment.benchmark.to_dict()),
-        datasets={key: value.to_dict() for key, value in experiment.datasets.items()},
-        actuator_models={key: value.to_dict() for key, value in experiment.actuator_models.items()},
-        analysis=analysis,
+        benchmark=ResolvedExperimentBenchmark(
+            num_envs=(
+                experiment.benchmark.num_envs
+                if experiment.benchmark.num_envs is not None
+                else 1
+            ),
+            headless=(
+                experiment.benchmark.headless
+                if experiment.benchmark.headless is not None
+                else False
+            ),
+        ),
+        datasets=experiment.datasets,
+        actuator_models=experiment.actuator_models,
+        analysis=ResolvedExperimentAnalysis(
+            seeds=experiment.analysis.seeds,
+            datasets=experiment.analysis.datasets,
+            motions=motions,
+            actuator_models=experiment.analysis.actuator_models,
+            plots=_resolved_plots(experiment),
+            sample_dt=sample_dt,
+        ),
     )
 
 
-def _is_valid_sage_folder(path: Path) -> bool:
-    try:
-        validate_sage_dir(path)
-    except Exception:
-        return False
-    return True
-
-
-def _discover_motions(dataset_name: str, dataset_cfg: dict[str, Any]) -> list[tuple[str, Path]]:
-    real_root_value = dataset_cfg.get("real_root")
-    if real_root_value is None:
-        raise ExperimentConfigError(f"dataset {dataset_name} must set real_root")
-    real_root = _as_repo_path(str(real_root_value))
-    motions = dataset_cfg.get("motions")
+def _discover_motions(dataset_name: str, dataset_cfg: ExperimentDataset) -> list[tuple[str, Path]]:
+    real_root = _as_repo_path(dataset_cfg.real_root)
+    motions = dataset_cfg.motions
     if motions is None or motions == "*":
         if not real_root.exists():
             raise ExperimentConfigError(f"dataset {dataset_name} real_root does not exist: {real_root}")
-        discovered = [(path.name, path) for path in sorted(real_root.iterdir()) if path.is_dir() and _is_valid_sage_folder(path)]
+        discovered = [
+            (path.name, path)
+            for path in sorted(real_root.iterdir())
+            if _is_valid_sage_motion(path)
+        ]
         if not discovered:
             raise ExperimentConfigError(f"dataset {dataset_name} has no valid SAGE child folders under {real_root}")
         return discovered
@@ -178,10 +224,22 @@ def _discover_motions(dataset_name: str, dataset_cfg: dict[str, Any]) -> list[tu
             motion_path = real_root / motion_name
         if not motion_name:
             raise ExperimentConfigError(f"dataset {dataset_name} has a motion without a name")
-        if not _is_valid_sage_folder(motion_path):
-            raise ExperimentConfigError(f"motion {motion_name} is not a valid SAGE folder: {motion_path}")
+        try:
+            validate_sage_dir(motion_path)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            raise ExperimentConfigError(f"motion {motion_name} is not a valid SAGE folder: {exc}") from exc
         selected.append((motion_name, motion_path))
     return selected
+
+
+def _is_valid_sage_motion(path: Path) -> bool:
+    if not is_sage_motion(path):
+        return False
+    try:
+        validate_sage_dir(path)
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+    return True
 
 
 def _record_dry_run_warning(message: str, warnings: list[str] | None) -> None:
@@ -192,16 +250,16 @@ def _record_dry_run_warning(message: str, warnings: list[str] | None) -> None:
 
 def _resolve_actuator_params(
     actuator_name: str,
-    actuator_cfg: dict[str, Any],
+    actuator_cfg: ExperimentActuatorModel,
     seed: int | None,
     dry_run: bool = False,
     warnings: list[str] | None = None,
 ) -> str:
-    mode = str(actuator_cfg.get("benchmark_params", "fitted"))
+    mode = actuator_cfg.benchmark_params
     if mode not in {"fitted", "initial"}:
         raise ExperimentConfigError(f"actuator_model {actuator_name} benchmark_params must be fitted or initial")
     key = "fitted_params" if mode == "fitted" else "initial_params"
-    value = actuator_cfg.get(key)
+    value = getattr(actuator_cfg, key)
     if value is None:
         raise ExperimentConfigError(f"actuator_model {actuator_name} must set {key}")
     resolved = _as_repo_path(_format_path_template(str(value), seed))
@@ -231,20 +289,20 @@ def _seeded_output_root(base: str, seed: int | None, seeds: list[int | None]) ->
 
 
 def expand_benchmark_runs(
-    config: ExperimentConfig,
+    config: ResolvedExperimentConfig,
     dry_run: bool = False,
     warnings: list[str] | None = None,
 ) -> list[ExperimentBenchmarkRun]:
     runs: list[ExperimentBenchmarkRun] = []
     for seed in config.seeds:
-        output = _seeded_output_root(config.outputs["benchmark"], seed, config.seeds)
+        output = _seeded_output_root(config.outputs.benchmark, seed, config.seeds)
         for dataset_name, dataset_cfg in config.datasets.items():
             motions = _discover_motions(dataset_name, dataset_cfg)
             for actuator_name, actuator_cfg in config.actuator_models.items():
                 actuator_params = _resolve_actuator_params(actuator_name, actuator_cfg, seed, dry_run=dry_run, warnings=warnings)
                 for motion_name, motion_path in motions:
                     runs.append(
-                        ExperimentBenchmarkRun(
+                        ResolvedBenchmarkRunConfig(
                             robot=config.robot,
                             dataset=dataset_name,
                             motion=str(motion_path),
@@ -253,16 +311,19 @@ def expand_benchmark_runs(
                             seed=seed,
                             actuator_params=actuator_params,
                             output=output,
-                            headless=bool(config.benchmark.get("headless", False)),
+                            headless=bool(config.benchmark.headless),
+                            dry_run=dry_run,
                         )
                     )
     return runs
 
 
-def _batch_benchmark_runs(config: ExperimentConfig, runs: list[ExperimentBenchmarkRun]) -> list[ExperimentBenchmarkBatch]:
-    num_envs = int(config.benchmark["num_envs"])
+def _batch_benchmark_runs(config: ResolvedExperimentConfig, runs: list[ExperimentBenchmarkRun]) -> list[ExperimentBenchmarkBatch]:
+    num_envs = int(config.benchmark.num_envs)
     groups: dict[tuple[str, str, str, int | None, str, str, bool], list[ExperimentBenchmarkRun]] = {}
     for run in runs:
+        if run.dataset is None or run.actuator_model is None or run.actuator_params is None:
+            raise ExperimentConfigError("expanded benchmark runs require dataset, actuator model, and parameters")
         key = (run.robot, run.dataset, run.actuator_model, run.seed, run.actuator_params, run.output, run.headless)
         groups.setdefault(key, []).append(run)
 
@@ -290,7 +351,7 @@ def _batch_benchmark_runs(config: ExperimentConfig, runs: list[ExperimentBenchma
 
 
 def expand_benchmark_batches(
-    config: ExperimentConfig,
+    config: ResolvedExperimentConfig,
     dry_run: bool = False,
     warnings: list[str] | None = None,
 ) -> list[ExperimentBenchmarkBatch]:
@@ -298,24 +359,16 @@ def expand_benchmark_batches(
 
 
 def _benchmark_command_for_run(run: ExperimentBenchmarkRun, dry_run: bool) -> list[str]:
-    return build_benchmark_command(BenchmarkRunConfig(
-        robot=run.robot,
-        motion=run.motion,
-        output=run.output,
-        dry_run=dry_run,
-        headless=run.headless,
-        motion_name=run.motion_name,
-        actuator_params=run.actuator_params,
-        dataset=run.dataset,
-        actuator_model=run.actuator_model,
-        seed=run.seed,
-    )).command
+    return build_resolved_benchmark_command(replace(run, dry_run=dry_run)).command
 
 
-def build_experiment_benchmark_plan(config_path: str | Path, dry_run: bool = True) -> CommandPlan:
-    config = load_experiment_config(config_path)
-    warnings: list[str] = []
-    runs = expand_benchmark_runs(config, dry_run=dry_run, warnings=warnings)
+def _build_experiment_benchmark_plan(
+    config_path: str | Path,
+    config: ResolvedExperimentConfig,
+    runs: list[ExperimentBenchmarkRun],
+    warnings: list[str],
+    dry_run: bool,
+) -> CommandPlan:
     batches = _batch_benchmark_runs(config, runs)
     command = ["anchor-bench", "experiment", "benchmark", str(Path(config_path))]
     if dry_run:
@@ -331,8 +384,8 @@ def build_experiment_benchmark_plan(config_path: str | Path, dry_run: bool = Tru
             "datasets": sorted(config.datasets),
             "actuator_models": sorted(config.actuator_models),
             "seeds": [seed for seed in config.seeds if seed is not None],
-            "benchmark_num_envs": config.benchmark["num_envs"],
-            "benchmark_headless": config.benchmark.get("headless", False),
+            "benchmark_num_envs": config.benchmark.num_envs,
+            "benchmark_headless": config.benchmark.headless,
             "total_runs": len(runs),
             "batch_count": len(batches),
             "batch_sizes": [batch.batch_size for batch in batches],
@@ -341,12 +394,21 @@ def build_experiment_benchmark_plan(config_path: str | Path, dry_run: bool = Tru
     )
 
 
+def build_experiment_benchmark_plan(config_path: str | Path, dry_run: bool = True) -> CommandPlan:
+    config = load_experiment_config(config_path)
+    warnings: list[str] = []
+    runs = expand_benchmark_runs(config, dry_run=dry_run, warnings=warnings)
+    return _build_experiment_benchmark_plan(config_path, config, runs, warnings, dry_run)
+
+
 def run_experiment_benchmark(config_path: str | Path, dry_run: bool = True) -> CommandPlan:
     config = load_experiment_config(config_path)
-    plan = build_experiment_benchmark_plan(config_path, dry_run=dry_run)
+    warnings: list[str] = []
+    runs = expand_benchmark_runs(config, dry_run=dry_run, warnings=warnings)
+    plan = _build_experiment_benchmark_plan(config_path, config, runs, warnings, dry_run)
     if dry_run:
         return plan
-    batches = expand_benchmark_batches(config, dry_run=False)
+    batches = _batch_benchmark_runs(config, runs)
     from anchor_bench.benchmark.newton_runner import BenchmarkMotion, run_benchmark_batch
 
     for batch in batches:
@@ -366,7 +428,7 @@ def run_experiment_benchmark(config_path: str | Path, dry_run: bool = True) -> C
     return plan
 
 
-def _selected_list(value: Any, names: list[str]) -> list[str] | None:
+def _selected_list(value: AnalysisSelector, names: list[str]) -> list[str] | None:
     if value is None or value == "*":
         return None
     if not isinstance(value, list):
@@ -377,29 +439,23 @@ def _selected_list(value: Any, names: list[str]) -> list[str] | None:
     return [str(item) for item in value]
 
 
-def _analysis_seeds(config: ExperimentConfig) -> list[int | None]:
-    analysis_seeds = config.analysis.get("seeds")
+def _analysis_seeds(config: ResolvedExperimentConfig) -> list[int | None]:
+    analysis_seeds = config.analysis.seeds
     return _normalize_seeds(analysis_seeds) if analysis_seeds is not None else config.seeds
 
 
-def expand_analysis_runs(config: ExperimentConfig) -> list[ExperimentAnalysisRun]:
+def expand_analysis_runs(config: ResolvedExperimentConfig) -> list[ExperimentAnalysisRun]:
     dataset_names = sorted(config.datasets)
     actuator_names = sorted(config.actuator_models)
-    selected_datasets = _selected_list(config.analysis.get("datasets"), dataset_names) or dataset_names
-    selected_actuators = _selected_list(config.analysis.get("actuator_models"), actuator_names)
-    plots = {
-        "joints": True,
-        "end_effector": True,
-        "require_end_effector": False,
-        **(config.analysis.get("plots") or {}),
-    }
-    sample_dt_value = config.analysis.get("sample_dt")
-    sample_dt = float(sample_dt_value) if sample_dt_value is not None else None
+    selected_datasets = _selected_list(config.analysis.datasets, dataset_names) or dataset_names
+    selected_actuators = _selected_list(config.analysis.actuator_models, actuator_names)
+    plots = config.analysis.plots
+    sample_dt = config.analysis.sample_dt
 
     seeds = _analysis_seeds(config)
     for dataset_name in selected_datasets:
         _discover_motions(dataset_name, config.datasets[dataset_name])
-    motion_selector = config.analysis.get("motions", "*")
+    motion_selector = config.analysis.motions
     if motion_selector in (None, "*"):
         motions = None
     elif isinstance(motion_selector, list):
@@ -413,13 +469,13 @@ def expand_analysis_runs(config: ExperimentConfig) -> list[ExperimentAnalysisRun
     return [
         ExperimentAnalysisRun(
             robot=config.robot,
-            result_folder=str(_as_repo_path(config.outputs["benchmark"])),
-            output=str(_as_repo_path(config.outputs["analysis"])),
+            result_folder=str(_as_repo_path(config.outputs.benchmark)),
+            output=str(_as_repo_path(config.outputs.analysis)),
             seeds=seeds,
             datasets=selected_datasets,
             motions=motions,
             actuator_models=selected_actuators,
-            plots={key: bool(value) for key, value in plots.items()},
+            plots=plots,
             sample_dt=sample_dt,
         )
     ]
@@ -440,14 +496,17 @@ def _analysis_command_for_run(run: ExperimentAnalysisRun, dry_run: bool) -> list
         command.append("--dry-run")
     for motion in run.motions or []:
         command.extend(["--motion", motion])
-    if run.plots.get("require_end_effector", False):
+    if run.plots.require_end_effector:
         command.append("--require-end-effector")
     return command
 
 
-def build_experiment_analysis_plan(config_path: str | Path, dry_run: bool = True) -> CommandPlan:
-    config = load_experiment_config(config_path)
-    runs = expand_analysis_runs(config)
+def _build_experiment_analysis_plan(
+    config_path: str | Path,
+    config: ResolvedExperimentConfig,
+    runs: list[ExperimentAnalysisRun],
+    dry_run: bool,
+) -> CommandPlan:
     command = ["anchor-bench", "experiment", "analyze", str(Path(config_path))]
     if dry_run:
         command.append("--dry-run")
@@ -467,26 +526,31 @@ def build_experiment_analysis_plan(config_path: str | Path, dry_run: bool = True
     )
 
 
+def build_experiment_analysis_plan(config_path: str | Path, dry_run: bool = True) -> CommandPlan:
+    config = load_experiment_config(config_path)
+    runs = expand_analysis_runs(config)
+    return _build_experiment_analysis_plan(config_path, config, runs, dry_run)
+
+
 def run_experiment_analysis(config_path: str | Path, dry_run: bool = True) -> CommandPlan:
     config = load_experiment_config(config_path)
     runs = expand_analysis_runs(config)
-    plan = build_experiment_analysis_plan(config_path, dry_run=dry_run)
+    plan = _build_experiment_analysis_plan(config_path, config, runs, dry_run)
     if dry_run:
         return plan
-    if config.robot != "so101":
-        raise ValueError("Full analysis currently supports only robot=so101")
-    from anchor_bench.analysis.so101_analysis import run_so101_analysis
+    from anchor_bench.analysis.runtime import run_robot_analysis
 
     for run in runs:
-        run_so101_analysis(
+        run_robot_analysis(
+            config.robot,
             result_folder=run.result_folder,
             output=run.output,
             datasets=run.datasets,
             motions=run.motions,
             actuator_models=run.actuator_models,
-            make_joint_plots=run.plots.get("joints", True),
-            make_end_effector_plots=run.plots.get("end_effector", True),
-            require_end_effector=run.plots.get("require_end_effector", False),
+            make_joint_plots=run.plots.joints,
+            make_end_effector_plots=run.plots.end_effector,
+            require_end_effector=run.plots.require_end_effector,
             seeds=[seed for seed in run.seeds if seed is not None],
             sample_dt=run.sample_dt,
         )

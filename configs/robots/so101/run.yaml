@@ -1,4 +1,3 @@
-
 simulation:
   physics_freq: 500
   control_freq: 500
@@ -7,12 +6,12 @@ simulation:
   solver_iterations: 10
   line_search_iterations: 10
 benchmark:
-  dataset: example
+  dataset: so101_arm_50motion
   fix_root: true
   buffer_time: 2.0
   real_init_pose_sync: true
-  motion_files: inputs/datasets/so101/custom_figure8_with_camera
-  motion_name: custom_figure8_with_camera
+  motion_files: inputs/datasets/so101/so101_arm_50motion/train/figure-eight
+  motion_name: figure-eight
   output_folder: outputs/sim2real_benchmark
 analysis:
   output_dir: outputs/sim2real_analysis
@@ -20,7 +19,7 @@ analysis:
   motion_names: "*"
 sysid:
   output_dir: outputs/sysid/so101/full
-  real_data_dir: inputs/datasets/so101/custom_figure8_with_camera
+  real_data_dir: inputs/datasets/so101/so101_arm_50motion/train/figure-eight
   joints: full
   num_envs: 64
   buffer_time: 2.0
@@ -31,7 +30,7 @@ sysid:
 
 training:
   model: gru
-  real_data_dir: inputs/datasets/so101/custom_figure8_with_camera
+  real_data_dir: inputs/datasets/so101/so101_arm_50motion/train
   output_dir: outputs/training/so101
   joint_type: full
   input_columns: [position, position_error, velocity]

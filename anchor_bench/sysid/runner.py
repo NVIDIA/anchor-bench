@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from anchor_bench.core.plan import CommandPlan
-from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text
+from anchor_bench.core.run_config import config_source, resolve_repo_path_text, resolve_required_text
 from anchor_bench.core.schemas import CMAESConfig, SysIdRunConfig
 from anchor_bench.core.versions import load_external_versions
 from anchor_bench.robots.registry import get_robot
@@ -22,26 +22,33 @@ class ResolvedSysIdRunConfig:
     max_trajectory_len: int | None
     seed: int | None
     config_sources: dict[str, str]
+    actuator_config: str
 
 
 def resolve_sysid_run_config(config: SysIdRunConfig) -> ResolvedSysIdRunConfig:
     bundle = get_robot(config.robot)
-    sysid_cfg = bundle.run_config.get("sysid", {})
-    cmaes_cfg = CMAESConfig.from_dict(sysid_cfg.get("cmaes"), f"{bundle.paths.run}.sysid.cmaes")
-    data = resolve_required_text(config.data, sysid_cfg.get("real_data_dir"), None, "--data")
-    output = resolve_required_text(config.output, sysid_cfg.get("output_dir"), f"outputs/sysid/{config.robot}", "--output")
-    num_envs = sysid_cfg.get("num_envs") if config.num_envs is None else config.num_envs
+    sysid_cfg = bundle.run_config.sysid
+    cmaes_cfg = sysid_cfg.cmaes or CMAESConfig()
+    data = resolve_required_text(config.data, sysid_cfg.real_data_dir, None, "--data")
+    output = resolve_required_text(config.output, sysid_cfg.output_dir, f"outputs/sysid/{config.robot}", "--output")
+    num_envs = sysid_cfg.num_envs if config.num_envs is None else config.num_envs
     max_iter = cmaes_cfg.max_iterations if config.max_iter is None else config.max_iter
     config_sources = {
-        "real_data_dir": "cli" if config.data is not None else "run.yaml",
-        "output_dir": "cli" if config.output is not None else ("run.yaml" if sysid_cfg.get("output_dir") is not None else "fallback"),
-        "num_envs": "cli" if config.num_envs is not None else ("run.yaml" if sysid_cfg.get("num_envs") is not None else "fallback"),
-        "max_iter": "cli" if config.max_iter is not None else "run.yaml.sysid.cmaes.max_iterations",
-        "max_trajectory_len": "cli" if config.max_trajectory_len is not None else "unset",
-        "seed": "cli" if config.seed is not None else "default",
-        "joints": "run.yaml" if sysid_cfg.get("joints") is not None else "fallback",
-        "buffer_time": "run.yaml" if sysid_cfg.get("buffer_time") is not None else "fallback",
-        "cmaes": "run.yaml" if sysid_cfg.get("cmaes") is not None else "fallback",
+        "real_data_dir": config_source(config.data, sysid_cfg.real_data_dir),
+        "output_dir": config_source(config.output, sysid_cfg.output_dir),
+        "num_envs": config_source(config.num_envs, sysid_cfg.num_envs),
+        "max_iter": config_source(
+            config.max_iter,
+            cmaes_cfg.max_iterations,
+            configured_label="run.yaml.sysid.cmaes.max_iterations",
+        ),
+        "max_trajectory_len": config_source(
+            config.max_trajectory_len, None, fallback_label="unset"
+        ),
+        "seed": config_source(config.seed, None, fallback_label="default"),
+        "joints": config_source(None, sysid_cfg.joints),
+        "buffer_time": config_source(None, sysid_cfg.buffer_time),
+        "cmaes": config_source(None, sysid_cfg.cmaes),
     }
     return ResolvedSysIdRunConfig(
         robot=config.robot,
@@ -54,12 +61,11 @@ def resolve_sysid_run_config(config: SysIdRunConfig) -> ResolvedSysIdRunConfig:
         max_trajectory_len=resolve_optional_positive_int("max_trajectory_len", config.max_trajectory_len),
         seed=config.seed,
         config_sources=config_sources,
+        actuator_config=bundle.paths.actuators.name,
     )
 
 
-def build_sysid_command(config: SysIdRunConfig) -> CommandPlan:
-    bundle = get_robot(config.robot)
-    resolved = resolve_sysid_run_config(config)
+def build_resolved_sysid_command(resolved: ResolvedSysIdRunConfig) -> CommandPlan:
     versions = load_external_versions()
     command = [
         "anchor-bench",
@@ -89,28 +95,26 @@ def build_sysid_command(config: SysIdRunConfig) -> CommandPlan:
         command=command,
         dry_run=resolved.dry_run,
         notes=[
-            f"uses {bundle.paths.actuators.relative_to(bundle.paths.config_dir)} with Newton 1.2 native actuator components",
+            f"uses {resolved.actuator_config} with Newton {versions.newton_version} native actuator components",
             f"requires newton {versions.newton_version} and Isaac Lab {versions.isaac_lab_branch}@{versions.isaac_lab_commit}",
         ],
     )
 
 
-def run_sysid(config: SysIdRunConfig) -> CommandPlan:
-    plan = build_sysid_command(config)
-    resolved = resolve_sysid_run_config(config)
+def run_resolved_sysid(resolved: ResolvedSysIdRunConfig) -> CommandPlan:
+    plan = build_resolved_sysid_command(resolved)
     if resolved.dry_run:
         return plan
     from anchor_bench.runtime.environment import require_full_runtime
 
     require_full_runtime(("isaaclab", "isaaclab_newton", "newton"), workflow="sysid")
-    if resolved.robot != "so101":
-        raise ValueError("Full runtime execution currently supports only robot=so101")
     from anchor_bench.runtime.assets import resolve_runtime_asset
 
     resolve_runtime_asset(get_robot(resolved.robot))
-    from anchor_bench.sysid.so101_runtime import run_so101_sysid
+    from anchor_bench.sysid.runtime import run_robot_sysid
 
-    run_so101_sysid(
+    run_robot_sysid(
+        resolved.robot,
         data=resolved.data,
         output=resolved.output,
         headless=resolved.headless,

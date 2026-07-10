@@ -8,25 +8,39 @@ def resolve_fix_root_override(configured: bool, asset_fixed_base: bool) -> bool 
     """Only override the USD root mode when configuration requests a real change."""
     return None if configured == asset_fixed_base else configured
 
-
-def so101_joint_names(bundle) -> list[str]:
+def robot_joint_names(bundle: Any) -> list[str]:
     joint_names = list(bundle.spec.joint_names)
     if not joint_names:
-        raise ValueError("SO-101 robot config must define joint_names")
+        raise ValueError(f"robot {bundle.spec.name!r} config must define joint_names")
     return joint_names
 
 
-def to_torch(value, wp):
-    return wp.to_torch(value) if isinstance(value, wp.array) else value
 
 
-def _joint_ids_to_list(joint_ids) -> list[int]:
+def to_torch(value: Any, wp: Any) -> Any:
+    """Return a torch tensor from supported Warp, Isaac Lab, or Torch arrays."""
+    if isinstance(value, wp.array):
+        return wp.to_torch(value)
+    import torch  # noqa: PLC0415 - runtime-only; callers already run in the full Isaac runtime
+
+    if isinstance(value, torch.Tensor):
+        return value
+    proxy_tensor = getattr(value, "torch", None)
+    if isinstance(proxy_tensor, torch.Tensor):
+        return proxy_tensor
+    raise TypeError(
+        "to_torch expected a warp.array, Isaac Lab ProxyArray, or torch.Tensor, "
+        f"got {type(value).__name__}"
+    )
+
+
+def _joint_ids_to_list(joint_ids: Any) -> list[int]:
     if hasattr(joint_ids, "detach"):
         return [int(value) for value in joint_ids.detach().cpu().tolist()]
     return [int(value) for value in joint_ids]
 
 
-def _get_newton_model_for_viscous_friction():
+def _get_newton_model_for_viscous_friction() -> tuple[Any, Any]:
     try:
         from isaaclab_newton.physics import NewtonManager
     except Exception as exc:
@@ -45,7 +59,7 @@ def _get_newton_model_for_viscous_friction():
     return NewtonManager, newton_model
 
 
-def _write_viscous_friction(robot, values, joint_ids) -> None:
+def _write_viscous_friction(robot: Any, values: Any, joint_ids: Any) -> None:
     NewtonManager, newton_model = _get_newton_model_for_viscous_friction()
     try:
         from newton.solvers import SolverNotifyFlags
@@ -69,7 +83,9 @@ def _write_viscous_friction(robot, values, joint_ids) -> None:
     NewtonManager.add_model_change(SolverNotifyFlags.JOINT_DOF_PROPERTIES)
 
 
-def _matrix_from_param_map(actuator_params: dict[str, Any], prop: str, joint_names: list[str], num_envs: int, torch, device):
+def _matrix_from_param_map(
+    actuator_params: dict[str, Any], prop: str, joint_names: list[str], num_envs: int, torch: Any, device: Any
+) -> Any:
     mapping = actuator_params.get(prop)
     if mapping is None:
         return None
@@ -80,17 +96,32 @@ def _matrix_from_param_map(actuator_params: dict[str, Any], prop: str, joint_nam
     return torch.tensor(values, dtype=torch.float32, device=device)
 
 
-def apply_static_actuator_params(robot, actuator_params: dict[str, Any], joint_ids, env_ids, torch, joint_names: list[str] | None = None) -> None:
+def apply_static_actuator_params(
+    robot: Any,
+    actuator_params: dict[str, Any],
+    joint_ids: Any,
+    env_ids: Any,
+    torch: Any,
+    joint_names: list[str] | None = None,
+) -> None:
     num_envs = int(env_ids.numel())
     if joint_names is None:
         ids = _joint_ids_to_list(joint_ids)
         joint_names = [robot.joint_names[joint_id] for joint_id in ids]
     static_writers = {
-        "armature": lambda vals: robot.write_joint_armature_to_sim_index(armature=vals, joint_ids=joint_ids, env_ids=env_ids),
-        "dry_friction": lambda vals: robot.write_joint_friction_coefficient_to_sim_index(joint_friction_coeff=vals, joint_ids=joint_ids, env_ids=env_ids),
+        "armature": lambda vals: robot.write_joint_armature_to_sim_index(
+            armature=vals, joint_ids=joint_ids, env_ids=env_ids
+        ),
+        "dry_friction": lambda vals: robot.write_joint_friction_coefficient_to_sim_index(
+            joint_friction_coeff=vals, joint_ids=joint_ids, env_ids=env_ids
+        ),
         "viscous_friction": lambda vals: _write_viscous_friction(robot, vals, joint_ids),
-        "stiffness": lambda vals: robot.write_joint_stiffness_to_sim_index(stiffness=vals, joint_ids=joint_ids, env_ids=env_ids),
-        "damping": lambda vals: robot.write_joint_damping_to_sim_index(damping=vals, joint_ids=joint_ids, env_ids=env_ids),
+        "stiffness": lambda vals: robot.write_joint_stiffness_to_sim_index(
+            stiffness=vals, joint_ids=joint_ids, env_ids=env_ids
+        ),
+        "damping": lambda vals: robot.write_joint_damping_to_sim_index(
+            damping=vals, joint_ids=joint_ids, env_ids=env_ids
+        ),
     }
     for prop, writer in static_writers.items():
         values = _matrix_from_param_map(actuator_params, prop, joint_names, num_envs, torch, robot.device)
@@ -131,7 +162,7 @@ def build_scene_class(
     implicit_actuator_kwargs = _isaac_implicit_actuator_kwargs(actuator_params)
 
     @configclass
-    class So101SysidSceneCfg(InteractiveSceneCfg):
+    class RobotRuntimeSceneCfg(InteractiveSceneCfg):
         ground = AssetBaseCfg(
             prim_path="/World/ground",
             spawn=sim_utils.GroundPlaneCfg(size=(100.0, 100.0)),
@@ -150,9 +181,7 @@ def build_scene_class(
                 joint_pos={name: 0.0 for name in joint_names},
                 joint_vel={".*": 0.0},
             ),
-            actuators={
-                "all": ImplicitActuatorCfg(**implicit_actuator_kwargs)
-            },
+            actuators={"all": ImplicitActuatorCfg(**implicit_actuator_kwargs)},
         )
 
         dome_light = AssetBaseCfg(
@@ -160,4 +189,4 @@ def build_scene_class(
             spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
         )
 
-    return So101SysidSceneCfg
+    return RobotRuntimeSceneCfg

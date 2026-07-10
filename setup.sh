@@ -62,7 +62,7 @@ Docker-first Anchor Bench setup.
 Usage: ./setup.sh [--kitless|--full|--assets|--check|--shell|--help]
 
 --kitless  Build anchor-bench:kitless with host-safe CLI/test dependencies.
---full     Build anchor-bench:full with Isaac Sim 6.0.0.0 and pinned Isaac Lab.
+--full     Build anchor-bench:full with the pinned Isaac Sim, Newton, and Isaac Lab runtime.
 --assets   Create host asset/output directories only.
 --check    Verify Docker tooling, then run check_environment.py inside kitless.
 --shell    Open/reuse the persistent full Isaac Sim/Newton container with this repo mounted.

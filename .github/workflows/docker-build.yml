@@ -48,7 +48,7 @@ jobs:
             -w /workspace/anchor-bench \
             -e ANCHOR_BENCH_ASSET_DIR=/workspace/anchor-bench/assets/robots \
             anchor-bench:kitless \
-            python3 scripts/run_unit_tests.py
+            python3 -m pytest
 
   full:
     name: Build full image and run all tests
@@ -82,4 +82,4 @@ jobs:
             -v "${{ github.workspace }}:/workspace/anchor-bench" \
             -w /workspace/anchor-bench \
             anchor-bench:full \
-            python3 scripts/run_unit_tests.py -v
+            python3 -m pytest -v

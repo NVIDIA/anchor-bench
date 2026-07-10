@@ -31,7 +31,7 @@ COPY versions ./versions
 
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install -e ".[dev]" \
-    && python -m pip install "${NEWTON_PACKAGE}==${NEWTON_VERSION}" cmaes matplotlib optuna pandas pyarrow tqdm
+    && python -m pip install "${NEWTON_PACKAGE}==${NEWTON_VERSION}" cmaes matplotlib optuna pandas pyarrow "huggingface_hub>=0.34"
 
 COPY docker/entrypoint.sh /usr/local/bin/anchor-bench-entrypoint
 RUN chmod +x /usr/local/bin/anchor-bench-entrypoint \
@@ -91,7 +91,7 @@ RUN python -m pip install \
       scipy \
       pandas \
       pyarrow \
-      tqdm \
+      "huggingface_hub>=0.34" \
       matplotlib \
     && python -m pip install --force-reinstall "${NEWTON_PACKAGE}==${NEWTON_VERSION}" \
     && git clone --branch "${ISAACLAB_BRANCH}" --single-branch "${ISAACLAB_REPO}" "${ISAACLAB_DIR}" \

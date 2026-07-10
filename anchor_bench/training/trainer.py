@@ -9,7 +9,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from anchor_bench.training.data import EPSILON_STD, write_stats_json
+from anchor_bench.training.data import EPSILON_STD, TrainingSource, load_training_table, write_stats_json
 from anchor_bench.training.export import export_gru_checkpoint
 
 
@@ -36,8 +36,8 @@ class TrainingHyperParameters:
 class TrainingJob:
     model: str
     joint_type: str
-    train_csvs: Sequence[Path]
-    val_csvs: Sequence[Path]
+    train_sources: Sequence[TrainingSource]
+    val_sources: Sequence[TrainingSource]
     output_dir: Path
     input_columns: list[str]
     target_columns: list[str]
@@ -72,50 +72,47 @@ def _import_torch():
     return torch
 
 
-def _import_pandas():
-    try:
-        import pandas as pd
-    except Exception as exc:  # pragma: no cover - environment-specific
-        raise RuntimeError(
-            "pandas is required for train-actuator execution. Run in the full container "
-            "or install pandas in the active environment."
-        ) from exc
-    return pd
-
-
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "joint"
 
 
 def _load_sequences(job: TrainingJob) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
-    pd = _import_pandas()
-
-    def load_one(path: Path) -> tuple[np.ndarray, np.ndarray]:
-        frame = pd.read_csv(path)
-        if "solver_pd" in job.input_columns and "solver_pd" not in frame.columns:
-            physics = job.residual_physics
-            if physics is None:
-                raise ValueError("solver_pd input requires residual physics parameters")
-            error = frame["position_error"].astype("float32").to_numpy()
-            velocity = frame["velocity"].astype("float32").to_numpy()
-            frame["solver_pd"] = (physics.stiffness * error - physics.damping * velocity).astype("float32")
-        features = frame[job.input_columns].astype("float32").to_numpy()
+    def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
+        required = (set(job.input_columns) - {"solver_pd"}) | set(job.source_target_columns)
+        if "solver_pd" in job.input_columns and job.model != "hybrid_residual":
+            required.add("solver_pd")
         if job.model == "hybrid_residual":
-            physics = job.residual_physics or ResidualPhysics()
-            error = frame["position_error"].astype("float32").to_numpy()
-            velocity = frame["velocity"].astype("float32").to_numpy()
-            torque = frame[job.source_target_columns[0]].astype("float32").to_numpy()
-            solver_pd = physics.stiffness * error - physics.damping * velocity
-            friction = physics.dry_friction * np.sign(velocity) + physics.viscous_friction * velocity
-            target = (torque - solver_pd - friction).astype("float32")[:, None]
+            required.update(("position_error", "velocity"))
+        table = load_training_table(
+            source,
+            joint=job.joint_type,
+            columns=sorted(required),
+        )
+        physics = job.residual_physics
+        solver_pd: np.ndarray | None = table.get("solver_pd")
+        if job.model == "hybrid_residual":
+            if physics is None:
+                raise ValueError("hybrid residual training requires residual physics parameters")
+            solver_pd = physics.stiffness * table["position_error"] - physics.damping * table["velocity"]
+
+        feature_columns = [
+            solver_pd if column == "solver_pd" else table[column]
+            for column in job.input_columns
+        ]
+        features = np.column_stack(feature_columns).astype(np.float32)
+        if job.model == "hybrid_residual":
+            assert solver_pd is not None
+            torque = table[job.source_target_columns[0]]
+            friction = physics.dry_friction * np.sign(table["velocity"]) + physics.viscous_friction * table["velocity"]
+            target = (torque - solver_pd - friction).astype(np.float32)[:, None]
         else:
-            target = frame[job.target_columns].astype("float32").to_numpy()
+            target = np.column_stack([table[column] for column in job.source_target_columns]).astype(np.float32)
         if len(features) == 0:
-            raise ValueError(f"CSV file has no rows: {path}")
+            raise ValueError(f"training source has no rows: {source.path}")
         return features, target
 
-    train = [load_one(Path(path)) for path in job.train_csvs]
-    val = [load_one(Path(path)) for path in job.val_csvs]
+    train = [load_one(source) for source in job.train_sources]
+    val = [load_one(source) for source in job.val_sources]
     return train, val
 
 
@@ -340,8 +337,8 @@ def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
             "model": job.model,
             "joint_type": job.joint_type,
             "data": {
-                "train_csv_count": len(job.train_csvs),
-                "val_csv_count": len(job.val_csvs),
+                "train_source_count": len(job.train_sources),
+                "val_source_count": len(job.val_sources),
                 "n_streams": job.n_streams,
             },
         },
