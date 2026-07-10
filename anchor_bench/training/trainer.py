@@ -21,13 +21,13 @@ from anchor_bench.training.export import export_gru_checkpoint
 
 
 @dataclass(frozen=True)
-class ResidualPhysics:
-    """Slot-wise analytical baseline used by solver-PD and residual targets."""
+class PhysicsBaselines:
+    """One PD vector plus optional output-domain friction."""
 
-    stiffness: float | tuple[float, ...] = 0.0
-    damping: float | tuple[float, ...] = 0.0
-    dry_friction: float | tuple[float, ...] = 0.0
-    viscous_friction: float | tuple[float, ...] = 0.0
+    kp: float | tuple[float, ...]
+    kd: float | tuple[float, ...]
+    dry_friction: float | tuple[float, ...] | None = None
+    viscous_friction: float | tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,7 @@ class TrainingJob:
     skip_optuna: bool
     n_streams: int
     noise_std: float
-    residual_physics: ResidualPhysics | None = None
+    physics_baselines: PhysicsBaselines | None = None
     dynamic_bias_provider: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -91,9 +91,13 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "joint"
 
 
-def _physics_vector(value: float | tuple[float, ...], width: int, name: str) -> np.ndarray:
+def _physics_vector(
+    value: float | tuple[float, ...] | None, width: int, name: str
+) -> np.ndarray:
     """Broadcast a scalar baseline or validate one value per model slot."""
 
+    if value is None:
+        raise ValueError(f"{name} is required")
     array = np.asarray(value, dtype=np.float32)
     if array.ndim == 0:
         array = np.full(width, float(array), dtype=np.float32)
@@ -187,28 +191,38 @@ def _load_sequences(
         if needs_velocity and episode.velocity is None:
             raise ValueError(f"{source.path} is missing measured velocity")
 
-        physics = job.residual_physics
+        baselines = job.physics_baselines
+        if baselines is None and (
+            job.model == "hybrid_residual" or "solver_pd" in job.input_columns
+        ):
+            raise ValueError("PD features and residual targets require physics baselines")
         solver_pd: np.ndarray | None = None
-        if job.model == "hybrid_residual" or "solver_pd" in job.input_columns:
-            if physics is None:
-                raise ValueError("residual and solver_pd training require baseline physics")
-            assert episode.velocity is not None
-            kp = _physics_vector(physics.stiffness, input_width, "stiffness")
-            kd = _physics_vector(physics.damping, input_width, "damping")
+        if "solver_pd" in job.input_columns:
+            assert baselines is not None and episode.velocity is not None
+            kp = _physics_vector(baselines.kp, input_width, "kp")
+            kd = _physics_vector(baselines.kd, input_width, "kd")
             solver_pd = episode.position_error * kp - episode.velocity * kd
 
         target = np.asarray(episode.torque, dtype=np.float32)
         if job.model == "hybrid_residual":
-            assert physics is not None and solver_pd is not None and episode.velocity is not None
+            assert baselines is not None and episode.velocity is not None
             output_indices = np.asarray(
                 [mapping.input_joints.index(name) for name in mapping.output_joints],
                 dtype=int,
             )
             velocity = episode.velocity[:, output_indices]
-            dry = _physics_vector(physics.dry_friction, output_width, "dry_friction")
-            viscous = _physics_vector(physics.viscous_friction, output_width, "viscous_friction")
+            if solver_pd is None:
+                kp = _physics_vector(baselines.kp, output_width, "kp")
+                kd = _physics_vector(baselines.kd, output_width, "kd")
+                output_pd = episode.position_error[:, output_indices] * kp - velocity * kd
+            else:
+                output_pd = solver_pd[:, output_indices]
+            dry = _physics_vector(baselines.dry_friction, output_width, "dry_friction")
+            viscous = _physics_vector(
+                baselines.viscous_friction, output_width, "viscous_friction"
+            )
             friction = dry * np.sign(velocity) + viscous * velocity
-            target = target - solver_pd[:, output_indices] - friction
+            target = target - output_pd - friction
 
         previous = np.zeros_like(target)
         previous[1:] = target[:-1]
@@ -423,21 +437,27 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
             "value_space": "residual_torque" if target == "torque_residual" else "physical_torque",
         }
 
-    physics = job.residual_physics
+    baselines = job.physics_baselines
     if target == "torque_residual" or "solver_pd" in job.input_columns:
-        if physics is None:
-            raise ValueError("residual and solver_pd models require baseline physics")
+        if baselines is None:
+            raise ValueError("PD features and residual targets require physics baselines")
+        pd_is_input = "solver_pd" in job.input_columns
+        pd_width = input_width if pd_is_input else output_width
         metadata["pd_baseline"] = {
-            "kp": _scalar_or_list(_physics_vector(physics.stiffness, input_width, "stiffness")),
-            "kd": _scalar_or_list(_physics_vector(physics.damping, input_width, "damping")),
+            "domain": "input_joints" if pd_is_input else "output_joints",
+            "kp": _scalar_or_list(_physics_vector(baselines.kp, pd_width, "kp")),
+            "kd": _scalar_or_list(_physics_vector(baselines.kd, pd_width, "kd")),
             "velocity_target": "zero",
         }
     if target == "torque_residual":
-        assert physics is not None
+        assert baselines is not None
         metadata["friction_baseline"] = {
-            "dry": _scalar_or_list(_physics_vector(physics.dry_friction, output_width, "dry_friction")),
+            "domain": "output_joints",
+            "dry": _scalar_or_list(
+                _physics_vector(baselines.dry_friction, output_width, "dry_friction")
+            ),
             "viscous": _scalar_or_list(
-                _physics_vector(physics.viscous_friction, output_width, "viscous_friction")
+                _physics_vector(baselines.viscous_friction, output_width, "viscous_friction")
             ),
         }
     return metadata

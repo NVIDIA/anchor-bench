@@ -106,14 +106,15 @@ Use `--model gru` for full-torque GRU prediction from
 when the native PD/friction actuator remains active and the GRU should
 learn residual torque. `dynamic_bias` derives MuJoCo `qfrc_bias` from the
 recorded state without stepping. `previous_torque` is the previous final
-training target, initialized to zero for every episode and mapping. Shared
-mappings using `solver_pd` or residual targets must have identical baseline
-values by model slot; otherwise train separate artifacts.
+training target, initialized to zero for every episode and mapping. The single PD
+baseline follows `input_joints` when `solver_pd` is enabled and
+`output_joints` for residual-only models; friction always follows `output_joints`.
+Shared mappings must have identical values by model slot.
 
 Training writes a raw checkpoint, stats JSON, and TorchScript network under
 `outputs/training/<robot>/...`. The TorchScript `.pt` embeds
 `metadata.json` with mappings, feature order and domains, dimensions,
-normalization, the median recorded state timestep, target semantics, and
+normalization, the configured control timestep, target semantics, and
 derivation/baseline metadata.
 Schema-v3 artifacts target the future Newton `GRUActuator`; the legacy Anchor
 Isaac Lab GRU shim is not a supported consumer.

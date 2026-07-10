@@ -204,12 +204,13 @@ class TrainingDataTests(unittest.TestCase):
         from anchor_bench.core.schemas import TrainingJointMapping
         from anchor_bench.training.data import TrainingMapping, resolve_training_columns
 
-        columns = resolve_training_columns(
-            ["position", "position_error", "velocity", "torque"],
-            model="gru",
-            input_columns=["dynamic_bias", "previous_torque"],
-        )
-        self.assertEqual(["dynamic_bias", "previous_torque"], columns.input_columns)
+        for model in ("gru", "hybrid_residual"):
+            columns = resolve_training_columns(
+                ["position", "position_error", "velocity", "torque"],
+                model=model,
+                input_columns=["dynamic_bias", "previous_torque"],
+            )
+            self.assertEqual(["dynamic_bias", "previous_torque"], columns.input_columns)
 
         with self.assertRaisesRegex(ValueError, "subset"):
             TrainingMapping(("JointA",), ("JointB",))
@@ -250,7 +251,7 @@ class TrainingTensorTests(unittest.TestCase):
             skip_optuna=True,
             n_streams=1,
             noise_std=0.0,
-            residual_physics=physics,
+            physics_baselines=physics,
             dynamic_bias_provider=provider,
             metadata={"sample_dt_s": 1.0},
         )
@@ -318,30 +319,72 @@ class TrainingTensorTests(unittest.TestCase):
         import numpy as np
 
         from anchor_bench.training.data import TrainingMapping
-        from anchor_bench.training.trainer import ResidualPhysics, _load_sequences
+        from anchor_bench.training.trainer import (
+            PhysicsBaselines,
+            _load_sequences,
+            _runtime_metadata,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write_multi_joint_motion(root)
             mapping = TrainingMapping(("JointA", "JointB"), ("JointB",))
-            physics = ResidualPhysics(
-                stiffness=(0.0, 2.0),
-                damping=(0.0, 0.0),
+            physics = PhysicsBaselines(
+                kp=(2.0,),
+                kd=(0.0,),
                 dry_friction=(0.0,),
                 viscous_friction=(0.0,),
             )
-            (features, target), = _load_sequences(
-                self._job(
-                    root,
-                    mapping,
-                    ["previous_torque"],
-                    model="hybrid_residual",
-                    physics=physics,
-                )
-            )[0]
+            job = self._job(
+                root,
+                mapping,
+                ["previous_torque"],
+                model="hybrid_residual",
+                physics=physics,
+            )
+            (features, target), = _load_sequences(job)[0]
+            metadata = _runtime_metadata(job, {"normalization": {}})
 
         np.testing.assert_allclose(target[:, 0], [6.0, 16.4, 26.8], rtol=1e-6)
         np.testing.assert_allclose(features[:, 0], [0.0, 6.0, 16.4], rtol=1e-6)
+        self.assertEqual("output_joints", metadata["pd_baseline"]["domain"])
+
+    def test_solver_pd_uses_one_input_domain_for_both_models(self):
+        import numpy as np
+
+        from anchor_bench.training.data import TrainingMapping
+        from anchor_bench.training.trainer import (
+            PhysicsBaselines,
+            _load_sequences,
+            _runtime_metadata,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_multi_joint_motion(root)
+            mapping = TrainingMapping(("JointA", "JointB"), ("JointB",))
+            baselines = PhysicsBaselines(
+                kp=(2.0, 3.0),
+                kd=(4.0, 5.0),
+                dry_friction=(0.5,),
+                viscous_friction=(0.25,),
+            )
+            for model in ("gru", "hybrid_residual"):
+                job = self._job(
+                    root, mapping, ["solver_pd"], model=model, physics=baselines
+                )
+                (features, target), = _load_sequences(job)[0]
+                metadata = _runtime_metadata(job, {"normalization": {}})
+                expected_target = (
+                    [10.0, 20.0, 30.0]
+                    if model == "gru"
+                    else [8.25, 19.8, 31.35]
+                )
+                np.testing.assert_allclose(
+                    features, [[2.0, 1.0], [1.4, -0.6], [0.8, -2.2]], atol=1e-6
+                )
+                np.testing.assert_allclose(target[:, 0], expected_target, atol=1e-6)
+                self.assertEqual("input_joints", metadata["pd_baseline"]["domain"])
 
     def test_metadata_uses_input_and_output_domain_widths(self):
         from anchor_bench.training.data import TrainingMapping
@@ -476,6 +519,28 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual("measured_torque", resolved.target_column)
         with self.assertRaisesRegex(ValueError, "target_column='torque'"):
             run_resolved_train_actuator(resolved)
+
+    def test_residual_miso_only_reads_output_baselines(self):
+        from unittest.mock import patch
+
+        from anchor_bench.training.data import TrainingMapping
+        from anchor_bench.training.runner import (
+            _param_for_joint,
+            _physics_baselines_for_mappings,
+        )
+
+        mapping = TrainingMapping(
+            ("right_shoulder_pitch", "right_elbow"),
+            ("right_elbow",),
+        )
+        with patch(
+            "anchor_bench.training.runner._param_for_joint", wraps=_param_for_joint
+        ) as read:
+            _physics_baselines_for_mappings(
+                "g1", (mapping,), include_solver_pd=False, include_residual=True
+            )
+
+        self.assertEqual({"right_elbow"}, {call.args[1] for call in read.call_args_list})
 
     def test_partial_parameter_maps_fail_instead_of_defaulting(self):
         from anchor_bench.training.runner import _param_for_joint

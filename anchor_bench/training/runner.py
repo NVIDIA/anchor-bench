@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -30,7 +29,7 @@ from anchor_bench.training.data import (
 )
 
 if TYPE_CHECKING:
-    from anchor_bench.training.trainer import ResidualPhysics
+    from anchor_bench.training.trainer import PhysicsBaselines
 
 
 @dataclass(frozen=True)
@@ -345,57 +344,59 @@ def _actuator_for_joint(spec, joint: str):
     return matches[0]
 
 
-def _residual_physics_for_mappings(
+def _physics_baselines_for_mappings(
     robot: str,
     mappings: Sequence[TrainingMapping],
-) -> "ResidualPhysics":
-    """Resolve one slot-wise baseline shared by every physical mapping."""
+    *,
+    include_solver_pd: bool,
+    include_residual: bool,
+) -> "PhysicsBaselines":
+    """Resolve one PD vector and optional output friction per mapping."""
 
-    from anchor_bench.training.trainer import ResidualPhysics
+    from anchor_bench.training.trainer import PhysicsBaselines
 
-    bundle = get_robot(robot)
-    spec = load_actuator_file(bundle.paths.actuators)
-    candidates: list[ResidualPhysics] = []
+    spec = load_actuator_file(get_robot(robot).paths.actuators)
+    candidates: list[PhysicsBaselines] = []
     for mapping in mappings:
-        stiffness: list[float] = []
-        damping: list[float] = []
-        for joint in mapping.input_joints:
-            actuator = _actuator_for_joint(spec, joint)
-            params = actuator.controller.parameters
-            stiffness.append(_param_for_joint(params.get("stiffness"), joint, "stiffness"))
-            damping.append(_param_for_joint(params.get("damping"), joint, "damping"))
-        dry_friction: list[float] = []
-        viscous_friction: list[float] = []
-        for joint in mapping.output_joints:
-            actuator = _actuator_for_joint(spec, joint)
-            physical = actuator.physical_parameters
-            dry = physical.get("dry_friction", physical.get("dynamic_friction"))
-            dry_friction.append(_param_for_joint(dry, joint, "dry_friction", default=0.0))
-            viscous_friction.append(
-                _param_for_joint(
-                    physical.get("viscous_friction"), joint, "viscous_friction", default=0.0
+        pd_joints = mapping.input_joints if include_solver_pd else mapping.output_joints
+        kp: list[float] = []
+        kd: list[float] = []
+        for joint in pd_joints:
+            params = _actuator_for_joint(spec, joint).controller.parameters
+            kp.append(_param_for_joint(params.get("stiffness"), joint, "stiffness"))
+            kd.append(_param_for_joint(params.get("damping"), joint, "damping"))
+
+        dry: list[float] = []
+        viscous: list[float] = []
+        if include_residual:
+            for joint in mapping.output_joints:
+                physical = _actuator_for_joint(spec, joint).physical_parameters
+                dry_value = physical.get("dry_friction", physical.get("dynamic_friction"))
+                dry.append(_param_for_joint(dry_value, joint, "dry_friction", default=0.0))
+                viscous.append(
+                    _param_for_joint(
+                        physical.get("viscous_friction"),
+                        joint,
+                        "viscous_friction",
+                        default=0.0,
+                    )
                 )
-            )
         candidates.append(
-            ResidualPhysics(
-                stiffness=tuple(stiffness),
-                damping=tuple(damping),
-                dry_friction=tuple(dry_friction),
-                viscous_friction=tuple(viscous_friction),
+            PhysicsBaselines(
+                kp=tuple(kp),
+                kd=tuple(kd),
+                dry_friction=tuple(dry) if include_residual else None,
+                viscous_friction=tuple(viscous) if include_residual else None,
             )
         )
 
     first = candidates[0]
     for candidate in candidates[1:]:
-        for name in ("stiffness", "damping", "dry_friction", "viscous_friction"):
-            left = tuple(getattr(first, name))
-            right = tuple(getattr(candidate, name))
-            if len(left) != len(right) or not all(
-                math.isclose(a, b, rel_tol=1.0e-6, abs_tol=1.0e-9)
-                for a, b in zip(left, right, strict=True)
-            ):
+        for name in ("kp", "kd", "dry_friction", "viscous_friction"):
+            if getattr(first, name) != getattr(candidate, name):
                 raise ValueError(
-                    f"shared mappings require identical slot-wise {name}; train separate artifacts instead"
+                    f"shared mappings require identical slot-wise {name}; "
+                    "train separate artifacts instead"
                 )
     return first
 
@@ -422,10 +423,16 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
         target_column=resolved.target_column,
         derived_columns=derived_columns,
     )
-    needs_physics = resolved.model == "hybrid_residual" or "solver_pd" in columns.input_columns
-    residual_physics = (
-        _residual_physics_for_mappings(resolved.robot, resolved.mappings)
-        if needs_physics
+    include_solver_pd = "solver_pd" in columns.input_columns
+    include_residual = resolved.model == "hybrid_residual"
+    physics_baselines = (
+        _physics_baselines_for_mappings(
+            resolved.robot,
+            resolved.mappings,
+            include_solver_pd=include_solver_pd,
+            include_residual=include_residual,
+        )
+        if include_solver_pd or include_residual
         else None
     )
     metadata: dict[str, Any] = {
@@ -438,8 +445,8 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
             f"{bundle.spec.display_name} actuator training simulation",
         ).control_dt,
     }
-    if residual_physics is not None:
-        metadata["physics_params"] = residual_physics.__dict__
+    if physics_baselines is not None:
+        metadata["physics_params"] = physics_baselines.__dict__
     dynamic_bias_provider = None
     if "dynamic_bias" in columns.input_columns:
         from anchor_bench.training.dynamic_bias import NewtonMuJoCoDynamicBiasProvider
@@ -463,7 +470,7 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
             skip_optuna=resolved.skip_optuna,
             n_streams=resolved.n_streams,
             noise_std=resolved.noise_std,
-            residual_physics=residual_physics,
+            physics_baselines=physics_baselines,
             dynamic_bias_provider=dynamic_bias_provider,
             metadata=metadata,
         )
