@@ -58,7 +58,7 @@ jobs:
       github.ref == 'refs/heads/main' ||
       startsWith(github.ref, 'refs/heads/pull-request/')
     runs-on: linux-amd64-gpu-rtxpro6000-latest-1
-    timeout-minutes: 180
+    timeout-minutes: 300
     steps:
       - name: Checkout
         uses: actions/checkout@v4
