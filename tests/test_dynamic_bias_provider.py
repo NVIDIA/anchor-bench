@@ -108,7 +108,6 @@ def _provider() -> tuple[
     provider._state = state
     provider._default_q = model.joint_q.numpy()
     provider._mj_qd_start = mj_qd_start
-    provider._provenance = {"source": "test"}
     return provider, captured, forward_calls
 
 
@@ -116,10 +115,10 @@ class DynamicBiasProviderTests(unittest.TestCase):
     def test_full_recorded_state_is_injected_and_output_is_reordered(self):
         provider, captured, forward_calls = _provider()
 
-        result = provider.compute(_motion(), ("JointB", "JointA"))
+        values = provider.compute(_motion(), ("JointB", "JointA"))
 
         np.testing.assert_allclose(
-            result.values,
+            values,
             [[1018.2, 118.1], [2029.4, 229.3]],
             rtol=1e-6,
         )
@@ -127,12 +126,11 @@ class DynamicBiasProviderTests(unittest.TestCase):
         self.assertEqual(2, len(forward_calls))
         np.testing.assert_allclose(captured[0][0], [1.0, 10.0, 7.0])
         np.testing.assert_allclose(captured[0][1], [0.1, 0.2, 0.0])
-        self.assertEqual(["JointC"], result.provenance["defaulted_joint_names"])
 
     def test_requested_joint_must_exist_in_recording(self):
         provider, _, _ = _provider()
 
-        with self.assertRaisesRegex(ValueError, "missing requested joints"):
+        with self.assertRaisesRegex(ValueError, "joints not found"):
             provider.compute(_motion(), ("JointC",))
 
     def test_unrequested_recorded_joint_is_still_injected(self):
@@ -140,9 +138,9 @@ class DynamicBiasProviderTests(unittest.TestCase):
 
         provider, captured, _ = _provider()
 
-        result = provider.compute(_motion(), ("JointA",))
+        values = provider.compute(_motion(), ("JointA",))
 
-        self.assertEqual((2, 1), result.values.shape)
+        self.assertEqual((2, 1), values.shape)
         np.testing.assert_allclose(captured[0][0], [1.0, 10.0, 7.0])
 
 

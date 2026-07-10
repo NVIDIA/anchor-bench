@@ -128,24 +128,6 @@ def _feature_widths(job: TrainingJob) -> list[int]:
     return [output_width if column == "previous_torque" else input_width for column in job.input_columns]
 
 
-
-def _merge_bias_provenance(existing: dict[str, Any] | None, provenance: Any) -> dict[str, Any]:
-    """Merge episode-varying state coverage while enforcing solver identity."""
-
-    current = dict(provenance)
-    joint_keys = {"mapped_joint_names", "mapped_asset_joint_names", "defaulted_joint_names"}
-    for key in joint_keys:
-        current[key] = sorted(str(value) for value in current.get(key, ()))
-    if existing is None:
-        return current
-    for key in (existing.keys() | current.keys()) - joint_keys:
-        if existing.get(key) != current.get(key):
-            raise ValueError(f"dynamic-bias provenance changed across episodes: {key}")
-    for key in joint_keys:
-        existing[key] = sorted(set(existing.get(key, ())) | set(current[key]))
-    return existing
-
-
 def _load_sequences(
     job: TrainingJob,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
@@ -154,27 +136,24 @@ def _load_sequences(
     input_width, output_width = _mapping_widths(job)
 
     union_joints = tuple(dict.fromkeys(name for mapping in job.mappings for name in mapping.input_joints))
-    bias_cache: dict[Path, tuple[np.ndarray, dict[str, int]]] = {}
-    bias_provenance: dict[str, Any] | None = None
+    bias_cache: dict[Path, np.ndarray] = {}
+    bias_indices = {name: index for index, name in enumerate(union_joints)}
 
     def dynamic_bias(source: TrainingSource, mapping: TrainingMapping) -> np.ndarray:
         """Evaluate one full episode once and select this mapping's input slots."""
 
-        nonlocal bias_provenance
         cached = bias_cache.get(source.path)
         if cached is None:
             if job.dynamic_bias_provider is None:
                 raise ValueError("dynamic_bias input requires a dynamic-bias provider")
             motion = load_training_motion(source.path)
-            result = job.dynamic_bias_provider.compute(motion, union_joints)
-            values = np.asarray(result.values, dtype=np.float32)
-            if values.shape != (len(motion.position.time), len(union_joints)):
+            cached = np.asarray(
+                job.dynamic_bias_provider.compute(motion, union_joints), dtype=np.float32
+            )
+            if cached.shape != (len(motion.position.time), len(union_joints)):
                 raise ValueError("dynamic-bias provider returned an inconsistent episode shape")
-            cached = values, {name: index for index, name in enumerate(union_joints)}
             bias_cache[source.path] = cached
-            bias_provenance = _merge_bias_provenance(bias_provenance, result.provenance)
-        values, indices = cached
-        return values[:, [indices[name] for name in mapping.input_joints]]
+        return cached[:, [bias_indices[name] for name in mapping.input_joints]]
 
     def load_one(source: TrainingSource, mapping: TrainingMapping) -> tuple[np.ndarray, np.ndarray]:
         """Build feature-major inputs and final targets for one sequence."""
@@ -245,8 +224,6 @@ def _load_sequences(
 
     train = [load_one(source, mapping) for source in job.train_sources for mapping in job.mappings]
     val = [load_one(source, mapping) for source in job.val_sources for mapping in job.mappings]
-    if bias_provenance is not None:
-        job.metadata["dynamic_bias_derivation"] = bias_provenance
     return train, val
 
 
@@ -423,11 +400,6 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
         "normalization": stats["normalization"],
         "delay": {"handling": "learned", "external_delay_s": 0.0},
     }
-    if "dynamic_bias" in job.input_columns:
-        derivation = job.metadata.get("dynamic_bias_derivation")
-        if not isinstance(derivation, dict):
-            raise ValueError("dynamic_bias training requires derivation provenance")
-        metadata["dynamic_bias_derivation"] = derivation
     if "previous_torque" in job.input_columns:
         metadata["previous_torque_derivation"] = {
             "source": "previous_target",

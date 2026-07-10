@@ -425,7 +425,6 @@ class TrainingTensorTests(unittest.TestCase):
         import numpy as np
 
         from anchor_bench.training.data import TrainingMapping
-        from anchor_bench.training.dynamic_bias import DynamicBiasResult
         from anchor_bench.training.trainer import _load_sequences
 
         class Provider:
@@ -440,7 +439,7 @@ class TrainingTensorTests(unittest.TestCase):
                         for index, _ in enumerate(requested_joints)
                     ]
                 )
-                return DynamicBiasResult(values, {"source": "fake", "quantity": "qfrc_bias"})
+                return values
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -457,18 +456,6 @@ class TrainingTensorTests(unittest.TestCase):
         self.assertEqual([("JointA", "JointB")], provider.calls)
         np.testing.assert_allclose(sequences[0][0][:, 0], [0.0, 1.0, 2.0])
         np.testing.assert_allclose(sequences[1][0][:, 0], [10.0, 11.0, 12.0])
-
-    def test_dynamic_bias_provenance_pools_episode_state_coverage(self):
-        from anchor_bench.training.trainer import _merge_bias_provenance
-
-        first = _merge_bias_provenance(
-            None, {"asset_sha256": "same", "mapped_joint_names": ["JointA"]}
-        )
-        merged = _merge_bias_provenance(
-            first, {"asset_sha256": "same", "mapped_joint_names": ["JointB"]}
-        )
-
-        self.assertEqual(["JointA", "JointB"], merged["mapped_joint_names"])
 
 
 class TrainingRunnerTests(unittest.TestCase):
