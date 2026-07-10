@@ -60,15 +60,10 @@ def _validate_statistic(value: Any, width: int, label: str, *, positive: bool) -
         raise ValueError(f"runtime_metadata normalization {label} must contain {qualifier} values")
 
 
-def _validate_runtime_metadata(
-    metadata: dict[str, Any],
-    *,
-    input_columns: list[str],
-    target_columns: list[str],
-    input_size: int,
-    output_size: int,
+def _validate_metadata_header(
+    metadata: dict[str, Any], input_columns: list[str], target_columns: list[str]
 ) -> None:
-    """Validate the axes and required fields of the embedded contract."""
+    """Validate required metadata fields and checkpoint column identity."""
 
     required = {
         "delay",
@@ -94,6 +89,10 @@ def _validate_runtime_metadata(
     if len(set(input_columns)) != len(input_columns):
         raise ValueError("runtime_metadata input_columns must not contain duplicates")
 
+
+def _metadata_mapping_widths(metadata: dict[str, Any]) -> tuple[int, int]:
+    """Validate physical mappings and return one mapping axis size."""
+
     mappings = metadata["joint_mappings"]
     if not isinstance(mappings, list) or not mappings:
         raise ValueError("runtime_metadata.joint_mappings must be a non-empty list")
@@ -115,12 +114,21 @@ def _validate_runtime_metadata(
             or any(name not in inputs for name in outputs)
         ):
             raise ValueError("runtime_metadata contains an invalid or inconsistent joint mapping")
+    return input_width, output_width
+
+
+def _metadata_feature_widths(
+    metadata: dict[str, Any],
+    input_columns: list[str],
+    input_width: int,
+    output_width: int,
+) -> tuple[dict[str, int], int]:
+    """Validate ordered feature domains and return flattened widths."""
 
     specs = metadata["input_feature_specs"]
     if not isinstance(specs, list) or len(specs) != len(input_columns):
         raise ValueError("runtime_metadata.input_feature_specs must match input_columns")
-    expected_input_size = 0
-    feature_widths: dict[str, int] = {}
+    widths: dict[str, int] = {}
     for column, spec in zip(input_columns, specs, strict=True):
         if not isinstance(spec, dict) or spec.get("name") != column:
             raise ValueError("runtime_metadata feature specs must match input_columns in order")
@@ -131,28 +139,23 @@ def _validate_runtime_metadata(
         expected_domain = "output_joints" if column == "previous_torque" else "input_joints"
         if domain != expected_domain:
             raise ValueError(f"runtime_metadata feature {column} must use domain {expected_domain}")
-        width = (input_width if domain == "input_joints" else output_width) * len(channels)
-        feature_widths[column] = width
-        expected_input_size += width
-    if (input_size, output_size) != (expected_input_size, output_width):
-        raise ValueError("checkpoint dimensions disagree with runtime_metadata axes")
-    topology = "siso" if input_width == output_width == 1 else ("miso" if output_width == 1 else "mimo")
-    if metadata["training_topology"] != topology:
-        raise ValueError("runtime_metadata.training_topology disagrees with joint mappings")
-    try:
-        sample_dt_s = float(metadata["sample_dt_s"])
-    except (TypeError, ValueError) as exc:
-        raise ValueError("runtime_metadata.sample_dt_s must be numeric") from exc
-    if not math.isfinite(sample_dt_s) or sample_dt_s <= 0.0:
-        raise ValueError("runtime_metadata.sample_dt_s must be positive and finite")
-    if not isinstance(metadata["normalization"], dict) or not isinstance(metadata["delay"], dict):
-        raise ValueError("runtime_metadata normalization and delay must be objects")
+        widths[column] = (input_width if domain == "input_joints" else output_width) * len(channels)
+    return widths, sum(widths.values())
+
+
+def _validate_metadata_normalization(
+    metadata: dict[str, Any], feature_widths: dict[str, int], target: str, output_width: int
+) -> None:
+    """Validate every input and target normalization vector."""
+
     normalization = metadata["normalization"]
-    inputs = normalization.get("inputs") if isinstance(normalization, dict) else None
-    targets = normalization.get("targets") if isinstance(normalization, dict) else None
+    if not isinstance(normalization, dict):
+        raise ValueError("runtime_metadata normalization must be an object")
+    inputs = normalization.get("inputs")
+    targets = normalization.get("targets")
     if not isinstance(inputs, dict) or not isinstance(targets, dict):
         raise ValueError("runtime_metadata.normalization must contain inputs and targets")
-    for section, widths in ((inputs, feature_widths), (targets, {target_columns[0]: output_width})):
+    for section, widths in ((inputs, feature_widths), (targets, {target: output_width})):
         means = section.get("mean")
         stds = section.get("std")
         if (
@@ -164,19 +167,63 @@ def _validate_runtime_metadata(
         for column, width in widths.items():
             _validate_statistic(means[column], width, f"mean.{column}", positive=False)
             _validate_statistic(stds[column], width, f"std.{column}", positive=True)
-    if metadata["delay"].get("handling") != "learned" or metadata["delay"].get("external_delay_s") != 0.0:
+
+
+def _validate_metadata_time_and_delay(metadata: dict[str, Any]) -> None:
+    """Validate the recorded timestep and learned-delay declaration."""
+
+    try:
+        sample_dt_s = float(metadata["sample_dt_s"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("runtime_metadata.sample_dt_s must be numeric") from exc
+    if not math.isfinite(sample_dt_s) or sample_dt_s <= 0.0:
+        raise ValueError("runtime_metadata.sample_dt_s must be positive and finite")
+    delay = metadata["delay"]
+    if not isinstance(delay, dict):
+        raise ValueError("runtime_metadata delay must be an object")
+    if delay.get("handling") != "learned" or delay.get("external_delay_s") != 0.0:
         raise ValueError("runtime_metadata delay must be learned with zero external delay")
+
+
+def _validate_metadata_derivations(metadata: dict[str, Any], input_columns: list[str], target: str) -> None:
+    """Validate metadata required by derived features and residual targets."""
+
     if "dynamic_bias" in input_columns and not isinstance(metadata.get("dynamic_bias_derivation"), dict):
         raise ValueError("runtime_metadata is missing dynamic_bias_derivation")
     if "previous_torque" in input_columns and not isinstance(metadata.get("previous_torque_derivation"), dict):
         raise ValueError("runtime_metadata is missing previous_torque_derivation")
-    target = target_columns[0]
     if (target == "torque_residual" or "solver_pd" in input_columns) and not isinstance(
         metadata.get("pd_baseline"), dict
     ):
         raise ValueError("runtime_metadata is missing pd_baseline")
     if target == "torque_residual" and not isinstance(metadata.get("friction_baseline"), dict):
         raise ValueError("runtime_metadata is missing friction_baseline")
+
+
+def _validate_runtime_metadata(
+    metadata: dict[str, Any],
+    *,
+    input_columns: list[str],
+    target_columns: list[str],
+    input_size: int,
+    output_size: int,
+) -> None:
+    """Validate the axes and required fields of the embedded contract."""
+
+    _validate_metadata_header(metadata, input_columns, target_columns)
+    input_width, output_width = _metadata_mapping_widths(metadata)
+    feature_widths, expected_input_size = _metadata_feature_widths(
+        metadata, input_columns, input_width, output_width
+    )
+    if (input_size, output_size) != (expected_input_size, output_width):
+        raise ValueError("checkpoint dimensions disagree with runtime_metadata axes")
+    topology = "siso" if input_width == output_width == 1 else ("miso" if output_width == 1 else "mimo")
+    if metadata["training_topology"] != topology:
+        raise ValueError("runtime_metadata.training_topology disagrees with joint mappings")
+    target = target_columns[0]
+    _validate_metadata_normalization(metadata, feature_widths, target, output_width)
+    _validate_metadata_time_and_delay(metadata)
+    _validate_metadata_derivations(metadata, input_columns, target)
 
 
 def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path | None = None) -> Path:

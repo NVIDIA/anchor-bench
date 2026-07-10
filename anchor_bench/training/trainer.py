@@ -102,11 +102,25 @@ def _physics_vector(value: float | tuple[float, ...], width: int, name: str) -> 
     return array
 
 
+def _mapping_widths(job: TrainingJob) -> tuple[int, int]:
+    """Validate shared mapping shapes and return one mapping axis size."""
+
+    if not job.mappings:
+        raise ValueError("TrainingJob requires at least one joint mapping")
+    input_width = len(job.mappings[0].input_joints)
+    output_width = len(job.mappings[0].output_joints)
+    if any(
+        len(mapping.input_joints) != input_width or len(mapping.output_joints) != output_width
+        for mapping in job.mappings
+    ):
+        raise ValueError("all training mappings must have identical input and output widths")
+    return input_width, output_width
+
+
 def _feature_widths(job: TrainingJob) -> list[int]:
     """Return each feature block width in configured order."""
 
-    input_width = len(job.mappings[0].input_joints)
-    output_width = len(job.mappings[0].output_joints)
+    input_width, output_width = _mapping_widths(job)
     return [output_width if column == "previous_torque" else input_width for column in job.input_columns]
 
 
@@ -157,15 +171,7 @@ def _load_sequences(
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
     """Assemble one independent recurrent sequence per source and mapping."""
 
-    if not job.mappings:
-        raise ValueError("TrainingJob requires at least one joint mapping")
-    input_width = len(job.mappings[0].input_joints)
-    output_width = len(job.mappings[0].output_joints)
-    if any(
-        len(mapping.input_joints) != input_width or len(mapping.output_joints) != output_width
-        for mapping in job.mappings
-    ):
-        raise ValueError("all training mappings must have identical input and output widths")
+    input_width, output_width = _mapping_widths(job)
 
     union_joints = tuple(dict.fromkeys(name for mapping in job.mappings for name in mapping.input_joints))
     bias_cache: dict[Path, tuple[np.ndarray, dict[str, int]]] = {}
