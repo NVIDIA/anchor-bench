@@ -1,17 +1,23 @@
-from anchor_bench.benchmark.newton_runner import (
-    BenchmarkMotion,
-    ResolvedBenchmarkRunConfig,
-    build_resolved_benchmark_command,
-    resolve_benchmark_run_config,
-    run_benchmark_batch,
-    run_resolved_benchmark,
+"""Host-safe public APIs for immutable candidate benchmarks."""
+
+from anchor_bench.benchmark.phase import (
+    BenchmarkExecutionResult,
+    BenchmarkInvocation,
+    BenchmarkResolverInputs,
+    BenchmarkRunOutcome,
+    BenchmarkTrajectoryResult,
+    ResolvedBenchmarkRun,
+    execute_benchmark_run,
+    resolve_benchmark_run,
 )
 
 __all__ = [
-    "BenchmarkMotion",
-    "ResolvedBenchmarkRunConfig",
-    "build_resolved_benchmark_command",
-    "resolve_benchmark_run_config",
-    "run_benchmark_batch",
-    "run_resolved_benchmark",
+    "BenchmarkExecutionResult",
+    "BenchmarkInvocation",
+    "BenchmarkResolverInputs",
+    "BenchmarkRunOutcome",
+    "BenchmarkTrajectoryResult",
+    "ResolvedBenchmarkRun",
+    "execute_benchmark_run",
+    "resolve_benchmark_run",
 ]

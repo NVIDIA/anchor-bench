@@ -34,12 +34,13 @@ _REQUIRED_ROLES = {
 
 @dataclass(frozen=True)
 class SysIdPromotionOutcome:
-    """Result of one locked accepted-state update."""
+    """Result of one dry proposal or locked accepted-state update."""
 
     accepted_state: Path
     state: AcceptedSysIdState
     no_op: bool
     source_manifest_sha256: str
+    dry_run: bool = False
 
 
 def _field(value: Any, name: str) -> Any:
@@ -139,14 +140,82 @@ def _benchmark_evidence(
     return evidence
 
 
+def _propose_state(
+    current: AcceptedSysIdState,
+    *,
+    loaded: Any,
+    profile: SysIdProfile,
+    source_manifest: Any,
+    source_relative: str,
+    entries: Mapping[str, Any],
+    evidence: Sequence[SysIdBenchmarkEvidence],
+) -> tuple[AcceptedSysIdState, bool]:
+    """Build the next accepted state without locking or writing it."""
+
+    promotion_parent_hash = canonical_sha256(current.to_dict())
+    next_parameters = apply_fitted_patch(current, loaded.fitted_patch)
+    changed = [
+        SysIdParameterCell(parameter=parameter, joint=joint)
+        for parameter in SUPPORTED_SYSID_PARAMETERS
+        for joint in profile.joints
+        if parameter in loaded.fitted_patch.parameters
+        and current.parameters[parameter][joint] != next_parameters[parameter][joint]
+    ]
+    matching_history = [
+        record
+        for record in current.provenance.history
+        if record.run_input_sha256 == source_manifest.run_input_sha256
+        and record.run_manifest_sha256 == source_manifest.run_manifest_sha256
+        and record.fitted_patch_sha256 == entries["fitted_patch"].sha256
+    ]
+    existing_evidence = {
+        (item.run, item.run_manifest_sha256)
+        for record in matching_history
+        for item in record.benchmarks
+    }
+    new_evidence = [
+        item
+        for item in evidence
+        if (item.run, item.run_manifest_sha256) not in existing_evidence
+    ]
+    if matching_history and not changed and not new_evidence:
+        return current, True
+
+    revision = current.revision + 1
+    record = SysIdPromotionRecord(
+        revision=revision,
+        source_run=source_relative,
+        run_input_sha256=source_manifest.run_input_sha256,
+        run_manifest_sha256=source_manifest.run_manifest_sha256,
+        parent_state_sha256=entries["parent_state"].sha256,
+        fitted_patch_sha256=entries["fitted_patch"].sha256,
+        candidate_state_sha256=entries["sysid_state"].sha256,
+        promotion_parent_state_sha256=promotion_parent_hash,
+        updated_cells=changed,
+        benchmarks=new_evidence,
+    )
+    return (
+        AcceptedSysIdState(
+            schema_version=1,
+            revision=revision,
+            parameters=next_parameters,
+            provenance=SysIdProvenance(
+                history=[*current.provenance.history, record]
+            ),
+        ),
+        False,
+    )
+
+
 def promote_sysid_run(
     source_run: Path,
     accepted_state: Path,
     *,
     repository_root: Path,
     benchmark_runs: Sequence[Path] = (),
+    dry_run: bool = False,
 ) -> SysIdPromotionOutcome:
-    """Validate a candidate and atomically apply its sparse fitted patch."""
+    """Validate and preview or atomically apply a sparse fitted patch."""
 
     source_manifest = verify_run_directory(source_run)
     if source_manifest.phase != "sysid":
@@ -192,73 +261,43 @@ def promote_sysid_run(
         source_manifest=source_manifest,
     )
 
-    with sibling_lock(accepted_state):
+    def propose() -> tuple[AcceptedSysIdState, bool]:
+        """Load current accepted state and calculate one promotion proposal."""
+
         current = AcceptedSysIdState.from_dict(
             load_yaml_mapping(accepted_state),
             accepted_state,
         )
-        promotion_parent_hash = canonical_sha256(current.to_dict())
-        next_parameters = apply_fitted_patch(current, loaded.fitted_patch)
-        changed = [
-            SysIdParameterCell(parameter=parameter, joint=joint)
-            for parameter in SUPPORTED_SYSID_PARAMETERS
-            for joint in profile.joints
-            if parameter in loaded.fitted_patch.parameters
-            and current.parameters[parameter][joint] != next_parameters[parameter][joint]
-        ]
-
-        matching_history = [
-            record
-            for record in current.provenance.history
-            if record.run_input_sha256 == source_manifest.run_input_sha256
-            and record.run_manifest_sha256 == source_manifest.run_manifest_sha256
-            and record.fitted_patch_sha256 == entries["fitted_patch"].sha256
-        ]
-        existing_evidence = {
-            (item.run, item.run_manifest_sha256)
-            for record in matching_history
-            for item in record.benchmarks
-        }
-        new_evidence = [
-            item
-            for item in evidence
-            if (item.run, item.run_manifest_sha256) not in existing_evidence
-        ]
-        if matching_history and not changed and not new_evidence:
-            return SysIdPromotionOutcome(
-                Path(accepted_state),
-                current,
-                True,
-                source_manifest.run_manifest_sha256,
-            )
-
-        revision = current.revision + 1
-        record = SysIdPromotionRecord(
-            revision=revision,
-            source_run=source_relative,
-            run_input_sha256=source_manifest.run_input_sha256,
-            run_manifest_sha256=source_manifest.run_manifest_sha256,
-            parent_state_sha256=entries["parent_state"].sha256,
-            fitted_patch_sha256=entries["fitted_patch"].sha256,
-            candidate_state_sha256=entries["sysid_state"].sha256,
-            promotion_parent_state_sha256=promotion_parent_hash,
-            updated_cells=changed,
-            benchmarks=new_evidence,
+        return _propose_state(
+            current,
+            loaded=loaded,
+            profile=profile,
+            source_manifest=source_manifest,
+            source_relative=source_relative,
+            entries=entries,
+            evidence=evidence,
         )
-        next_state = AcceptedSysIdState(
-            schema_version=1,
-            revision=revision,
-            parameters=next_parameters,
-            provenance=SysIdProvenance(
-                history=[*current.provenance.history, record]
-            ),
-        )
-        atomic_write_yaml(accepted_state, next_state.to_dict())
+
+    if dry_run:
+        next_state, no_op = propose()
         return SysIdPromotionOutcome(
             Path(accepted_state),
             next_state,
-            False,
+            no_op,
             source_manifest.run_manifest_sha256,
+            True,
+        )
+
+    with sibling_lock(accepted_state):
+        next_state, no_op = propose()
+        if not no_op:
+            atomic_write_yaml(accepted_state, next_state.to_dict())
+        return SysIdPromotionOutcome(
+            Path(accepted_state),
+            next_state,
+            no_op,
+            source_manifest.run_manifest_sha256,
+            False,
         )
 
 

@@ -1,5 +1,7 @@
 """Host-safe deployment configuration and frozen-state contracts."""
 
+from anchor_bench.deploy.promotion import DeployPromotionOutcome, promote_deploy
+from anchor_bench.deploy.runner import DeployResolverInputs, resolve_deploy_state
 from anchor_bench.deploy.schema import (
     DeployComposition,
     DeployNeuralActuator,
@@ -23,7 +25,9 @@ __all__ = [
     "DeployNeuralActuator",
     "DeployNeuralMapping",
     "DeployPDActuator",
+    "DeployPromotionOutcome",
     "DeployProfile",
+    "DeployResolverInputs",
     "DeploySimulationConfig",
     "DeploySourceProvenance",
     "FrozenDeployComposition",
@@ -34,4 +38,6 @@ __all__ = [
     "FrozenNeuralMapping",
     "FrozenNeuralPDBaseline",
     "FrozenPDActuator",
+    "promote_deploy",
+    "resolve_deploy_state",
 ]

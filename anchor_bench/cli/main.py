@@ -8,10 +8,18 @@ from anchor_bench.runtime.environment import RuntimeUnavailableError
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse one command and convert expected user errors into exit status 2."""
+
     args = build_parser().parse_args(argv)
     try:
         return dispatch(args)
-    except (RuntimeUnavailableError, ValueError, FileNotFoundError, RuntimeError) as exc:
+    except (
+        RuntimeUnavailableError,
+        KeyError,
+        ValueError,
+        FileNotFoundError,
+        RuntimeError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

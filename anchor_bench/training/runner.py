@@ -296,7 +296,7 @@ def _resolve_dataset_fingerprint(
     """Normalize a dataset path and capture its exact tree fingerprint."""
 
     relative = require_relative_posix_path(data)
-    dataset_path = contained_path(inputs.repository_root, relative, must_exist=True)
+    dataset_path = contained_path(inputs.repository_root, relative, must_exist=False)
     if inputs.dataset_fingerprint is not None:
         fingerprint = dict(inputs.dataset_fingerprint)
     elif inputs.dataset_fingerprint_resolver is not None:
