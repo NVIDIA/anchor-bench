@@ -65,7 +65,10 @@ def _fake_runtime(
     *,
     joint_types: tuple[int, ...] = (1, 2, 1),
     effort_limits: tuple[float, ...] = (10.0, 20.0, 0.0),
+    dynamic_bias: bool = True,
 ):
+    """Build a host-safe Newton runtime with optional bias capability."""
+
     stats: dict[str, object] = {
         "eval_calls": 0,
         "state_ids": [],
@@ -118,6 +121,9 @@ def _fake_runtime(
             bias = q + 10.0 * qd + q.sum(axis=1, keepdims=True)
             out.assign(bias.reshape(-1))
             return out
+
+    if not dynamic_bias:
+        del FakeSolver.eval_dynamic_bias
 
     class FakeWarp:
         __version__ = "test-warp"
@@ -299,13 +305,42 @@ class NewtonTrainingAssetTests(unittest.TestCase):
         self.assertEqual(12, snapshot.solver_settings["iterations"])
         self.assertFalse(snapshot.solver_settings["use_mujoco_cpu"])
         self.assertTrue(snapshot.solver_settings["disable_contacts"])
-        self.assertEqual(dict(snapshot.solver_settings), stats["solver_settings"])
+        self.assertIsNone(stats["solver_settings"])
 
         provenance = dict(snapshot.provenance)
         self.assertEqual(snapshot.asset_sha256, provenance["asset_sha256"])
         self.assertEqual([0.0, 0.0, -9.7], provenance["gravity"])
         self.assertIn("scalar_joint_mapping", provenance)
         self.assertIn("solver_settings", provenance)
+
+        provider.compute(
+            joint_names=["a"],
+            positions=np.zeros((1, 1), dtype=np.float32),
+            velocities=np.zeros((1, 1), dtype=np.float32),
+            requested_joint_names=["a"],
+        )
+        self.assertEqual(dict(snapshot.solver_settings), stats["solver_settings"])
+
+    def test_missing_bias_capability_allows_snapshot_but_compute_fails(self):
+        """Keep no-bias training asset inspection independent of eval_dynamic_bias."""
+
+        runtime = _fake_runtime(dynamic_bias=False)
+        provider, stats, _asset = self._provider(runtime=runtime)
+
+        with patch(
+            "anchor_bench.training.dynamic_bias._import_dynamic_bias_runtime",
+            side_effect=AssertionError("snapshot must not import MuJoCo runtimes"),
+        ):
+            self.assertEqual((20.0, 10.0), provider.effort_limits(["b", "a"]))
+            self.assertIsNone(stats["solver_settings"])
+            with self.assertRaisesRegex(RuntimeError, "SolverMuJoCo.eval_dynamic_bias"):
+                provider.compute(
+                    joint_names=["a"],
+                    positions=np.zeros((1, 1), dtype=np.float32),
+                    velocities=np.zeros((1, 1), dtype=np.float32),
+                    requested_joint_names=["a"],
+                )
+        self.assertIsNone(stats["solver_settings"])
 
     def test_non_scalar_recorded_joint_is_optional_but_cannot_be_an_input(self):
         runtime = _fake_runtime(joint_types=(1, 3, 1))

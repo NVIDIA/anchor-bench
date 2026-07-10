@@ -20,6 +20,7 @@ from anchor_bench.core.hashing import (
     repo_relative_posix,
     require_relative_posix_path,
     sha256_file,
+    sha256_tree,
     tree_fingerprint,
     validate_sha256,
 )
@@ -736,6 +737,16 @@ def _assemble_episodes(
         resolved.resolved_config.data,
         must_exist=True,
     )
+    expected_dataset_sha256 = _fingerprint_digest(
+        resolved.fingerprints["dataset"],
+        label="dataset",
+    )
+    actual_dataset_sha256 = sha256_tree(dataset_path)
+    if actual_dataset_sha256 != expected_dataset_sha256:
+        raise RuntimeError(
+            "training dataset changed after resolution: "
+            f"expected {expected_dataset_sha256}, got {actual_dataset_sha256}"
+        )
     sources = discover_training_sources(dataset_path)
     train_sources, validation_sources = split_training_sources(
         sources,

@@ -15,7 +15,7 @@ from anchor_bench.core.artifacts import (
     verify_run_directory,
     write_manifest_last,
 )
-from anchor_bench.core.hashing import canonical_sha256, sha256_file
+from anchor_bench.core.hashing import canonical_sha256, sha256_file, tree_fingerprint
 from anchor_bench.core.manifest_schema import RunManifest, build_profile_snapshot
 from anchor_bench.sysid.state import (
     AcceptedSysIdState,
@@ -50,9 +50,6 @@ from anchor_bench.training.schema import (
 
 
 _ASSET_HASH = "a" * 64
-_DATASET_HASH = "d" * 64
-
-
 def _profile(*, mapping=None, target="torque"):
     """Return a compact profile document suitable for phase tests."""
 
@@ -137,7 +134,7 @@ class TrainingPhaseFixture:
             asset_fingerprint={"sha256": _ASSET_HASH},
             source_fingerprint={"source_sha256": "c" * 64},
             dependency_fingerprints={"torch": "test", "newton": "test"},
-            dataset_fingerprint={"tree_sha256": _DATASET_HASH, "files": {}},
+            dataset_fingerprint=tree_fingerprint(self.dataset),
             run_directory_resolver=run_directory,
         )
 
@@ -190,7 +187,7 @@ def _runtime_metadata(resolved, staging: Path) -> RuntimeGRUMetadata:
             ),
             sysid_state_sha256=sha256_file(staging / "sysid_state.yaml"),
             asset_sha256=_ASSET_HASH,
-            source_sha256=_DATASET_HASH,
+            source_sha256=resolved.fingerprints["dataset"]["tree_sha256"],
         ),
     )
 
@@ -503,6 +500,26 @@ class TrainingExecutionTests(unittest.TestCase):
 
             self.assertTrue(outcome.dry_run)
             self.assertEqual([], calls)
+            self.assertFalse(resolved.run_dir.exists())
+
+    def test_dataset_mutation_after_resolution_fails_before_episode_loading(self):
+        """Reject dataset bytes changed between immutable resolution and execution."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TrainingPhaseFixture(Path(temporary))
+            resolved = resolve_training_run(
+                TrainingInvocation(robot="demo", profile="arm", dry_run=False),
+                fixture.inputs(),
+            )
+            (fixture.dataset / "late.csv").write_text("changed\n", encoding="utf-8")
+
+            def backend(candidate, _staging):
+                """Cross the normal episode-assembly boundary without simulator imports."""
+
+                return _assemble_episodes(candidate, SimpleNamespace())
+
+            with self.assertRaisesRegex(RuntimeError, "training dataset changed after resolution"):
+                execute_training_run(resolved, backend)
             self.assertFalse(resolved.run_dir.exists())
 
 

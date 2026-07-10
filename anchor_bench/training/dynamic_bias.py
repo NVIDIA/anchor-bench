@@ -96,12 +96,12 @@ class DynamicBiasProvider(Protocol):
 
 @dataclass(frozen=True)
 class _RuntimeModules:
-    """Lazily imported simulator modules required by the Newton adapter."""
+    """Lazily imported modules available at one training runtime boundary."""
 
     newton: Any
     warp: Any
-    mujoco: Any
-    mujoco_warp: Any
+    mujoco: Any | None = None
+    mujoco_warp: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -131,19 +131,33 @@ def resolve_runtime_asset(bundle: RobotBundle) -> Path:
 
 
 def _import_newton_runtime() -> _RuntimeModules:
-    """Import the complete Newton/MuJoCo stack only on first real use."""
+    """Import only Newton and Warp for authoritative asset inspection."""
 
     try:
         newton = importlib.import_module("newton")
         warp = importlib.import_module("warp")
-        mujoco = importlib.import_module("mujoco")
-        mujoco_warp = importlib.import_module("mujoco_warp")
     except ImportError as exc:  # pragma: no cover - requires the full simulator environment
         raise RuntimeError(
-            "dynamic_bias training requires Newton, Warp, MuJoCo, and MuJoCo Warp "
-            "from the full runtime environment"
+            "training asset inspection requires Newton and Warp from the full runtime environment"
         ) from exc
-    return _RuntimeModules(newton, warp, mujoco, mujoco_warp)
+    return _RuntimeModules(newton, warp)
+
+
+def _import_dynamic_bias_runtime(runtime: _RuntimeModules) -> _RuntimeModules:
+    """Complete an asset runtime with MuJoCo modules only for bias evaluation."""
+
+    existing_mujoco = getattr(runtime, "mujoco", None)
+    existing_mujoco_warp = getattr(runtime, "mujoco_warp", None)
+    if existing_mujoco is not None and existing_mujoco_warp is not None:
+        return runtime
+    try:
+        mujoco = existing_mujoco or importlib.import_module("mujoco")
+        mujoco_warp = existing_mujoco_warp or importlib.import_module("mujoco_warp")
+    except ImportError as exc:  # pragma: no cover - requires the full simulator environment
+        raise RuntimeError(
+            "dynamic_bias training requires MuJoCo and MuJoCo Warp from the full runtime environment"
+        ) from exc
+    return _RuntimeModules(runtime.newton, runtime.warp, mujoco, mujoco_warp)
 
 
 def _module_version(module: Any, distribution: str) -> str:
@@ -152,6 +166,17 @@ def _module_version(module: Any, distribution: str) -> str:
     value = getattr(module, "__version__", None)
     if value is not None:
         return str(value)
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _optional_module_version(module: Any | None, distribution: str) -> str:
+    """Read a module version without importing an optional distribution."""
+
+    if module is not None:
+        return _module_version(module, distribution)
     try:
         return importlib.metadata.version(distribution)
     except importlib.metadata.PackageNotFoundError:
@@ -241,9 +266,10 @@ def _trajectory_fingerprint(
 class NewtonMuJoCoDynamicBiasProvider:
     """Evaluate Newton's MuJoCo dynamic bias without advancing simulation.
 
-    A single replicated Newton model, state, and output buffer are allocated on
-    first use and then reused for every episode and batch.  Instances are not
-    intended for concurrent calls to :meth:`compute`.
+    The replicated asset model is allocated when its snapshot is first needed.
+    Solver, state, and output buffers are allocated only by :meth:`compute` and
+    then reused for every episode and batch. Instances are not intended for
+    concurrent calls to :meth:`compute`.
     """
 
     def __init__(
@@ -263,8 +289,13 @@ class NewtonMuJoCoDynamicBiasProvider:
         self._solver_settings = _resolved_solver_settings(solver_settings)
         self._device = device
 
-        self._initialized = False
+        self._asset_initialized = False
+        self._bias_initialized = False
+        self._runtime: _RuntimeModules | None = None
+        self._solver_type: Any = None
+        self._solver_attributes_registered = False
         self._snapshot: AssetSnapshot | None = None
+        self._model: Any = None
         self._solver: Any = None
         self._state: Any = None
         self._bias: Any = None
@@ -277,7 +308,7 @@ class NewtonMuJoCoDynamicBiasProvider:
     def asset_snapshot(self) -> AssetSnapshot:
         """Initialize lazily and return the immutable training asset snapshot."""
 
-        self._initialize()
+        self._initialize_asset()
         assert self._snapshot is not None
         return self._snapshot
 
@@ -292,29 +323,23 @@ class NewtonMuJoCoDynamicBiasProvider:
 
         return self.asset_snapshot.effort_limits(joint_names)
 
-    def _initialize(self) -> None:
-        """Load Newton and allocate the replicated model and reusable buffers once."""
+    def _initialize_asset(self) -> None:
+        """Load the asset model and snapshot without requiring bias capability."""
 
-        if self._initialized:
+        if self._asset_initialized:
             return
 
         runtime = _import_newton_runtime()
         solver_namespace = getattr(runtime.newton, "solvers", None)
         solver_type = getattr(solver_namespace, "SolverMuJoCo", None)
-        if solver_type is None or not callable(getattr(solver_type, "eval_dynamic_bias", None)):
-            raise RuntimeError(
-                "dynamic_bias training requires "
-                "newton.solvers.SolverMuJoCo.eval_dynamic_bias(state, out=...)"
-            )
 
         asset_path = resolve_runtime_asset(self._bundle).resolve(strict=True)
         asset_sha256 = sha256_file(asset_path)
 
         template = runtime.newton.ModelBuilder()
         register = getattr(solver_type, "register_custom_attributes", None)
-        if not callable(register):
-            raise RuntimeError("Newton SolverMuJoCo.register_custom_attributes is unavailable")
-        register(template)
+        if callable(register):
+            register(template)
         template.add_usd(
             str(asset_path),
             floating=not self._bundle.spec.fixed_base,
@@ -328,7 +353,6 @@ class NewtonMuJoCoDynamicBiasProvider:
         scene.replicate(template, self._batch_size)
         finalize_kwargs = {} if self._device is None else {"device": self._device}
         model = scene.finalize(**finalize_kwargs)
-        solver = solver_type(model, **self._solver_settings)
 
         if sha256_file(asset_path) != asset_sha256:
             raise RuntimeError(f"training asset changed while Newton was loading it: {asset_path}")
@@ -336,8 +360,11 @@ class NewtonMuJoCoDynamicBiasProvider:
         versions = {
             "newton": _module_version(runtime.newton, "newton"),
             "warp": _module_version(runtime.warp, "warp-lang"),
-            "mujoco": _module_version(runtime.mujoco, "mujoco"),
-            "mujoco_warp": _module_version(runtime.mujoco_warp, "mujoco-warp"),
+            "mujoco": _optional_module_version(getattr(runtime, "mujoco", None), "mujoco"),
+            "mujoco_warp": _optional_module_version(
+                getattr(runtime, "mujoco_warp", None),
+                "mujoco-warp",
+            ),
         }
         snapshot = build_asset_snapshot(
             asset_path=asset_path,
@@ -356,6 +383,34 @@ class NewtonMuJoCoDynamicBiasProvider:
                 f"replicated Newton model has {snapshot.worlds} worlds, expected {self._batch_size}"
             )
 
+        self._runtime = runtime
+        self._solver_type = solver_type
+        self._solver_attributes_registered = callable(register)
+        self._snapshot = snapshot
+        self._model = model
+        self._asset_initialized = True
+
+    def _initialize_bias(self) -> None:
+        """Validate bias support and allocate the reusable solver buffers once."""
+
+        if self._bias_initialized:
+            return
+        self._initialize_asset()
+        solver_type = self._solver_type
+        if solver_type is None or not callable(getattr(solver_type, "eval_dynamic_bias", None)):
+            raise RuntimeError(
+                "dynamic_bias training requires "
+                "newton.solvers.SolverMuJoCo.eval_dynamic_bias(state, out=...)"
+            )
+        if not self._solver_attributes_registered:
+            raise RuntimeError("Newton SolverMuJoCo.register_custom_attributes is unavailable")
+        assert self._runtime is not None
+        assert self._model is not None
+        assert self._snapshot is not None
+        runtime = _import_dynamic_bias_runtime(self._runtime)
+        model = self._model
+        snapshot = self._snapshot
+        solver = solver_type(model, **self._solver_settings)
         state = model.state()
         if state.joint_q is None or state.joint_qd is None:
             raise RuntimeError("Newton model state must allocate joint_q and joint_qd")
@@ -365,14 +420,14 @@ class NewtonMuJoCoDynamicBiasProvider:
             device=model.device,
         )
 
-        self._snapshot = snapshot
+        self._runtime = runtime
         self._solver = solver
         self._state = state
         self._bias = bias
         self._default_q = np.array(snapshot.default_q, dtype=np.float32, copy=True)
         self._q_staging = np.array(self._default_q, dtype=np.float32, copy=True)
         self._qd_staging = np.zeros(self._batch_size * snapshot.dofs_per_world, dtype=np.float32)
-        self._initialized = True
+        self._bias_initialized = True
 
     def _mapped_columns(
         self,
@@ -512,7 +567,7 @@ class NewtonMuJoCoDynamicBiasProvider:
         if not np.all(np.isfinite(position_values)) or not np.all(np.isfinite(velocity_values)):
             raise ValueError("dynamic_bias input positions and velocities must be finite")
 
-        self._initialize()
+        self._initialize_bias()
         assert self._snapshot is not None
         mapped, unmapped = self._mapped_columns(trajectory_names, requested_names)
         table = self._cached_table(
