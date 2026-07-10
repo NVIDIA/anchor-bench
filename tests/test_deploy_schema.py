@@ -243,6 +243,40 @@ def test_frozen_pd_armature_is_optional() -> None:
             "finite number",
         ),
         (
+            lambda data: data["composition"]["neural"][0]["mappings"][0][
+                "pd_baseline"
+            ]["kp"].update(elbow=-1.0),
+            "PD baseline kp must contain non-negative values",
+        ),
+        (
+            lambda data: data["composition"]["neural"][0]["mappings"][0][
+                "friction_baseline"
+            ]["dry"].update(elbow=-1.0),
+            "friction baseline dry must contain non-negative values",
+        ),
+        (
+            lambda data: data["composition"]["neural"][0]["mappings"][0][
+                "armature"
+            ].update(elbow=-1.0),
+            "armature must contain non-negative values",
+        ),
+        (
+            lambda data: data["composition"]["pd"][0]["kd"].update(shoulder=-1.0),
+            "kd must contain non-negative values",
+        ),
+        (
+            lambda data: data["composition"]["pd"][0]["dry_friction"].update(
+                shoulder=-1.0
+            ),
+            "dry_friction must contain non-negative values",
+        ),
+        (
+            lambda data: data["composition"]["pd"][0]["armature"].update(
+                shoulder=-1.0
+            ),
+            "armature must contain non-negative values",
+        ),
+        (
             lambda data: data["source"].update(train_state_sha256="bad"),
             "lowercase SHA-256",
         ),

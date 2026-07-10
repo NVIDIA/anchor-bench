@@ -101,6 +101,16 @@ def _require_positive(values: Mapping[str, float], *, label: str) -> None:
         raise ValueError(f"{label} must contain positive values for: {', '.join(invalid)}")
 
 
+def _require_nonnegative(values: Mapping[str, float], *, label: str) -> None:
+    """Require every physical parameter in a per-joint map to be non-negative."""
+
+    invalid = sorted(joint for joint, value in values.items() if value < 0.0)
+    if invalid:
+        raise ValueError(
+            f"{label} must contain non-negative values for: {', '.join(invalid)}"
+        )
+
+
 class DeploySimulationConfig(ConfigModel):
     """Complete simulation settings frozen by deployment promotion."""
 
@@ -294,6 +304,8 @@ class FrozenNeuralPDBaseline(ConfigModel):
 
         if set(self.kp) != set(self.kd):
             raise ValueError("PD baseline kp and kd keys must match")
+        _require_nonnegative(self.kp, label="PD baseline kp")
+        _require_nonnegative(self.kd, label="PD baseline kd")
         return self
 
 
@@ -316,6 +328,8 @@ class FrozenNeuralFrictionBaseline(ConfigModel):
 
         if set(self.dry) != set(self.viscous):
             raise ValueError("friction baseline dry and viscous keys must match")
+        _require_nonnegative(self.dry, label="friction baseline dry")
+        _require_nonnegative(self.viscous, label="friction baseline viscous")
         return self
 
 
@@ -372,6 +386,7 @@ class FrozenNeuralMapping(ConfigModel):
             )
         if self.armature is not None:
             _require_exact_keys(self.armature, self.output_joints, label="armature")
+            _require_nonnegative(self.armature, label="armature")
         return self
 
 
@@ -470,6 +485,8 @@ class FrozenPDActuator(ConfigModel):
             maps["armature"] = self.armature
         for label, values in maps.items():
             _require_exact_keys(values, self.joints, label=label)
+            if label != "effort_limits":
+                _require_nonnegative(values, label=label)
         _require_positive(self.effort_limits, label="effort_limits")
         return self
 
