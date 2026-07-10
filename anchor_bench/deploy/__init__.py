@@ -2,6 +2,13 @@
 
 from anchor_bench.deploy.promotion import DeployPromotionOutcome, promote_deploy
 from anchor_bench.deploy.runner import DeployResolverInputs, resolve_deploy_state
+from anchor_bench.deploy.runtime import (
+    DeploymentRuntime,
+    DeploymentRuntimeState,
+    MappedNeuralRequest,
+    build_deployment_runtime,
+    load_frozen_deploy_state,
+)
 from anchor_bench.deploy.schema import (
     DeployComposition,
     DeployNeuralActuator,
@@ -30,6 +37,8 @@ __all__ = [
     "DeployResolverInputs",
     "DeploySimulationConfig",
     "DeploySourceProvenance",
+    "DeploymentRuntime",
+    "DeploymentRuntimeState",
     "FrozenDeployComposition",
     "FrozenDeployState",
     "FrozenNeuralActuator",
@@ -38,6 +47,9 @@ __all__ = [
     "FrozenNeuralMapping",
     "FrozenNeuralPDBaseline",
     "FrozenPDActuator",
+    "MappedNeuralRequest",
+    "build_deployment_runtime",
+    "load_frozen_deploy_state",
     "promote_deploy",
     "resolve_deploy_state",
 ]
