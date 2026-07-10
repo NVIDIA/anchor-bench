@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal, TypeAlias
 from pydantic import AfterValidator, Field, FiniteFloat, field_validator, model_validator
 
 from anchor_bench.core.config_model import ConfigModel
-from anchor_bench.core.hashing import validate_sha256
+from anchor_bench.core.hashing import require_relative_posix_path, validate_sha256
 from anchor_bench.core.profiles import load_yaml_mapping
 from anchor_bench.sysid.schema import SUPPORTED_SYSID_PARAMETERS
 
@@ -81,7 +81,7 @@ class SysIdBenchmarkEvidence(ConfigModel):
     @field_validator("run")
     @classmethod
     def _valid_run(cls, value: str) -> str:
-        return _require_text(value, name="benchmark run")
+        return require_relative_posix_path(_require_text(value, name="benchmark run"))
 
 
 class SysIdPromotionRecord(ConfigModel):
@@ -101,7 +101,7 @@ class SysIdPromotionRecord(ConfigModel):
     @field_validator("source_run")
     @classmethod
     def _valid_source_run(cls, value: str) -> str:
-        return _require_text(value, name="source run")
+        return require_relative_posix_path(_require_text(value, name="source run"))
 
     @model_validator(mode="after")
     def _unique_evidence(self) -> "SysIdPromotionRecord":
@@ -251,12 +251,16 @@ def apply_fitted_patch(parent: SysIdParentState, patch: SysIdFittedPatch) -> Par
 
 
 def _parameter_differences(expected: ParameterMaps, actual: ParameterMaps) -> list[str]:
+    """Return parameter cells whose presence or finite value differs."""
+
     differences: list[str] = []
     parameters: list[str] = list(SUPPORTED_SYSID_PARAMETERS)
     parameters.extend(sorted((set(expected) | set(actual)) - set(parameters)))
     for parameter in parameters:
-        if parameter not in expected or parameter not in actual:
+        if (parameter in expected) != (parameter in actual):
             differences.append(parameter)
+            continue
+        if parameter not in expected:
             continue
         for joint in sorted(set(expected[parameter]) | set(actual[parameter])):
             if joint not in expected[parameter] or joint not in actual[parameter]:
