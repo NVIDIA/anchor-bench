@@ -12,6 +12,7 @@ from typing import Any, TypeAlias
 from anchor_bench.benchmark.schema import BenchmarkCandidateReference
 from anchor_bench.core.artifacts import ordered_locks, verify_run_directory
 from anchor_bench.core.hashing import (
+    canonical_object,
     canonical_sha256,
     contained_path,
     require_relative_posix_path,
@@ -61,6 +62,8 @@ class DeployResolverInputs:
     deployed_state: Path
     canonical_joint_names: tuple[str, ...]
     joint_aliases: Mapping[str, str]
+    robot_identity_fingerprint: Mapping[str, Any] | None = None
+    asset_fingerprint: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Normalize paths and reject an invalid robot joint namespace."""
@@ -100,6 +103,13 @@ class DeployResolverInputs:
         canonical, aliases = _joint_namespace(self.canonical_joint_names, self.joint_aliases)
         object.__setattr__(self, "canonical_joint_names", canonical)
         object.__setattr__(self, "joint_aliases", aliases)
+        for field_name in ("robot_identity_fingerprint", "asset_fingerprint"):
+            value = getattr(self, field_name)
+            if value is not None:
+                if not isinstance(value, Mapping) or not value:
+                    raise ValueError(f"{field_name} must be a non-empty mapping when configured")
+                canonical_object(value)
+                object.__setattr__(self, field_name, dict(value))
 
 
 @dataclass(frozen=True)
@@ -133,6 +143,8 @@ class _VerifiedNeuralModel:
     accepted: AcceptedTrainingModel
     metadata: RuntimeGRUMetadata
     artifact_path: Path
+    robot_identity: Mapping[str, Any] | None
+    asset_identity: Mapping[str, Any]
 
 
 def load_embedded_gru_metadata(artifact_path: Path) -> LoadedNeuralMetadata:
@@ -444,6 +456,18 @@ def _verify_accepted_neural_model(
         raise ValueError(f"accepted model {model_key!r} source has the wrong phase or robot")
     if manifest.profile.name != model_key:
         raise ValueError(f"accepted model {model_key!r} source manifest has a different profile")
+    source_robot = manifest.fingerprints.get("robot")
+    if source_robot is not None and not isinstance(source_robot, Mapping):
+        raise ValueError(f"accepted model {model_key!r} robot fingerprint must be a mapping")
+    if (
+        source_robot is not None
+        and inputs.robot_identity_fingerprint is not None
+        and dict(source_robot) != dict(inputs.robot_identity_fingerprint)
+    ):
+        raise ValueError(f"accepted model {model_key!r} robot identity does not match deployment")
+    source_asset = manifest.fingerprints.get("asset")
+    if not isinstance(source_asset, Mapping):
+        raise ValueError(f"accepted model {model_key!r} asset fingerprint must be a mapping")
 
     artifact_relative = require_relative_posix_path(accepted.artifact.path)
     expected_artifact = f"{candidate.run}/network.pt"
@@ -476,7 +500,36 @@ def _verify_accepted_neural_model(
         accepted=accepted,
         metadata=loaded.metadata,
         artifact_path=artifact_path,
+        robot_identity=(None if source_robot is None else dict(source_robot)),
+        asset_identity=dict(source_asset),
     )
+
+
+def _select_deploy_asset_identity(
+    configured: Mapping[str, Any] | None,
+    models: Sequence[_VerifiedNeuralModel],
+) -> dict[str, Any] | None:
+    """Choose one compatible asset identity for the frozen deployment."""
+
+    candidates = [dict(model.asset_identity) for model in models]
+    if configured is not None:
+        candidates.append(dict(configured))
+    if not candidates:
+        return None
+    selected = candidates[0]
+    selected_root = _fingerprint_digest(selected, label="asset")
+    for candidate in candidates[1:]:
+        if _fingerprint_digest(candidate, label="asset") != selected_root:
+            raise ValueError("deployment sources use different root runtime USD identities")
+        if (
+            selected.get("kind") == "runtime_asset_package"
+            and candidate.get("kind") == "runtime_asset_package"
+            and candidate != selected
+        ):
+            raise ValueError("deployment sources use different runtime asset packages")
+        if candidate.get("kind") == "runtime_asset_package":
+            selected = candidate
+    return selected
 
 
 def _ordered_values(value: StatValue, width: int, *, label: str) -> tuple[float, ...]:
@@ -664,6 +717,11 @@ def materialize_deploy_state(
 ) -> FrozenDeployState:
     """Build a frozen state from the accepted files in one source snapshot."""
 
+    if inputs.robot_identity_fingerprint is None:
+        raise ValueError("new deployment materialization requires a robot identity fingerprint")
+    if inputs.asset_fingerprint is None:
+        raise ValueError("new deployment materialization requires an authoritative asset fingerprint")
+
     training, training_hash = _load_state(
         inputs.accepted_training_state,
         TrainingAcceptedCatalog,
@@ -711,12 +769,23 @@ def materialize_deploy_state(
         for actuator in profile.resolved.composition.pd
     )
     composition = FrozenDeployComposition(neural=tuple(neural), pd=pd)
+    asset_identity = _select_deploy_asset_identity(
+        inputs.asset_fingerprint,
+        tuple(verified_models.values()),
+    )
     return FrozenDeployState(
         schema_version=1,
         simulation=profile.resolved.simulation,
         ownership=composition.output_owners(),
         composition=composition,
         source=DeploySourceProvenance(
+            robot=(inputs.robot if inputs.robot_identity_fingerprint is not None else None),
+            robot_identity=(
+                None
+                if inputs.robot_identity_fingerprint is None
+                else dict(inputs.robot_identity_fingerprint)
+            ),
+            asset_identity=asset_identity,
             profile=profile.selected.name,
             profile_sha256=profile.selected.content_sha256,
             sysid_revision=sysid.revision,

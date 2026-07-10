@@ -119,7 +119,25 @@ def _source_profile(repo: Path, phase: str, content: dict[str, Any]) -> Any:
 def _install_sysid_source(repo: Path, *, control_freq: int = 500) -> Path:
     """Install one valid immutable SysID candidate under the canonical layout."""
 
-    run_input = {"phase": "sysid", "case": "candidate"}
+    resolved_config = {
+        "joints": ["joint_a"],
+        "simulation": {"control_freq": control_freq},
+    }
+    profile = _source_profile(repo, "sysid", {"schema_version": 1})
+    run_input = {
+        "phase": "sysid",
+        "robot": "demo",
+        "profile": {
+            "name": profile.name,
+            "content": profile.content,
+            "content_sha256": profile.content_sha256,
+        },
+        "resolved_config": resolved_config,
+        "seed": 42,
+        "replicate": None,
+        "fingerprints": {},
+        "case": "candidate",
+    }
     run_hash = canonical_sha256(run_input)
     run_dir = repo / "outputs/sysid/demo/candidate/seed-42" / run_hash
     run_dir.mkdir(parents=True)
@@ -154,11 +172,6 @@ def _install_sysid_source(repo: Path, *, control_freq: int = 500) -> Path:
     )
     _write_yaml(run_dir / "sysid_state.yaml", state.to_dict())
     _write_yaml(run_dir / "metrics.yaml", {"loss": 0.1})
-    resolved_config = {
-        "joints": ["joint_a"],
-        "simulation": {"control_freq": control_freq},
-    }
-    profile = _source_profile(repo, "sysid", {"schema_version": 1})
     manifest = RunManifest.build(
         phase="sysid",
         robot="demo",
@@ -235,14 +248,35 @@ def _install_training_source(
 ) -> tuple[Path, LoadedRuntimeMetadata]:
     """Install a manifest-authenticated training run with injected metadata."""
 
-    run_input = {"phase": "train", "case": "candidate"}
+    profile = _source_profile(
+        repo,
+        "train",
+        {"schema_version": 1, "target": "torque"},
+    )
+    resolved_config = {"target": "torque", "sample_dt_s": sample_dt_s}
+    fingerprints = {
+        "asset": {"asset_sha256": SHA_A},
+        "dataset": {"tree_sha256": SHA_B},
+    }
+    run_input = {
+        "phase": "train",
+        "robot": "demo",
+        "profile": {
+            "name": profile.name,
+            "content": profile.content,
+            "content_sha256": profile.content_sha256,
+        },
+        "resolved_config": resolved_config,
+        "seed": 42,
+        "replicate": None,
+        "fingerprints": fingerprints,
+        "case": "candidate",
+    }
     run_hash = canonical_sha256(run_input)
     run_dir = repo / "outputs/train/demo/candidate/seed-42" / run_hash
     run_dir.mkdir(parents=True)
     (run_dir / "network.pt").write_bytes(b"authenticated-network")
     (run_dir / "sysid_state.yaml").write_text("frozen: state\n", encoding="utf-8")
-    profile = _source_profile(repo, "train", {"schema_version": 1, "target": "torque"})
-    resolved_config = {"target": "torque", "sample_dt_s": sample_dt_s}
     metadata = _runtime_metadata(
         profile_sha256=profile.content_sha256,
         resolved_config_sha256=canonical_sha256(resolved_config),
@@ -259,10 +293,7 @@ def _install_training_source(
         resolved_config=resolved_config,
         seed=42,
         run_input=run_input,
-        fingerprints={
-            "asset": {"asset_sha256": SHA_A},
-            "dataset": {"tree_sha256": SHA_B},
-        },
+        fingerprints=fingerprints,
         generated_files=generated_files(
             run_dir,
             {"network.pt": "network", "sysid_state.yaml": "sysid_state"},
@@ -286,6 +317,11 @@ def _resolver_inputs(
         profiles_directory=profiles,
         canonical_joint_names=("joint_a", "joint_b"),
         joint_aliases={"A": "joint_a"},
+        robot_identity_fingerprint={
+            "kind": "robot_yaml_identity",
+            "raw_sha256": "e" * 64,
+            "canonical_sha256": "f" * 64,
+        },
         asset_fingerprint={"asset_sha256": SHA_A},
         source_fingerprint={"source_sha256": SHA_B},
         dependency_fingerprints={"newton": "1.4.0.dev0"},

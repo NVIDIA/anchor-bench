@@ -356,7 +356,32 @@ def _candidate_outputs(
 
 
 def _verify_replay_inputs(resolved: ResolvedBenchmarkRun) -> None:
-    """Reject dataset or selected-motion changes made after resolution."""
+    """Reject robot, asset, dataset, or motion changes made after resolution."""
+
+    from anchor_bench.robots.fingerprints import (
+        verify_robot_identity_fingerprint,
+        verify_runtime_asset_fingerprint,
+    )
+    from anchor_bench.robots.registry import get_robot_from_root
+    from anchor_bench.runtime.assets import resolve_runtime_asset
+
+    bundle = get_robot_from_root(resolved.robot, resolved.repository_root)
+    expected_robot = resolved.fingerprints.get("robot")
+    if not isinstance(expected_robot, Mapping):
+        raise ValueError("resolved benchmark is missing its robot fingerprint")
+    verify_robot_identity_fingerprint(
+        expected_robot,
+        bundle,
+        repository_root=resolved.repository_root,
+    )
+    expected_asset = resolved.fingerprints.get("asset")
+    if not isinstance(expected_asset, Mapping):
+        raise ValueError("resolved benchmark is missing its asset fingerprint")
+    verify_runtime_asset_fingerprint(
+        expected_asset,
+        resolve_runtime_asset(bundle),
+        runtime_usd=bundle.spec.runtime_usd,
+    )
 
     expected_dataset = resolved.fingerprints.get("dataset")
     if not isinstance(expected_dataset, Mapping):
@@ -812,11 +837,11 @@ class NewtonMuJoCoReplayAdapter:
                 "benchmark replay requires Newton and Warp from the full runtime"
             ) from error
 
-        from anchor_bench.robots.registry import get_robot
+        from anchor_bench.robots.registry import get_robot_from_root
         from anchor_bench.runtime.assets import resolve_runtime_asset
         from anchor_bench.training.asset_snapshot import build_asset_snapshot
 
-        bundle = get_robot(resolved.robot)
+        bundle = get_robot_from_root(resolved.robot, resolved.repository_root)
         asset_path = resolve_runtime_asset(bundle).resolve(strict=True)
         asset_sha256 = sha256_file(asset_path)
         expected_asset_sha256 = _expected_asset_sha(resolved)

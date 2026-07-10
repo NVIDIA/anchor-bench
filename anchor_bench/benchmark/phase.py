@@ -32,8 +32,9 @@ from anchor_bench.core.hashing import (
 )
 from anchor_bench.core.manifest_schema import GeneratedFile, ProfileSnapshot
 from anchor_bench.core.paths import benchmark_run_dir
-from anchor_bench.core.plan import CommandPlan
+from anchor_bench.core.plan import CommandPlan, command_identity_metadata
 from anchor_bench.core.profiles import load_profile, require_logical_name
+from anchor_bench.robots.fingerprints import fingerprint_contains_preview
 from anchor_bench.sysid.state import LoadedSysIdCandidate, load_verified_sysid_candidate
 from anchor_bench.training.archive import (
     EmbeddedRuntimeMetadata,
@@ -122,6 +123,7 @@ class BenchmarkResolverInputs:
     profiles_directory: Path
     canonical_joint_names: Sequence[str]
     joint_aliases: Mapping[str, str]
+    robot_identity_fingerprint: Mapping[str, Any]
     asset_fingerprint: Mapping[str, Any]
     source_fingerprint: Mapping[str, Any]
     dependency_fingerprints: Mapping[str, Any]
@@ -160,6 +162,7 @@ class BenchmarkExecutionResult:
 class ResolvedBenchmarkRun:
     """Complete semantic benchmark input and deterministic output location."""
 
+    repository_root: Path
     robot: str
     profile_name: str
     profile_snapshot: ProfileSnapshot
@@ -650,6 +653,8 @@ def _command_plan(
     run_input_sha256: str,
     source: BenchmarkCandidateReference,
     motions: Sequence[BenchmarkMotionSource],
+    *,
+    preview_identity: bool,
 ) -> CommandPlan:
     """Build the lightweight summary carried by a resolved benchmark."""
 
@@ -684,8 +689,11 @@ def _command_plan(
             "profile": invocation.profile,
             "source": source.to_dict(),
             "motions": [motion.name for motion in motions],
-            "run_input_sha256": run_input_sha256,
-            "run_dir": str(run_dir),
+            **command_identity_metadata(
+                run_dir,
+                run_input_sha256,
+                preview=preview_identity,
+            ),
         },
     )
 
@@ -754,18 +762,26 @@ def resolve_benchmark_run(
 
     fingerprints = {
         **motion_fingerprints,
+        "robot": dict(inputs.robot_identity_fingerprint),
         "asset": dict(inputs.asset_fingerprint),
         "source": dict(inputs.source_fingerprint),
         "dependencies": dict(inputs.dependency_fingerprints),
     }
     canonical_object(fingerprints)
-    profile_snapshot = ProfileSnapshot.from_dict(
-        loaded_profile.manifest_data(repository_root=repository_root),
-        "benchmark profile snapshot",
-    )
     semantic_profile = _semantic_profile_document(resolved_profile)
     semantic_profile_source = dict(loaded_profile.content)
     semantic_profile_source.pop("output_root")
+    profile_document = loaded_profile.manifest_data(
+        repository_root=repository_root
+    )
+    profile_document["content"] = semantic_profile_source
+    profile_document["content_sha256"] = canonical_sha256(
+        semantic_profile_source
+    )
+    profile_snapshot = ProfileSnapshot.from_dict(
+        profile_document,
+        "benchmark profile snapshot",
+    )
     run_input = {
         "schema_version": 1,
         "phase": "benchmark",
@@ -776,6 +792,8 @@ def resolve_benchmark_run(
             "content_sha256": canonical_sha256(semantic_profile_source),
         },
         "resolved_config": semantic_profile,
+        "seed": None,
+        "replicate": None,
         "candidate": _candidate_identity(source_reference, candidate),
         "fingerprints": fingerprints,
     }
@@ -794,9 +812,15 @@ def resolve_benchmark_run(
         benchmark_input_sha256=run_input_sha256,
     )
     plan = _command_plan(
-        invocation, run_dir, run_input_sha256, source_reference, motions
+        invocation,
+        run_dir,
+        run_input_sha256,
+        source_reference,
+        motions,
+        preview_identity=fingerprint_contains_preview(fingerprints),
     )
     return ResolvedBenchmarkRun(
+        repository_root=repository_root,
         robot=robot,
         profile_name=invocation.profile,
         profile_snapshot=profile_snapshot,
@@ -838,7 +862,11 @@ def execute_benchmark_run(
         )
     completed_manifest: RunManifest | None = None
     no_op = False
-    with run_slot(resolved.run_dir, resolved.run_input_sha256) as slot:
+    with run_slot(
+        resolved.run_dir,
+        resolved.run_input_sha256,
+        containment_root=resolved.repository_root,
+    ) as slot:
         no_op = slot.noop
         if slot.noop:
             completed_manifest = slot.manifest

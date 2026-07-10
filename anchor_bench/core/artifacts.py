@@ -37,6 +37,7 @@ from anchor_bench.core.manifest_schema import (
     finalize_manifest,
     manifest_sha256,
 )
+from anchor_bench.core.paths import safe_run_path
 from anchor_bench.core.profiles import load_yaml_mapping
 
 
@@ -414,11 +415,22 @@ class RunSlot:
 def run_slot(
     run_dir: str | Path,
     expected_run_input_sha256: str | None = None,
+    *,
+    containment_root: str | Path,
 ) -> Iterator[RunSlot]:
     """Yield either a validated no-op or a temporary sibling to complete."""
 
-    target = Path(run_dir)
+    target = safe_run_path(
+        run_dir,
+        containment_root=containment_root,
+        must_exist=False,
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
+    target = safe_run_path(
+        target,
+        containment_root=containment_root,
+        must_exist=False,
+    )
     with sibling_lock(target):
         if _lexists(target):
             manifest = verify_run_directory(target, expected_run_input_sha256)

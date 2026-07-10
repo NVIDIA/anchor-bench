@@ -18,8 +18,8 @@ def _candidate_roots(bundle: RobotBundle) -> list[Path]:
     roots: list[Path] = [bundle.paths.asset.parent / "files"]
     env_root = os.environ.get("ANCHOR_BENCH_ASSET_DIR")
     if env_root:
-        roots.insert(0, Path(env_root) / bundle.spec.name)
-        roots.insert(0, Path(env_root))
+        external = Path(env_root)
+        roots = [external / bundle.spec.name, external, *roots]
     return roots
 
 

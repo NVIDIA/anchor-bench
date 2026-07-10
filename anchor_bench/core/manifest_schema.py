@@ -180,6 +180,58 @@ class RunManifest(ConfigModel):
         if input_hash != self.run_input_sha256:
             raise ValueError(f"run_input_sha256 mismatch: expected {input_hash}")
 
+        duplicated = {
+            "phase": self.phase,
+            "robot": self.robot,
+            "resolved_config": self.resolved_config,
+            "seed": self.seed,
+            "replicate": self.replicate,
+            "fingerprints": self.fingerprints,
+        }
+        for name, top_level in duplicated.items():
+            if name not in self.run_input:
+                raise ValueError(f"run_input is missing duplicated field {name!r}")
+            if canonical_sha256(self.run_input[name]) != canonical_sha256(top_level):
+                raise ValueError(
+                    f"top-level {name} does not match run_input.{name}"
+                )
+
+        run_profile = self.run_input.get("profile")
+        if not isinstance(run_profile, Mapping):
+            raise ValueError("run_input.profile must be a mapping")
+        profile_fields = {
+            "name": self.profile.name,
+            "content": self.profile.content,
+            "content_sha256": self.profile.content_sha256,
+        }
+        for name, top_level in profile_fields.items():
+            if name not in run_profile:
+                raise ValueError(
+                    f"run_input.profile is missing duplicated field {name!r}"
+                )
+            if canonical_sha256(run_profile[name]) != canonical_sha256(top_level):
+                raise ValueError(
+                    f"top-level profile.{name} does not match run_input.profile.{name}"
+                )
+
+        if "upstream" in self.run_input and canonical_sha256(
+            self.run_input["upstream"]
+        ) != canonical_sha256(self.upstream):
+            raise ValueError("top-level upstream does not match run_input.upstream")
+        candidate = self.run_input.get("candidate")
+        candidate_source = (
+            candidate.get("source") if isinstance(candidate, Mapping) else None
+        )
+        upstream_source = self.upstream.get("source")
+        if candidate_source is not None or upstream_source is not None:
+            if canonical_sha256(candidate_source) != canonical_sha256(
+                upstream_source
+            ):
+                raise ValueError(
+                    "top-level upstream.source does not match "
+                    "run_input.candidate.source"
+                )
+
         paths = [entry.path for entry in self.generated_files]
         if len(paths) != len(set(paths)):
             raise ValueError("generated_files contains duplicate paths")

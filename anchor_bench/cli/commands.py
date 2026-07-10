@@ -22,17 +22,20 @@ def _print_run_outcome(outcome: Any) -> int:
 
     print(outcome.plan.to_yaml().rstrip())
     status = "dry-run" if outcome.dry_run else "no-op" if outcome.no_op else "completed"
-    result: dict[str, Any] = {
-        "status": status,
-        "run_dir": str(outcome.run_dir),
-        "run_input_sha256": outcome.run_input_sha256,
-    }
-    if outcome.dry_run:
+    plan_metadata = outcome.plan.metadata or {}
+    preview_identity = plan_metadata.get("identity") == "preview"
+    result: dict[str, Any] = {"status": status}
+    if preview_identity:
         result["identity"] = "preview"
+        result["preview_run_dir"] = str(outcome.run_dir)
+        result["preview_input_sha256"] = outcome.run_input_sha256
         result["identity_note"] = (
             "runtime asset and unavailable dataset bytes are fingerprinted only "
             "for real execution"
         )
+    else:
+        result["run_dir"] = str(outcome.run_dir)
+        result["run_input_sha256"] = outcome.run_input_sha256
     if outcome.manifest is not None:
         result["run_manifest_sha256"] = outcome.manifest.run_manifest_sha256
     print(yaml.safe_dump({"result": result}, sort_keys=False).rstrip())

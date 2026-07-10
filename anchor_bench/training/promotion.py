@@ -15,6 +15,7 @@ from anchor_bench.core.hashing import (
     validate_sha256,
 )
 from anchor_bench.core.profiles import load_yaml_mapping
+from anchor_bench.core.paths import require_canonical_phase_run_dir
 from anchor_bench.training.archive import (
     EmbeddedRuntimeMetadata,
     read_runtime_metadata_archive,
@@ -288,19 +289,28 @@ def promote_training_run(
     source_manifest = verify_run_directory(source_run)
     if source_manifest.phase != "train":
         raise ValueError("promotion source must be a completed Training run")
+    source_path = require_canonical_phase_run_dir(
+        source_run,
+        repository_root=repository_root,
+        phase="train",
+        robot=source_manifest.robot,
+        profile=source_manifest.profile.name,
+        seed=source_manifest.seed,
+        run_input_sha256=source_manifest.run_input_sha256,
+    )
     entries = _required_entries(source_manifest)
     profile = TrainingProfile.from_dict(
         source_manifest.resolved_config,
         "Training source resolved_config",
     )
     embedded = _validate_archive_contract(
-        Path(source_run),
+        source_path,
         source_manifest,
         entries,
         profile,
     )
     source_relative = repo_relative_posix(
-        source_run,
+        source_path,
         repository_root=repository_root,
     )
     evidence = _benchmark_evidence(
@@ -311,7 +321,7 @@ def promote_training_run(
     )
     model_key = source_manifest.profile.name
     artifact_path = repo_relative_posix(
-        Path(source_run) / "network.pt",
+        source_path / "network.pt",
         repository_root=repository_root,
     )
     contract = AcceptedTrainingContract(

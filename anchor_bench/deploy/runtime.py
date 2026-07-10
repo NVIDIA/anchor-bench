@@ -485,6 +485,34 @@ def _verify_neural_artifact(
     return _VerifiedNeural(artifact_path, metadata)
 
 
+def _verify_frozen_source_identities(state: FrozenDeployState, root: Path) -> None:
+    """Verify frozen robot and asset identities without reading phase state."""
+
+    if state.source.robot is None:
+        return
+    if state.source.robot_identity is None:  # pragma: no cover - schema invariant
+        raise RuntimeError("frozen deployment robot identity is missing")
+    from anchor_bench.robots.fingerprints import (
+        verify_robot_identity_fingerprint,
+        verify_runtime_asset_fingerprint,
+    )
+    from anchor_bench.robots.registry import get_robot_from_root
+    from anchor_bench.runtime.assets import resolve_runtime_asset
+
+    bundle = get_robot_from_root(state.source.robot, root)
+    verify_robot_identity_fingerprint(
+        state.source.robot_identity,
+        bundle,
+        repository_root=root,
+    )
+    if state.source.asset_identity is not None:
+        verify_runtime_asset_fingerprint(
+            state.source.asset_identity,
+            resolve_runtime_asset(bundle),
+            runtime_usd=bundle.spec.runtime_usd,
+        )
+
+
 def _model_joint_instances(
     model: Any,
     requested_joints: Sequence[str],
@@ -765,6 +793,14 @@ def _validate_runtime_actuator(actuator: Any, *, label: str, neural: bool) -> No
             raise TypeError(f"{label} must be stateful for recurrent reset semantics")
 
 
+def _default_mapped_neural_factory(request: MappedNeuralRequest) -> Any:
+    """Load Anchor's schema-v3 mapped GRU implementation only when needed."""
+
+    from anchor_bench.deploy.neural_gru import build_mapped_gru_actuator
+
+    return build_mapped_gru_actuator(request)
+
+
 def _build_runtime_entries(
     state: FrozenDeployState,
     model: Any,
@@ -850,11 +886,9 @@ def build_deployment_runtime(
     if root_source.is_symlink() or not root_source.is_dir():
         raise ValueError(f"repository_root must be a real directory: {root_source}")
     root = root_source.resolve(strict=True)
+    _verify_frozen_source_identities(state, root)
     if state.composition.neural and neural_factory is None:
-        raise ValueError(
-            "schema-v3 neural deployment requires a mapped neural actuator factory; "
-            "Newton ControllerNeuralGRU consumes incompatible schema-version-1 metadata"
-        )
+        neural_factory = _default_mapped_neural_factory
 
     expected_dt = 1.0 / state.simulation.control_freq
     verified: dict[str, _VerifiedNeural] = {}

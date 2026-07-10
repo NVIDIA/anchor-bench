@@ -11,11 +11,16 @@ from typing import Any, Literal
 
 from anchor_bench.benchmark.phase import BenchmarkResolverInputs
 from anchor_bench.core.fingerprints import source_fingerprint
-from anchor_bench.core.hashing import canonical_sha256, sha256_file, tree_fingerprint
+from anchor_bench.core.hashing import canonical_sha256, tree_fingerprint
 from anchor_bench.core.paths import accepted_state_path, phase_profiles_dir, repo_root
 from anchor_bench.core.versions import load_external_versions
 from anchor_bench.deploy.runner import DeployResolverInputs
 from anchor_bench.robots.registry import RobotBundle, get_robot
+from anchor_bench.robots.fingerprints import (
+    preview_asset_fingerprint,
+    robot_identity_fingerprint,
+    runtime_asset_fingerprint,
+)
 from anchor_bench.sysid.runner import SysIdResolverInputs
 from anchor_bench.training.runner import TrainingResolverInputs
 
@@ -53,26 +58,28 @@ def dependency_fingerprints(phase: Phase) -> dict[str, Any]:
     }
 
 
-def _asset_fingerprint(bundle: RobotBundle, *, dry_run: bool) -> dict[str, Any]:
-    """Hash the runtime USD for execution or its manifest for a dry preview."""
+def _asset_fingerprint(
+    bundle: RobotBundle,
+    *,
+    repository_root: Path,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Hash the runtime package for execution or its manifest for a preview."""
 
     if dry_run:
-        manifest_sha256 = sha256_file(bundle.paths.asset)
-        return {
-            "kind": "dry_run_asset_manifest",
-            "runtime_usd": bundle.spec.runtime_usd,
-            "manifest_sha256": manifest_sha256,
-            "sha256": manifest_sha256,
-        }
+        return preview_asset_fingerprint(
+            bundle.paths.asset,
+            runtime_usd=bundle.spec.runtime_usd,
+            repository_root=repository_root,
+        )
 
     from anchor_bench.runtime.assets import resolve_runtime_asset
 
     runtime_asset = resolve_runtime_asset(bundle)
-    return {
-        "kind": "runtime_usd",
-        "runtime_usd": bundle.spec.runtime_usd,
-        "sha256": sha256_file(runtime_asset),
-    }
+    return runtime_asset_fingerprint(
+        runtime_asset,
+        runtime_usd=bundle.spec.runtime_usd,
+    )
 
 
 def _dataset_fingerprint_resolver(
@@ -110,7 +117,12 @@ def _common_context(robot: str, phase: Phase, *, dry_run: bool) -> tuple[Path, R
     root = repo_root().resolve(strict=True)
     bundle = get_robot(robot)
     common = {
-        "asset": _asset_fingerprint(bundle, dry_run=dry_run),
+        "robot": robot_identity_fingerprint(bundle, repository_root=root),
+        "asset": _asset_fingerprint(
+            bundle,
+            repository_root=root,
+            dry_run=dry_run,
+        ),
         "source": source_fingerprint(root),
         "dependencies": dependency_fingerprints(phase),
     }
@@ -127,6 +139,7 @@ def sysid_resolver_inputs(robot: str, *, dry_run: bool) -> SysIdResolverInputs:
         accepted_state=accepted_state_path(robot, "sysid"),
         canonical_joint_names=bundle.spec.joint_names,
         joint_aliases=bundle.spec.joint_aliases,
+        robot_identity_fingerprint=common["robot"],
         asset_fingerprint=common["asset"],
         source_fingerprint=common["source"],
         dependency_fingerprints=common["dependencies"],
@@ -147,6 +160,7 @@ def training_resolver_inputs(robot: str, *, dry_run: bool) -> TrainingResolverIn
         accepted_sysid_state=accepted_state_path(robot, "sysid"),
         canonical_joint_names=bundle.spec.joint_names,
         joint_aliases=bundle.spec.joint_aliases,
+        robot_identity_fingerprint=common["robot"],
         asset_fingerprint=common["asset"],
         source_fingerprint=common["source"],
         dependency_fingerprints=common["dependencies"],
@@ -166,6 +180,7 @@ def benchmark_resolver_inputs(robot: str, *, dry_run: bool) -> BenchmarkResolver
         profiles_directory=phase_profiles_dir(robot, "benchmark"),
         canonical_joint_names=bundle.spec.joint_names,
         joint_aliases=bundle.spec.joint_aliases,
+        robot_identity_fingerprint=common["robot"],
         asset_fingerprint=common["asset"],
         source_fingerprint=common["source"],
         dependency_fingerprints=common["dependencies"],
@@ -177,6 +192,11 @@ def deploy_resolver_inputs(robot: str) -> DeployResolverInputs:
 
     root = repo_root().resolve(strict=True)
     bundle = get_robot(robot)
+    asset_fingerprint = _asset_fingerprint(
+        bundle,
+        repository_root=root,
+        dry_run=False,
+    )
     return DeployResolverInputs(
         repository_root=root,
         robot=robot,
@@ -186,6 +206,11 @@ def deploy_resolver_inputs(robot: str) -> DeployResolverInputs:
         deployed_state=accepted_state_path(robot, "deploy"),
         canonical_joint_names=bundle.spec.joint_names,
         joint_aliases=bundle.spec.joint_aliases,
+        robot_identity_fingerprint=robot_identity_fingerprint(
+            bundle,
+            repository_root=root,
+        ),
+        asset_fingerprint=asset_fingerprint,
     )
 
 

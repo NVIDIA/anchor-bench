@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -595,26 +596,188 @@ def test_full_torque_neural_outputs_use_direct_effort_mode(tmp_path: Path) -> No
     )
 
 
-def test_neural_requires_explicit_schema_v3_factory_before_runtime_import(
+def test_neural_uses_lazy_anchor_schema_v3_factory_by_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Fail clearly instead of routing schema-v3 into Newton's schema-v1 GRU."""
+    """Build neural deployment without requiring a caller-injected factory."""
 
     from anchor_bench.deploy import runtime
 
     frozen, _artifact = _frozen(tmp_path)
+    requests = []
+    neural = _NeuralActuator()
+
+    def default_factory(request):
+        """Capture use of Anchor's lazy production-factory slot."""
+
+        requests.append(request)
+        return neural
+
     monkeypatch.setattr(
         runtime,
         "_load_newton_bindings",
         lambda: (_ for _ in ()).throw(AssertionError("heavy runtime imported")),
     )
-    with pytest.raises(ValueError, match="incompatible schema-version-1 metadata"):
+    monkeypatch.setattr(runtime, "_default_mapped_neural_factory", default_factory)
+    built = runtime.build_deployment_runtime(
+        frozen,
+        _Model(),
+        repository_root=tmp_path,
+        bindings=_bindings(),
+    )
+
+    assert len(requests) == 1
+    assert requests[0].metadata.schema_version == 3
+    assert built.entries[1].actuator is neural
+
+
+def test_schema_v1_neural_archive_remains_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject legacy metadata before loading Anchor's schema-v3 runtime."""
+
+    from anchor_bench.deploy import runtime
+
+    frozen, artifact = _frozen(tmp_path)
+    legacy_metadata = b'{"schema_version":1}'
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr("archive/extra/metadata.json", legacy_metadata)
+    payload = frozen.to_dict()
+    reference = payload["composition"]["neural"][0]["artifact"]
+    reference["sha256"] = sha256_file(artifact)
+    reference["metadata_sha256"] = sha256_hex(legacy_metadata)
+    legacy = FrozenDeployState.from_dict(payload, "deploy/default.yaml")
+    monkeypatch.setattr(
+        runtime,
+        "_default_mapped_neural_factory",
+        lambda request: (_ for _ in ()).throw(AssertionError("factory loaded")),
+    )
+
+    with pytest.raises(ValueError, match="invalid embedded metadata.json"):
         runtime.build_deployment_runtime(
-            frozen,
+            legacy,
             _Model(),
             repository_root=tmp_path,
+            bindings=_bindings(),
         )
+
+
+def test_shared_siso_builds_one_default_application_per_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expand shared weights into independent context and elbow recurrent paths."""
+
+    from anchor_bench.deploy import runtime
+
+    mappings = (
+        RuntimeMapping(
+            input_joints=("context",),
+            output_joints=("context",),
+            effort_limits=10.0,
+            clamping="total_output",
+        ),
+        RuntimeMapping(
+            input_joints=("elbow",),
+            output_joints=("elbow",),
+            effort_limits=20.0,
+            clamping="total_output",
+        ),
+    )
+    metadata = RuntimeGRUMetadata(
+        input_size=1,
+        output_size=1,
+        recurrent=GRURecurrentDimensions(hidden_size=4, num_layers=1),
+        input_features=(
+            RuntimeFeature(
+                name="position",
+                domain="input",
+                components=("value",),
+                width=1,
+            ),
+        ),
+        mappings=mappings,
+        target_columns=("torque",),
+        sample_dt_s=0.002,
+        normalization=RuntimeNormalization(
+            inputs=NormalizationValues(
+                mean={"position": 0.0},
+                std={"position": 1.0},
+            ),
+            targets=NormalizationValues(
+                mean={"torque": 0.0},
+                std={"torque": 1.0},
+            ),
+        ),
+        hashes=RuntimeHashes(
+            profile_sha256="a" * 64,
+            resolved_config_sha256="b" * 64,
+            sysid_state_sha256="c" * 64,
+            asset_sha256="d" * 64,
+            source_sha256="e" * 64,
+        ),
+    )
+    frozen, artifact = _frozen(tmp_path)
+    raw_metadata = serialize_runtime_metadata(metadata).encode("utf-8")
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr("archive/extra/metadata.json", raw_metadata)
+    payload = frozen.to_dict()
+    payload["ownership"] = {"context": "arm_network", "elbow": "arm_network"}
+    payload["composition"]["pd"] = []
+    neural = payload["composition"]["neural"][0]
+    neural["target"] = "torque"
+    neural["artifact"]["sha256"] = sha256_file(artifact)
+    neural["artifact"]["metadata_sha256"] = sha256_hex(raw_metadata)
+    neural["mappings"] = [
+        {
+            "index": 0,
+            "input_joints": ["context"],
+            "output_joints": ["context"],
+            "pd_baseline": None,
+            "friction_baseline": None,
+            "armature": None,
+            "effort_limits": {"context": 10.0},
+            "clamping": "total_output",
+        },
+        {
+            "index": 1,
+            "input_joints": ["elbow"],
+            "output_joints": ["elbow"],
+            "pd_baseline": None,
+            "friction_baseline": None,
+            "armature": None,
+            "effort_limits": {"elbow": 20.0},
+            "clamping": "total_output",
+        },
+    ]
+    shared = FrozenDeployState.from_dict(payload, "deploy/default.yaml")
+    requests = []
+
+    def default_factory(request):
+        """Capture each physical mapping and return independent recurrent state."""
+
+        requests.append(request)
+        return _NeuralActuator()
+
+    monkeypatch.setattr(runtime, "_default_mapped_neural_factory", default_factory)
+    built = runtime.build_deployment_runtime(
+        shared,
+        _Model(),
+        repository_root=tmp_path,
+        bindings=_bindings(),
+    )
+
+    assert [request.mapping.index for request in requests] == [0, 1]
+    assert [request.input_axes.joints for request in requests] == [("context",), ("elbow",)]
+    assert all(request.input_axes.worlds == (0, 1) for request in requests)
+    assert requests[0].artifact_path == requests[1].artifact_path
+    assert requests[0].metadata is requests[1].metadata
+    assert [(entry.kind, entry.mapping_index) for entry in built.entries] == [
+        ("neural", 0),
+        ("neural", 1),
+    ]
 
 
 def test_rejects_artifact_and_frozen_mapping_drift(tmp_path: Path) -> None:
@@ -682,3 +845,385 @@ def test_default_loader_ignores_mutable_upstream_and_asset_mapping_fails(
             neural_factory=lambda request: _NeuralActuator(),
             bindings=_bindings(),
         )
+
+
+def _torch_bindings(torch):
+    """Return fake Newton constructors with Torch-aware owned-effort clearing."""
+
+    from anchor_bench.deploy.runtime import NewtonActuatorBindings
+
+    def clear_owned_efforts(efforts, indices, device) -> None:
+        """Clear selected indices directly in a Torch-backed control array."""
+
+        selected = torch.as_tensor(indices.numpy(), dtype=torch.long, device=efforts.device)
+        efforts[selected] = 0.0
+
+    return NewtonActuatorBindings(
+        warp=_Warp,
+        actuator_type=_PDActuator,
+        controller_pd_type=_ControllerPD,
+        clamping_max_effort_type=_Clamp,
+        joint_target_mode_type=_JointTargetMode,
+        joint_dof_properties_flag="JOINT_DOF_PROPERTIES",
+        clear_owned_efforts=clear_owned_efforts,
+    )
+
+
+def _neural_only_frozen(
+    frozen: FrozenDeployState,
+    artifact: Path,
+    metadata: RuntimeGRUMetadata,
+    scripted,
+    torch,
+    *,
+    ownership=None,
+    mapping_documents=None,
+) -> FrozenDeployState:
+    """Replace a fake archive with TorchScript and retain only its neural owner."""
+
+    raw_metadata = serialize_runtime_metadata(metadata).encode("utf-8")
+    torch.jit.save(
+        scripted,
+        str(artifact),
+        _extra_files={"metadata.json": raw_metadata.decode("utf-8")},
+    )
+    payload = frozen.to_dict()
+    payload["ownership"] = ownership or {"elbow": "arm_network"}
+    payload["composition"]["pd"] = []
+    neural = payload["composition"]["neural"][0]
+    neural["target"] = metadata.target_columns[0]
+    if mapping_documents is not None:
+        neural["mappings"] = mapping_documents
+    reference = neural["artifact"]
+    reference["sha256"] = sha256_file(artifact)
+    reference["metadata_sha256"] = sha256_hex(raw_metadata)
+    return FrozenDeployState.from_dict(payload, "deploy/default.yaml")
+
+
+def _torch_simulation_values(torch):
+    """Build two-world Torch state and control values in Newton joint layout."""
+
+    state = SimpleNamespace(
+        joint_q=torch.zeros(8, dtype=torch.float32),
+        joint_qd=torch.zeros(8, dtype=torch.float32),
+    )
+    control = SimpleNamespace(
+        joint_target_q=torch.zeros(8, dtype=torch.float32),
+        joint_target_qd=torch.zeros(8, dtype=torch.float32),
+        joint_f=torch.tensor(
+            [7.0, 8.0, 9.0, 91.0, 17.0, 18.0, 19.0, 92.0],
+            dtype=torch.float32,
+        ),
+    )
+    return state, control
+
+
+def test_production_gru_normalizes_feedback_clamps_and_resets(tmp_path: Path) -> None:
+    """Keep raw pre-clamp feedback while resetting selected worlds to physical zero."""
+
+    torch = pytest.importorskip("torch", reason="production GRU test requires PyTorch")
+    from anchor_bench.deploy.runtime import build_deployment_runtime
+
+    metadata_payload = _metadata().model_dump(mode="python")
+    metadata_payload["normalization"]["inputs"]["mean"]["previous_torque"] = 10.0
+    metadata_payload["normalization"]["inputs"]["std"]["previous_torque"] = 2.0
+    metadata_payload["normalization"]["targets"]["mean"]["torque_residual"] = 10.0
+    metadata_payload["normalization"]["targets"]["std"]["torque_residual"] = 2.0
+    metadata = RuntimeGRUMetadata.model_validate(metadata_payload)
+
+    class AutoregressiveNetwork(torch.nn.Module):
+        """Produce a known physical recurrence through normalized tensors."""
+
+        def forward(self, values, hidden):
+            """Return normalized torque and a visible next hidden state."""
+
+            previous = values[:, :, 2:3]
+            return 7.5 - 0.5 * previous, hidden + 1.0
+
+    example_values = torch.zeros(2, 1, metadata.input_size, dtype=torch.float32)
+    example_hidden = torch.zeros(
+        metadata.recurrent.num_layers,
+        2,
+        metadata.recurrent.hidden_size,
+        dtype=torch.float32,
+    )
+    scripted = torch.jit.trace(
+        AutoregressiveNetwork(),
+        (example_values, example_hidden),
+    )
+    frozen, artifact = _frozen(tmp_path)
+    frozen = _neural_only_frozen(frozen, artifact, metadata, scripted, torch)
+    model = _Model()
+    runtime = build_deployment_runtime(
+        frozen,
+        model,
+        repository_root=tmp_path,
+        bindings=_torch_bindings(torch),
+    )
+    recurrent = runtime.state()
+    sim_state, control = _torch_simulation_values(torch)
+
+    runtime.step(sim_state, control, recurrent)
+    np.testing.assert_allclose(control.joint_f.numpy(), [7, 25, 9, 91, 17, 25, 19, 92])
+    np.testing.assert_allclose(
+        recurrent.current[0].previous_torque.numpy(),
+        [[30.0], [30.0]],
+    )
+    np.testing.assert_allclose(recurrent.current[0].hidden.numpy(), 1.0)
+
+    runtime.step(sim_state, control, recurrent)
+    np.testing.assert_allclose(control.joint_f.numpy(), [7, 15, 9, 91, 17, 15, 19, 92])
+    np.testing.assert_allclose(
+        recurrent.current[0].previous_torque.numpy(),
+        [[15.0], [15.0]],
+    )
+    recurrent.reset([True, False])
+    np.testing.assert_allclose(
+        recurrent.current[0].previous_torque.numpy(),
+        [[0.0], [15.0]],
+    )
+    np.testing.assert_allclose(
+        recurrent.current[0].hidden[:, :, 0].numpy(),
+        [[0.0, 2.0]],
+    )
+
+    runtime.step(sim_state, control, recurrent)
+    np.testing.assert_allclose(
+        control.joint_f.numpy(),
+        [7, 25, 9, 91, 17, 22.5, 19, 92],
+    )
+    np.testing.assert_allclose(
+        recurrent.current[0].hidden[:, :, 0].numpy(),
+        [[1.0, 3.0]],
+    )
+
+
+def test_production_gru_selects_live_dynamic_bias_per_mapping(tmp_path: Path) -> None:
+    """Feed mapped MuJoCo bias values as observations without adding them twice."""
+
+    torch = pytest.importorskip("torch", reason="production GRU test requires PyTorch")
+    from anchor_bench.deploy.runtime import build_deployment_runtime
+
+    metadata = _metadata(dynamic_bias=True)
+
+    class DynamicBiasNetwork(torch.nn.Module):
+        """Return the mapped elbow bias from the feature-major input row."""
+
+        def forward(self, values, hidden):
+            """Select the last dynamic-bias feature and advance hidden state."""
+
+            return values[:, :, 4:5], hidden + 1.0
+
+    scripted = torch.jit.trace(
+        DynamicBiasNetwork(),
+        (
+            torch.zeros(2, 1, metadata.input_size, dtype=torch.float32),
+            torch.zeros(
+                metadata.recurrent.num_layers,
+                2,
+                metadata.recurrent.hidden_size,
+                dtype=torch.float32,
+            ),
+        ),
+    )
+    frozen, artifact = _frozen(tmp_path, dynamic_bias=True)
+    frozen = _neural_only_frozen(frozen, artifact, metadata, scripted, torch)
+    model = _Model()
+
+    class TorchBiasSolver(_Solver):
+        """Return one reusable Torch qfrc_bias array in full DOF layout."""
+
+        def eval_dynamic_bias(self, state, out=None):
+            """Return initial bias values and verify subsequent output reuse."""
+
+            result = torch.tensor([1, 2, 0, 0, 4, 3, 0, 0], dtype=torch.float32) if out is None else out
+            self.bias_calls.append((state, out, result))
+            return result
+
+    solver = TorchBiasSolver(model)
+    runtime = build_deployment_runtime(
+        frozen,
+        model,
+        repository_root=tmp_path,
+        solver=solver,
+        bindings=_torch_bindings(torch),
+    )
+    recurrent = runtime.state()
+    sim_state, control = _torch_simulation_values(torch)
+
+    runtime.step(sim_state, control, recurrent)
+    np.testing.assert_allclose(control.joint_f.numpy(), [7, 2, 9, 91, 17, 3, 19, 92])
+    runtime.step(sim_state, control, recurrent)
+
+    assert solver.bias_calls[0][1] is None
+    assert solver.bias_calls[1][1] is solver.bias_calls[0][2]
+
+
+def test_production_gru_assembles_all_features_for_mimo_total_torque(
+    tmp_path: Path,
+) -> None:
+    """Assemble feature-major MIMO rows and scatter only full network torque."""
+
+    torch = pytest.importorskip("torch", reason="production GRU test requires PyTorch")
+    from anchor_bench.deploy.runtime import build_deployment_runtime
+
+    features = tuple(
+        RuntimeFeature(
+            name=name,
+            domain="output" if name == "previous_torque" else "input",
+            components=("value",),
+            width=2,
+        )
+        for name in (
+            "position",
+            "position_error",
+            "velocity",
+            "solver_pd",
+            "dynamic_bias",
+            "previous_torque",
+        )
+    )
+    mapping = RuntimeMapping(
+        input_joints=("context", "elbow"),
+        output_joints=("context", "elbow"),
+        pd_baseline=PDBaseline(
+            joint_names=("context", "elbow"),
+            kp=(2.0, 3.0),
+            kd=(5.0, 7.0),
+        ),
+        effort_limits=(50.0, 50.0),
+        clamping="total_output",
+    )
+    input_mean = {feature.name: (0.0, 0.0) for feature in features}
+    input_std = {feature.name: (1.0, 1.0) for feature in features}
+    metadata = RuntimeGRUMetadata(
+        input_size=12,
+        output_size=2,
+        recurrent=GRURecurrentDimensions(hidden_size=4, num_layers=1),
+        input_features=features,
+        mappings=(mapping,),
+        target_columns=("torque",),
+        sample_dt_s=0.002,
+        normalization=RuntimeNormalization(
+            inputs=NormalizationValues(mean=input_mean, std=input_std),
+            targets=NormalizationValues(
+                mean={"torque": (0.0, 0.0)},
+                std={"torque": (1.0, 1.0)},
+            ),
+        ),
+        previous_torque_derivation=PreviousTorqueDerivation(
+            value_space="physical_torque"
+        ),
+        dynamic_bias_derivation=DynamicBiasDerivation(
+            source="newton.solvers.SolverMuJoCo.eval_dynamic_bias",
+            provenance={"test": True},
+        ),
+        hashes=RuntimeHashes(
+            profile_sha256="a" * 64,
+            resolved_config_sha256="b" * 64,
+            sysid_state_sha256="c" * 64,
+            asset_sha256="d" * 64,
+            source_sha256="e" * 64,
+        ),
+    )
+
+    class AllFeatureNetwork(torch.nn.Module):
+        """Sum each joint's six feature-major blocks into one MIMO output."""
+
+        def forward(self, values, hidden):
+            """Preserve joint axes while reducing the ordered feature axis."""
+
+            feature_major = values.reshape(values.shape[0], values.shape[1], 6, 2)
+            return feature_major.sum(dim=2), hidden + 1.0
+
+    scripted = torch.jit.trace(
+        AllFeatureNetwork(),
+        (
+            torch.zeros(2, 1, metadata.input_size, dtype=torch.float32),
+            torch.zeros(1, 2, 4, dtype=torch.float32),
+        ),
+    )
+    frozen, artifact = _frozen(tmp_path)
+    mapping_document = {
+        "index": 0,
+        "input_joints": ["context", "elbow"],
+        "output_joints": ["context", "elbow"],
+        "pd_baseline": {
+            "kp": {"context": 2.0, "elbow": 3.0},
+            "kd": {"context": 5.0, "elbow": 7.0},
+            "velocity_target": "zero",
+        },
+        "friction_baseline": None,
+        "armature": None,
+        "effort_limits": {"context": 50.0, "elbow": 50.0},
+        "clamping": "total_output",
+    }
+    frozen = _neural_only_frozen(
+        frozen,
+        artifact,
+        metadata,
+        scripted,
+        torch,
+        ownership={"context": "arm_network", "elbow": "arm_network"},
+        mapping_documents=[mapping_document],
+    )
+    model = _Model()
+
+    class MIMOBiasSolver(_Solver):
+        """Provide deterministic full-layout dynamic bias for both input joints."""
+
+        def eval_dynamic_bias(self, state, out=None):
+            """Return the same finite qfrc_bias observation on every call."""
+
+            result = torch.tensor(
+                [0.3, 0.4, 0.0, 0.0, 0.7, 0.8, 0.0, 0.0],
+                dtype=torch.float32,
+            )
+            self.bias_calls.append((state, out, result))
+            return result
+
+    solver = MIMOBiasSolver(model)
+    runtime = build_deployment_runtime(
+        frozen,
+        model,
+        repository_root=tmp_path,
+        solver=solver,
+        bindings=_torch_bindings(torch),
+    )
+    recurrent = runtime.state()
+    sim_state, control = _torch_simulation_values(torch)
+    sim_state.joint_q[:] = torch.tensor([1, 2, 0, 0, 5, 6, 0, 0])
+    sim_state.joint_qd[:] = torch.tensor([0.1, 0.2, 0, 0, 0.5, 0.6, 0, 0])
+    control.joint_target_q[:] = torch.tensor([3, 4, 0, 0, 7, 8, 0, 0])
+
+    runtime.step(sim_state, control, recurrent)
+    np.testing.assert_allclose(
+        control.joint_f.numpy(),
+        [6.9, 9.2, 9, 91, 9.7, 11.2, 19, 92],
+        atol=1.0e-6,
+    )
+    np.testing.assert_allclose(
+        model.joint_target_ke.numpy(),
+        [0, 0, 100, 100, 0, 0, 100, 100],
+    )
+
+    runtime.step(sim_state, control, recurrent)
+    np.testing.assert_allclose(
+        control.joint_f.numpy(),
+        [13.8, 18.4, 9, 91, 19.4, 22.4, 19, 92],
+        atol=1.0e-6,
+    )
+
+
+def test_warp_to_torch_runtime_view_is_zero_copy() -> None:
+    """Mutate one Warp CPU array through the factory's Torch interop view."""
+
+    torch = pytest.importorskip("torch", reason="interop test requires PyTorch")
+    warp = pytest.importorskip("warp", reason="interop test requires Warp")
+    from anchor_bench.deploy.neural_gru import _torch_view
+
+    values = warp.array([1.0, 2.0], dtype=warp.float32, device="cpu")
+    view = _torch_view(values, torch=torch, warp=warp, label="test values")
+    view[0] = 7.0
+
+    np.testing.assert_allclose(values.numpy(), [7.0, 2.0])

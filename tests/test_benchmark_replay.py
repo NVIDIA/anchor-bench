@@ -24,6 +24,10 @@ from anchor_bench.benchmark.replay import (
 )
 from anchor_bench.benchmark.schema import BenchmarkProfile
 from anchor_bench.core.hashing import tree_fingerprint
+from anchor_bench.robots.fingerprints import (
+    load_robot_identity_fingerprint,
+    runtime_asset_fingerprint,
+)
 from anchor_bench.training.metadata import RuntimeGRUMetadata
 
 
@@ -138,14 +142,48 @@ def _resolved(
     """Build the resolved fields consumed by the replay backend."""
 
     dataset_path = motions[0].path.parent
+    repository_root = dataset_path
+    robot_path = repository_root / "configs/robots/demo/robot.yaml"
+    robot_path.parent.mkdir(parents=True, exist_ok=True)
+    robot_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "name": "demo",
+                "display_name": "Demo",
+                "fixed_base": True,
+                "asset_path": "assets/robots/demo/manifest.yaml",
+                "runtime_usd": "demo.usd",
+                "joint_names": ["joint_a", "joint_b"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    manifest = repository_root / "assets/robots/demo/manifest.yaml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("name: demo\n", encoding="utf-8")
+    runtime_usd = manifest.parent / "files/demo.usd"
+    runtime_usd.parent.mkdir(parents=True, exist_ok=True)
+    runtime_usd.write_bytes(b"benchmark-usd")
+    _spec, robot_fingerprint = load_robot_identity_fingerprint(
+        robot_path,
+        expected_name="demo",
+        repository_root=repository_root,
+    )
     return SimpleNamespace(
+        repository_root=repository_root,
         robot="demo",
         candidate=candidate,
         dataset_path=dataset_path,
         motions=motions,
         resolved_profile=profile or _profile(),
         fingerprints={
-            "asset": {"asset_sha256": SHA_A},
+            "robot": robot_fingerprint,
+            "asset": runtime_asset_fingerprint(
+                runtime_usd,
+                runtime_usd="demo.usd",
+            ),
             "dataset": {"path": "inputs", **tree_fingerprint(dataset_path)},
         },
     )

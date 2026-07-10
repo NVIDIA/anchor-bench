@@ -85,6 +85,11 @@ def _resolved(tmp_path: Path):
         accepted_state=accepted_path,
         canonical_joint_names=("joint_a", "joint_b"),
         joint_aliases={},
+        robot_identity_fingerprint={
+            "kind": "robot_yaml_identity",
+            "raw_sha256": "e" * 64,
+            "canonical_sha256": "f" * 64,
+        },
         asset_fingerprint={"sha256": "a" * 64},
         source_fingerprint={"git": "b" * 40},
         dependency_fingerprints={"newton": "1.4.0.dev0"},
@@ -350,11 +355,14 @@ def test_robot_identity_loader_ignores_legacy_phase_files(
 
 def test_runtime_rechecks_asset_and_dataset_fingerprints(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reject input bytes that change between resolution and simulation."""
+    """Reject robot, package, or dataset changes before simulation."""
 
-    from anchor_bench.core.hashing import sha256_file, sha256_tree
+    from anchor_bench.core.hashing import sha256_tree
+    from anchor_bench.robots.fingerprints import (
+        load_robot_identity_fingerprint,
+        runtime_asset_fingerprint,
+    )
     from anchor_bench.sysid import runtime
 
     resolved = _resolved(tmp_path)
@@ -362,21 +370,58 @@ def test_runtime_rechecks_asset_and_dataset_fingerprints(
     dataset.mkdir(parents=True)
     data_file = dataset / "episode.csv"
     data_file.write_text("time,value\n0,0\n", encoding="utf-8")
-    usd = tmp_path / "demo.usd"
+    config_dir = tmp_path / "configs/robots/demo"
+    robot_path = config_dir / "robot.yaml"
+    robot_document = {
+        "schema_version": 1,
+        "name": "demo",
+        "display_name": "Demo",
+        "fixed_base": True,
+        "asset_path": "assets/robots/demo/manifest.yaml",
+        "runtime_usd": "demo.usd",
+        "joint_names": ["joint_a", "joint_b"],
+        "joint_aliases": {"A": "joint_a"},
+    }
+    robot_path.parent.mkdir(parents=True, exist_ok=True)
+    robot_path.write_text(yaml.safe_dump(robot_document, sort_keys=False), encoding="utf-8")
+    robot_bytes = robot_path.read_bytes()
+    manifest = tmp_path / "assets/robots/demo/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("name: demo\n", encoding="utf-8")
+    usd = manifest.parent / "files/demo.usd"
+    usd.parent.mkdir()
     usd.write_bytes(b"usd-v1")
+    dependency = usd.parent / "mesh.bin"
+    dependency.write_bytes(b"mesh-v1")
+    _spec, robot_fingerprint = load_robot_identity_fingerprint(
+        robot_path,
+        expected_name="demo",
+        repository_root=tmp_path,
+    )
     resolved = replace(
         resolved,
         fingerprints={
             **resolved.fingerprints,
-            "asset": {"asset_sha256": sha256_file(usd)},
+            "robot": robot_fingerprint,
+            "asset": runtime_asset_fingerprint(usd, runtime_usd="demo.usd"),
             "dataset": {"tree_sha256": sha256_tree(dataset)},
         },
     )
-    monkeypatch.setattr(runtime, "repo_root", lambda: tmp_path)
 
     runtime._verify_runtime_inputs(resolved, usd)
+    dependency.write_bytes(b"mesh-v2")
+    with pytest.raises(RuntimeError, match="asset package changed after resolution"):
+        runtime._verify_runtime_inputs(resolved, usd)
+
+    dependency.write_bytes(b"mesh-v1")
+    robot_document["fixed_base"] = False
+    robot_path.write_text(yaml.safe_dump(robot_document, sort_keys=False), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="robot identity changed after resolution"):
+        runtime._verify_runtime_inputs(resolved, usd)
+
+    robot_path.write_bytes(robot_bytes)
     usd.write_bytes(b"usd-v2")
-    with pytest.raises(RuntimeError, match="asset changed after resolution"):
+    with pytest.raises(RuntimeError, match="asset package changed after resolution"):
         runtime._verify_runtime_inputs(resolved, usd)
 
     usd.write_bytes(b"usd-v1")

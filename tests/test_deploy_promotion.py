@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import zipfile
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -198,7 +199,24 @@ def _setup(
     )
     metadata_bytes = serialize_runtime_metadata(metadata).encode("utf-8")
 
-    run_input = {"phase": "train", "robot": "demo", "seed": 42}
+    fingerprints = {
+        "asset": {"asset_sha256": "a" * 64},
+        "dataset": {"tree_sha256": "b" * 64},
+    }
+    upstream = {"sysid_state_sha256": training_sysid_hash}
+    run_input = {
+        "phase": "train",
+        "robot": "demo",
+        "profile": {
+            "name": profile_snapshot.name,
+            "content": profile_snapshot.content,
+            "content_sha256": profile_snapshot.content_sha256,
+        },
+        "resolved_config": resolved_config,
+        "seed": 42,
+        "replicate": None,
+        "fingerprints": fingerprints,
+    }
     run_input_sha256 = canonical_sha256(run_input)
     run_dir = (
         tmp_path
@@ -216,11 +234,8 @@ def _setup(
         resolved_config=resolved_config,
         seed=42,
         run_input=run_input,
-        fingerprints={
-            "asset": {"asset_sha256": "a" * 64},
-            "dataset": {"tree_sha256": "b" * 64},
-        },
-        upstream={"sysid_state_sha256": training_sysid_hash},
+        fingerprints=fingerprints,
+        upstream=upstream,
         generated_files=[generated_file(run_dir, "network.pt", network_role)],
     )
     write_manifest(run_dir, manifest)
@@ -270,6 +285,12 @@ def _setup(
         deployed_state=deploy_path,
         canonical_joint_names=("shoulder", "elbow", "untouched"),
         joint_aliases={"sh": "shoulder", "el": "elbow"},
+        robot_identity_fingerprint={
+            "kind": "robot_yaml_identity",
+            "raw_sha256": "d" * 64,
+            "canonical_sha256": "e" * 64,
+        },
+        asset_fingerprint={"asset_sha256": "a" * 64},
     )
     return inputs, metadata
 
@@ -294,6 +315,9 @@ def test_resolution_freezes_authenticated_neural_and_explicit_pd_state(tmp_path:
 
     state = resolve_deploy_state(inputs, metadata_loader=_loader(metadata))
 
+    assert state.source.robot == "demo"
+    assert state.source.robot_identity == dict(inputs.robot_identity_fingerprint)
+    assert state.source.asset_identity == dict(inputs.asset_fingerprint)
     assert state.ownership == {"elbow": "arm_network", "shoulder": "shoulder_pd"}
     assert "untouched" not in state.ownership
     neural = state.composition.neural[0]
@@ -308,6 +332,22 @@ def test_resolution_freezes_authenticated_neural_and_explicit_pd_state(tmp_path:
     assert pd.dry_friction == {"shoulder": 0.1}
     assert pd.armature == {"shoulder": 0.01}
     assert pd.effort_limits == {"shoulder": 30.0}
+
+
+def test_new_deployment_requires_authoritative_robot_and_asset_identity(tmp_path: Path) -> None:
+    """Never promote a new frozen state whose runtime package is unbound."""
+
+    inputs, metadata = _setup(tmp_path)
+    with pytest.raises(ValueError, match="robot identity fingerprint"):
+        resolve_deploy_state(
+            replace(inputs, robot_identity_fingerprint=None),
+            metadata_loader=_loader(metadata),
+        )
+    with pytest.raises(ValueError, match="authoritative asset fingerprint"):
+        resolve_deploy_state(
+            replace(inputs, asset_fingerprint=None),
+            metadata_loader=_loader(metadata),
+        )
 
 
 def test_default_metadata_loader_is_host_safe(tmp_path: Path) -> None:

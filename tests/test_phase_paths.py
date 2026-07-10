@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from anchor_bench.core.paths import (
     accepted_state_path,
@@ -69,6 +71,31 @@ class PhasePathTests(unittest.TestCase):
                 seed=42,
                 run_input_sha256="not-a-hash",
             )
+
+    def test_phase_run_dir_rejects_symlinked_output_parent(self):
+        """Reject a routed outputs directory without touching its destination."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            root = workspace / "repository"
+            root.mkdir()
+            outside = workspace / "outside"
+            outside.mkdir()
+            outputs = root / "outputs"
+            outputs.symlink_to(outside, target_is_directory=True)
+            with (
+                patch("anchor_bench.core.paths.repo_root", return_value=root),
+                patch("anchor_bench.core.paths.output_root", return_value=outputs),
+                self.assertRaisesRegex(ValueError, "symlinked parent"),
+            ):
+                phase_run_dir(
+                    "sysid",
+                    robot="g1",
+                    profile="default",
+                    seed=42,
+                    run_input_sha256="a" * 64,
+                )
+            self.assertEqual([], list(outside.iterdir()))
 
 
 if __name__ == "__main__":

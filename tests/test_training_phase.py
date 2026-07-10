@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -131,6 +132,11 @@ class TrainingPhaseFixture:
             accepted_sysid_state=self.accepted_sysid,
             canonical_joint_names=("a", "b"),
             joint_aliases={"AliasA": "a", "AliasB": "b"},
+            robot_identity_fingerprint={
+                "kind": "robot_yaml_identity",
+                "raw_sha256": "e" * 64,
+                "canonical_sha256": "f" * 64,
+            },
             asset_fingerprint={"sha256": _ASSET_HASH},
             source_fingerprint={"source_sha256": "c" * 64},
             dependency_fingerprints={"torch": "test", "newton": "test"},
@@ -233,26 +239,40 @@ def _benchmark_run(root: Path, source_run: Path, name: str = "candidate") -> Pat
         content={"schema_version": 1},
     )
     source_relative = source_run.relative_to(root).as_posix()
-    run_input = {"phase": "benchmark", "name": name}
+    source_reference = {
+        "phase": "train",
+        "robot": "demo",
+        "run": source_relative,
+        "run_input_sha256": source.run_input_sha256,
+        "run_manifest_sha256": source.run_manifest_sha256,
+    }
+    resolved_config = {"schema_version": 1}
+    run_input = {
+        "phase": "benchmark",
+        "robot": "demo",
+        "profile": {
+            "name": profile.name,
+            "content": profile.content,
+            "content_sha256": profile.content_sha256,
+        },
+        "resolved_config": resolved_config,
+        "seed": None,
+        "replicate": None,
+        "fingerprints": {},
+        "candidate": {"source": source_reference},
+        "name": name,
+    }
     manifest = RunManifest.build(
         phase="benchmark",
         robot="demo",
         profile=profile,
-        resolved_config={"schema_version": 1},
+        resolved_config=resolved_config,
         run_input=run_input,
         generated_files=generated_files(
             run_dir,
             {"metrics.json": "metrics"},
         ),
-        upstream={
-            "source": {
-                "phase": "train",
-                "robot": "demo",
-                "run": source_relative,
-                "run_input_sha256": source.run_input_sha256,
-                "run_manifest_sha256": source.run_manifest_sha256,
-            }
-        },
+        upstream={"source": source_reference},
     )
     write_manifest_last(run_dir, manifest)
     return run_dir
@@ -261,7 +281,33 @@ def _benchmark_run(root: Path, source_run: Path, name: str = "candidate") -> Pat
 def _sysid_candidate(fixture: TrainingPhaseFixture) -> Path:
     """Create one authenticated unpromoted SysID candidate state."""
 
-    run_dir = fixture.root / "outputs/sysid/demo/default/seed-42" / ("1" * 64)
+    profile = build_profile_snapshot(
+        name="default",
+        path="configs/robots/demo/sysid/profiles/default.yaml",
+        raw_yaml="schema_version: 1\n",
+        content={"schema_version": 1},
+    )
+    resolved_config = {"schema_version": 1}
+    run_input = {
+        "phase": "sysid",
+        "robot": "demo",
+        "profile": {
+            "name": profile.name,
+            "content": profile.content,
+            "content_sha256": profile.content_sha256,
+        },
+        "resolved_config": resolved_config,
+        "seed": 42,
+        "replicate": None,
+        "fingerprints": {},
+        "candidate": "unpromoted",
+    }
+    run_input_sha256 = canonical_sha256(run_input)
+    run_dir = (
+        fixture.root
+        / "outputs/sysid/demo/default/seed-42"
+        / run_input_sha256
+    )
     run_dir.mkdir(parents=True)
     parent = AcceptedSysIdState.from_dict(
         yaml.safe_load(fixture.accepted_sysid.read_text(encoding="utf-8")),
@@ -281,31 +327,25 @@ def _sysid_candidate(fixture: TrainingPhaseFixture) -> Path:
         yaml.safe_dump(patch.to_dict(), sort_keys=False),
         encoding="utf-8",
     )
-    run_input = {"phase": "sysid", "candidate": "unpromoted"}
     candidate = build_candidate_state(
         parent,
         patch,
         SysIdCandidateSource(
             parent_state_sha256=sha256_file(run_dir / "parent_state.yaml"),
             fitted_patch_sha256=sha256_file(run_dir / "fitted_patch.yaml"),
-            run_input_sha256=canonical_sha256(run_input),
+            run_input_sha256=run_input_sha256,
         ),
     )
     (run_dir / "sysid_state.yaml").write_text(
         yaml.safe_dump(candidate.to_dict(), sort_keys=False),
         encoding="utf-8",
     )
-    profile = build_profile_snapshot(
-        name="default",
-        path="configs/robots/demo/sysid/profiles/default.yaml",
-        raw_yaml="schema_version: 1\n",
-        content={"schema_version": 1},
-    )
     manifest = RunManifest.build(
         phase="sysid",
         robot="demo",
         profile=profile,
-        resolved_config={"schema_version": 1},
+        resolved_config=resolved_config,
+        seed=42,
         run_input=run_input,
         generated_files=generated_files(
             run_dir,
@@ -617,6 +657,25 @@ class TrainingPromotionTests(unittest.TestCase):
             self.assertEqual(initial, catalog.read_text(encoding="utf-8"))
             self.assertEqual(1, outcome.catalog.revision)
             self.assertFalse(catalog.with_name("default.yaml.lock").exists())
+
+    def test_promotion_rejects_a_copied_completed_run(self):
+        """Require the exact manifest-derived canonical Training directory."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TrainingPhaseFixture(Path(temporary))
+            run_dir = self._completed(fixture)
+            copied = fixture.root / "outputs/train/demo/copied-run"
+            shutil.copytree(run_dir, copied)
+            catalog = fixture.root / "configs/robots/demo/train/default.yaml"
+            initial = "schema_version: 1\nrevision: 0\nmodels: {}\n"
+            catalog.write_text(initial, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "canonical run directory"):
+                promote_training_run(
+                    copied,
+                    catalog,
+                    repository_root=fixture.root,
+                )
+            self.assertEqual(initial, catalog.read_text(encoding="utf-8"))
 
     def test_promotion_rejects_a_catalog_for_another_robot(self):
         with tempfile.TemporaryDirectory() as temporary:

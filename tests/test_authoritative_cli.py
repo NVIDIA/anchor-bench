@@ -105,7 +105,12 @@ def test_sysid_and_training_dry_runs_use_profiles_without_runtime_imports(
     sysid = yaml.safe_load(capsys.readouterr().out)
     assert sysid["workflow"] == "sysid"
     assert sysid["metadata"]["seed"] == 7
+    assert "run_input_sha256" not in sysid["metadata"]
+    assert "run_dir" not in sysid["metadata"]
+    assert "preview_input_sha256" in sysid["metadata"]
     assert sysid["result"]["status"] == "dry-run"
+    assert "run_input_sha256" not in sysid["result"]
+    assert "run_dir" not in sysid["result"]
 
     assert main(
         [
@@ -141,9 +146,12 @@ def test_dry_run_context_uses_manifest_preview_and_exact_source(monkeypatch: Any
 
     _guard_heavy_imports(monkeypatch)
     inputs = sysid_resolver_inputs("g1", dry_run=True)
-    assert inputs.asset_fingerprint["kind"] == "dry_run_asset_manifest"
+    assert inputs.asset_fingerprint["kind"] == "runtime_asset_preview"
     assert inputs.asset_fingerprint["runtime_usd"] == "g1.usd"
-    assert len(inputs.asset_fingerprint["sha256"]) == 64
+    assert len(inputs.asset_fingerprint["preview_sha256"]) == 64
+    assert "sha256" not in inputs.asset_fingerprint
+    assert len(inputs.robot_identity_fingerprint["raw_sha256"]) == 64
+    assert len(inputs.robot_identity_fingerprint["canonical_sha256"]) == 64
     assert len(inputs.source_fingerprint["source_sha256"]) == 64
     assert len(inputs.source_fingerprint["git_commit"]) == 40
 

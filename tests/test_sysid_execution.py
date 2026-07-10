@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,11 @@ def _setup(tmp_path: Path):
         accepted_state=accepted,
         canonical_joint_names=("joint_a", "joint_b"),
         joint_aliases={"a": "joint_a", "B": "joint_b"},
+        robot_identity_fingerprint={
+            "kind": "robot_yaml_identity",
+            "raw_sha256": "e" * 64,
+            "canonical_sha256": "f" * 64,
+        },
         asset_fingerprint={"sha256": "a" * 64},
         source_fingerprint={"git": "b" * 40},
         dependency_fingerprints={"newton": "1.4.0.dev0"},
@@ -182,21 +188,34 @@ def _write_benchmark(tmp_path: Path, source_run: Path) -> Path:
     run_dir.mkdir(parents=True)
     (run_dir / "metrics.yaml").write_text("position_rmse: 0.1\n", encoding="utf-8")
     source_relative = source_run.relative_to(tmp_path).as_posix()
+    source_reference = {
+        "phase": "sysid",
+        "robot": "demo",
+        "run": source_relative,
+        "run_input_sha256": source.run_input_sha256,
+        "run_manifest_sha256": source_hash,
+    }
+    resolved_config = {"schema_version": 1}
     manifest = RunManifest.build(
         phase="benchmark",
         robot="demo",
         profile=source.profile,
-        resolved_config={"schema_version": 1},
-        run_input={"source_manifest_sha256": source_hash},
-        upstream={
-            "source": {
-                "phase": "sysid",
-                "robot": "demo",
-                "run": source_relative,
-                "run_input_sha256": source.run_input_sha256,
-                "run_manifest_sha256": source_hash,
-            }
+        resolved_config=resolved_config,
+        run_input={
+            "phase": "benchmark",
+            "robot": "demo",
+            "profile": {
+                "name": source.profile.name,
+                "content": source.profile.content,
+                "content_sha256": source.profile.content_sha256,
+            },
+            "resolved_config": resolved_config,
+            "seed": None,
+            "replicate": None,
+            "fingerprints": {},
+            "candidate": {"source": source_reference},
         },
+        upstream={"source": source_reference},
         generated_files=[generated_file(run_dir, "metrics.yaml", "metrics")],
     )
     write_manifest(run_dir, manifest)
@@ -263,6 +282,30 @@ def test_optimizer_uses_parent_mean_and_shared_layout(tmp_path: Path) -> None:
     assert optimizer.normalized_mean == pytest.approx([-0.8, -0.6, -0.6])
     population = optimizer.sample_population()
     assert all(item["damping"]["joint_a"] == item["damping"]["joint_b"] for item in population)
+
+
+def test_sysid_promotion_rejects_a_copied_completed_run(tmp_path: Path) -> None:
+    """Require promotion from the manifest-derived canonical run directory."""
+
+    from anchor_bench.sysid.promotion import promote_sysid_run
+    from anchor_bench.sysid.runner import (
+        SysIdInvocation,
+        execute_sysid_run,
+        resolve_sysid_run,
+    )
+
+    inputs, accepted = _setup(tmp_path)
+    resolved = resolve_sysid_run(
+        SysIdInvocation(robot="demo", dry_run=False),
+        inputs,
+    )
+    execute_sysid_run(resolved, lambda _: _execution_result())
+    copied = tmp_path / "outputs/sysid/demo/copied-run"
+    shutil.copytree(resolved.run_dir, copied)
+    before = accepted.read_bytes()
+    with pytest.raises(ValueError, match="canonical run directory"):
+        promote_sysid_run(copied, accepted, repository_root=tmp_path)
+    assert accepted.read_bytes() == before
 
 
 def test_promotion_rejects_another_robots_accepted_state(tmp_path: Path) -> None:

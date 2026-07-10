@@ -24,8 +24,9 @@ from anchor_bench.core.hashing import (
 )
 from anchor_bench.core.manifest_schema import ProfileSnapshot
 from anchor_bench.core.paths import phase_run_dir
-from anchor_bench.core.plan import CommandPlan
+from anchor_bench.core.plan import CommandPlan, command_identity_metadata
 from anchor_bench.core.profiles import load_profile, load_yaml_mapping, require_logical_name
+from anchor_bench.robots.fingerprints import fingerprint_contains_preview
 from anchor_bench.sysid.schema import (
     SUPPORTED_SYSID_PARAMETERS,
     SysIdLossConfig,
@@ -76,6 +77,7 @@ class SysIdResolverInputs:
     accepted_state: Path
     canonical_joint_names: Sequence[str]
     joint_aliases: Mapping[str, str]
+    robot_identity_fingerprint: Mapping[str, Any]
     asset_fingerprint: Mapping[str, Any]
     source_fingerprint: Mapping[str, Any]
     dependency_fingerprints: Mapping[str, Any]
@@ -106,6 +108,7 @@ class SysIdExecutionResult:
 class ResolvedSysIdRun:
     """Complete semantic SysID input and deterministic output location."""
 
+    repository_root: Path
     robot: str
     profile_name: str
     profile_snapshot: ProfileSnapshot
@@ -343,6 +346,8 @@ def _command_plan(
     config: SysIdProfile,
     run_dir: Path,
     run_input_sha256: str,
+    *,
+    preview_identity: bool,
 ) -> CommandPlan:
     """Build the lightweight summary carried by a resolved run."""
 
@@ -369,8 +374,11 @@ def _command_plan(
             "profile": invocation.profile,
             "seed": config.seed,
             "replicate": invocation.replicate,
-            "run_input_sha256": run_input_sha256,
-            "run_dir": str(run_dir),
+            **command_identity_metadata(
+                run_dir,
+                run_input_sha256,
+                preview=preview_identity,
+            ),
             "resolved_config": config.to_dict(),
         },
     )
@@ -418,6 +426,7 @@ def resolve_sysid_run(
     )
     parent_state_sha256 = canonical_sha256(parent_state.to_dict())
     fingerprints = {
+        "robot": dict(inputs.robot_identity_fingerprint),
         "dataset": dataset,
         "asset": dict(inputs.asset_fingerprint),
         "source": dict(inputs.source_fingerprint),
@@ -455,9 +464,14 @@ def resolve_sysid_run(
         run_input_sha256=run_input_sha256,
     )
     plan = _command_plan(
-        invocation, resolved_config, run_dir, run_input_sha256
+        invocation,
+        resolved_config,
+        run_dir,
+        run_input_sha256,
+        preview_identity=fingerprint_contains_preview(fingerprints),
     )
     return ResolvedSysIdRun(
+        repository_root=Path(inputs.repository_root),
         robot=robot,
         profile_name=invocation.profile,
         profile_snapshot=profile_snapshot,
@@ -495,7 +509,11 @@ def execute_sysid_run(
 
     completed_manifest: RunManifest | None = None
     no_op = False
-    with run_slot(resolved.run_dir, resolved.run_input_sha256) as slot:
+    with run_slot(
+        resolved.run_dir,
+        resolved.run_input_sha256,
+        containment_root=resolved.repository_root,
+    ) as slot:
         no_op = slot.noop
         if slot.noop:
             completed_manifest = slot.manifest

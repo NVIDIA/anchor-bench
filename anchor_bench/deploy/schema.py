@@ -9,7 +9,7 @@ from typing import Any, Literal, Self, TypeAlias
 from pydantic import Field, FiniteFloat, field_validator, model_validator
 
 from anchor_bench.core.config_model import ConfigModel
-from anchor_bench.core.hashing import require_relative_posix_path, validate_sha256
+from anchor_bench.core.hashing import canonical_object, require_relative_posix_path, validate_sha256
 from anchor_bench.core.profiles import require_logical_name
 
 
@@ -520,6 +520,9 @@ class FrozenDeployComposition(ConfigModel):
 class DeploySourceProvenance(ConfigModel):
     """Exact profile and accepted-state revisions used for materialization."""
 
+    robot: str | None = None
+    robot_identity: dict[str, Any] | None = None
+    asset_identity: dict[str, Any] | None = None
     profile: str
     profile_sha256: str
     sysid_revision: int = Field(ge=0)
@@ -527,12 +530,39 @@ class DeploySourceProvenance(ConfigModel):
     train_revision: int = Field(ge=0)
     train_state_sha256: str
 
-    @field_validator("profile")
+    @field_validator("profile", "robot")
     @classmethod
-    def _profile(cls, value: str) -> str:
-        """Validate the source deployment profile name."""
+    def _logical_names(cls, value: str | None, info: Any) -> str | None:
+        """Validate optional robot and required profile logical names."""
 
-        return _logical_name(value, label="profile name")
+        if value is None:
+            return None
+        return _logical_name(value, label=f"{info.field_name} name")
+
+    @field_validator("robot_identity", "asset_identity", mode="before")
+    @classmethod
+    def _identity_fingerprints(cls, value: Any, info: Any) -> Any:
+        """Validate optional frozen identity envelopes as canonical mappings."""
+
+        if value is None:
+            return None
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError(f"{info.field_name} must be a non-empty mapping")
+        canonical_object(value)
+        for key, item in value.items():
+            if key.endswith("sha256"):
+                if not isinstance(item, str):
+                    raise ValueError(f"{info.field_name}.{key} must be a SHA-256 string")
+                validate_sha256(item, label=f"{info.field_name}.{key}")
+        return dict(value)
+
+    @model_validator(mode="after")
+    def _robot_binding(self) -> Self:
+        """Require robot name and robot identity to be frozen together."""
+
+        if (self.robot is None) != (self.robot_identity is None):
+            raise ValueError("robot and robot_identity must be configured together")
+        return self
 
     @field_validator("profile_sha256", "sysid_state_sha256", "train_state_sha256")
     @classmethod

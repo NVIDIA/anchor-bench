@@ -31,6 +31,25 @@ def _profile():
     )
 
 
+def _run_input() -> dict[str, object]:
+    """Return one complete duplicated manifest identity envelope."""
+
+    profile = _profile()
+    return {
+        "phase": "sysid",
+        "robot": "g1",
+        "profile": {
+            "name": profile.name,
+            "content": profile.content,
+            "content_sha256": profile.content_sha256,
+        },
+        "resolved_config": {"schema_version": 1, "seed": 1},
+        "seed": 1,
+        "replicate": None,
+        "fingerprints": {},
+    }
+
+
 def _finish(run_dir: Path, run_input: dict[str, object]) -> RunManifest:
     payload = run_dir / "metrics.yaml"
     payload.write_text("loss: 0.5\n", encoding="utf-8")
@@ -49,16 +68,16 @@ def _finish(run_dir: Path, run_input: dict[str, object]) -> RunManifest:
 
 def test_fresh_run_installs_and_second_identical_request_is_noop(tmp_path: Path) -> None:
     final = tmp_path / "runs" / "abc"
-    run_input = {"robot": "g1", "seed": 1}
+    run_input = _run_input()
     input_hash = canonical_sha256(run_input)
-    with run_slot(final, input_hash) as slot:
+    with run_slot(final, input_hash, containment_root=tmp_path) as slot:
         assert slot.noop is False
         assert slot.tmp_dir is not None
         manifest = _finish(slot.tmp_dir, run_input)
 
     assert (final / "manifest.yaml").is_file()
     assert (final / "metrics.yaml").is_file()
-    with run_slot(final, input_hash) as slot:
+    with run_slot(final, input_hash, containment_root=tmp_path) as slot:
         assert slot.noop is True
         assert slot.tmp_dir is None
         assert slot.manifest == manifest
@@ -69,12 +88,16 @@ def test_incomplete_corrupt_and_identity_mismatched_outputs_are_hard_errors(tmp_
     incomplete.mkdir()
     (incomplete / "partial.txt").write_text("partial", encoding="utf-8")
     with pytest.raises(RunVerificationError, match="missing regular manifest.yaml"):
-        with run_slot(incomplete):
+        with run_slot(incomplete, containment_root=tmp_path):
             pass
 
     final = tmp_path / "complete"
-    run_input = {"robot": "g1", "seed": 1}
-    with run_slot(final, canonical_sha256(run_input)) as slot:
+    run_input = _run_input()
+    with run_slot(
+        final,
+        canonical_sha256(run_input),
+        containment_root=tmp_path,
+    ) as slot:
         assert slot.tmp_dir is not None
         _finish(slot.tmp_dir, run_input)
 
@@ -89,8 +112,12 @@ def test_incomplete_corrupt_and_identity_mismatched_outputs_are_hard_errors(tmp_
 
 def test_unrecorded_file_and_symlink_are_rejected(tmp_path: Path) -> None:
     final = tmp_path / "run"
-    run_input = {"seed": 1}
-    with run_slot(final, canonical_sha256(run_input)) as slot:
+    run_input = _run_input()
+    with run_slot(
+        final,
+        canonical_sha256(run_input),
+        containment_root=tmp_path,
+    ) as slot:
         assert slot.tmp_dir is not None
         _finish(slot.tmp_dir, run_input)
 
@@ -110,13 +137,14 @@ def test_unrecorded_file_and_symlink_are_rejected(tmp_path: Path) -> None:
 def test_manifest_is_written_last_and_cannot_be_replaced(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    run_input = {"seed": 1}
+    run_input = _run_input()
     (run_dir / "metrics.yaml").write_text("loss: 0.5\n", encoding="utf-8")
     manifest = RunManifest.build(
         phase="sysid",
         robot="g1",
         profile=_profile(),
-        resolved_config={},
+        resolved_config={"schema_version": 1, "seed": 1},
+        seed=1,
         run_input=run_input,
         generated_files=[generated_file(run_dir, "metrics.yaml", "metrics")],
     )
@@ -132,7 +160,7 @@ def test_manifest_is_written_last_and_cannot_be_replaced(tmp_path: Path) -> None
 def test_manifest_formatting_does_not_change_canonical_hash(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    manifest = _finish(run_dir, {"seed": 1})
+    manifest = _finish(run_dir, _run_input())
     original_hash = load_manifest(run_dir)[1]
     document = load_yaml_mapping(run_dir / "manifest.yaml")
     (run_dir / "manifest.yaml").write_text(
@@ -147,12 +175,38 @@ def test_manifest_formatting_does_not_change_canonical_hash(tmp_path: Path) -> N
 def test_failed_run_cleans_temp_and_never_installs_final(tmp_path: Path) -> None:
     final = tmp_path / "runs" / "abc"
     with pytest.raises(RuntimeError, match="boom"):
-        with run_slot(final) as slot:
+        with run_slot(final, containment_root=tmp_path) as slot:
             assert slot.tmp_dir is not None
             (slot.tmp_dir / "partial.csv").write_text("x", encoding="utf-8")
             raise RuntimeError("boom")
     assert not final.exists()
     assert not any(path.is_dir() for path in final.parent.iterdir())
+
+
+def test_run_slot_rejects_escape_and_symlinked_parent_before_writing(
+    tmp_path: Path,
+) -> None:
+    """Reject escaped and symlink-routed targets before creating locks or temps."""
+
+    root = tmp_path / "repository"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    escaped = outside / "escaped-run"
+    with pytest.raises(ValueError, match="escapes containment root"):
+        with run_slot(escaped, containment_root=root):
+            pass
+    assert not escaped.exists()
+    assert not escaped.with_name("escaped-run.lock").exists()
+
+    outputs = root / "outputs"
+    outputs.symlink_to(outside, target_is_directory=True)
+    routed = outputs / "sysid" / "g1" / "run"
+    with pytest.raises(ValueError, match="symlinked parent"):
+        with run_slot(routed, containment_root=root):
+            pass
+    assert list(outside.iterdir()) == []
 
 
 def test_stable_sibling_lock_is_exclusive_and_survives_target_replacement(tmp_path: Path) -> None:

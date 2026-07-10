@@ -24,7 +24,11 @@ import numpy as np
 from anchor_bench.core.paths import repo_root, robot_config_dir
 from anchor_bench.core.profiles import load_yaml_mapping
 from anchor_bench.core.timing import resolve_simulation_timing
-from anchor_bench.core.hashing import sha256_file, sha256_tree, validate_sha256
+from anchor_bench.core.hashing import sha256_tree, validate_sha256
+from anchor_bench.robots.fingerprints import (
+    load_robot_identity_fingerprint,
+    verify_runtime_asset_fingerprint,
+)
 from anchor_bench.robots.schema import RobotIdentity
 from anchor_bench.sysid.runner import ResolvedSysIdRun, SysIdExecutionResult
 from anchor_bench.sysid.schema import SUPPORTED_SYSID_PARAMETERS, parameter_layout
@@ -294,10 +298,17 @@ def optimize_resolved_sysid(
     )
 
 
-def _load_robot_identity(robot: str) -> RobotIdentity:
+def _load_robot_identity(
+    robot: str,
+    repository_root: Path | None = None,
+) -> RobotIdentity:
     """Load robot identity without validating legacy phase configuration files."""
 
-    path = robot_config_dir(robot) / "robot.yaml"
+    path = (
+        robot_config_dir(robot) / "robot.yaml"
+        if repository_root is None
+        else Path(repository_root) / "configs" / "robots" / robot / "robot.yaml"
+    )
     if not path.is_file():
         raise KeyError(f"unknown robot {robot!r}")
     spec = RobotIdentity.from_dict(load_yaml_mapping(path), path)
@@ -308,19 +319,23 @@ def _load_robot_identity(robot: str) -> RobotIdentity:
     return spec
 
 
-def _resolve_runtime_usd(spec: RobotIdentity) -> Path:
+def _resolve_runtime_usd(
+    spec: RobotIdentity,
+    repository_root: Path | None = None,
+) -> Path:
     """Resolve the declarative runtime USD without reading actuator or bounds files."""
 
     if not spec.runtime_usd:
         raise FileNotFoundError(
             f"robot {spec.name!r} has no runtime_usd configured in robot.yaml"
         )
-    manifest = repo_root() / spec.asset_path
+    root = repo_root() if repository_root is None else Path(repository_root)
+    manifest = root / spec.asset_path
     roots = [manifest.parent / "files"]
     configured_root = os.environ.get("ANCHOR_BENCH_ASSET_DIR")
     if configured_root:
         external = Path(configured_root).expanduser()
-        roots = [external, external / spec.name, *roots]
+        roots = [external / spec.name, external, *roots]
     for root in roots:
         candidate = root / spec.runtime_usd
         if candidate.is_file():
@@ -349,19 +364,34 @@ def _verify_runtime_inputs(
     resolved: ResolvedSysIdRun,
     usd_path: Path,
 ) -> None:
-    """Fail if asset or dataset bytes changed after semantic resolution."""
+    """Fail if robot, asset-package, or dataset identity changed after resolution."""
 
-    expected_asset = _fingerprint_digest(
-        resolved.fingerprints["asset"],
-        label="asset",
+    identity_path = (
+        resolved.repository_root
+        / "configs"
+        / "robots"
+        / resolved.robot
+        / "robot.yaml"
     )
-    actual_asset = sha256_file(usd_path)
-    if actual_asset != expected_asset:
+    spec, actual_robot = load_robot_identity_fingerprint(
+        identity_path,
+        expected_name=resolved.robot,
+        repository_root=resolved.repository_root,
+    )
+    expected_robot = resolved.fingerprints.get("robot")
+    if not isinstance(expected_robot, Mapping) or dict(expected_robot) != actual_robot:
         raise RuntimeError(
-            "SysID runtime asset changed after resolution: "
-            f"expected {expected_asset}, got {actual_asset}"
+            "SysID robot identity changed after resolution"
         )
-    dataset = repo_root() / resolved.resolved_config.data
+    expected_asset = resolved.fingerprints.get("asset")
+    if not isinstance(expected_asset, Mapping):
+        raise ValueError("resolved SysID asset fingerprint must be a mapping")
+    verify_runtime_asset_fingerprint(
+        expected_asset,
+        usd_path,
+        runtime_usd=spec.runtime_usd,
+    )
+    dataset = resolved.repository_root / resolved.resolved_config.data
     expected_dataset = _fingerprint_digest(
         resolved.fingerprints["dataset"],
         label="dataset",
@@ -479,15 +509,15 @@ class IsaacNewtonRuntimeAdapter:
         from anchor_bench.runtime.app_launcher import launch_isaac_sim
 
         config = resolved.resolved_config
-        spec = _load_robot_identity(resolved.robot)
-        usd_path = _resolve_runtime_usd(spec)
+        spec = _load_robot_identity(resolved.robot, resolved.repository_root)
+        usd_path = _resolve_runtime_usd(spec, resolved.repository_root)
         _verify_runtime_inputs(resolved, usd_path)
         timing = resolve_simulation_timing(
             config.simulation,
             f"{resolved.robot} resolved SysID simulation",
         )
         motion = load_sage_motion(
-            repo_root() / config.data,
+            resolved.repository_root / config.data,
             joint_names=config.joints,
             target_dt=timing.control_dt,
             require_velocity=config.loss.velocity > 0.0,

@@ -10,6 +10,7 @@ from typing import Any
 
 from anchor_bench.core.artifacts import atomic_write_yaml, sibling_lock, verify_run_directory
 from anchor_bench.core.hashing import canonical_sha256, repo_relative_posix
+from anchor_bench.core.paths import require_canonical_phase_run_dir
 from anchor_bench.core.profiles import load_yaml_mapping
 from anchor_bench.sysid.schema import SUPPORTED_SYSID_PARAMETERS, SysIdProfile
 from anchor_bench.sysid.state import (
@@ -220,6 +221,15 @@ def promote_sysid_run(
     source_manifest = verify_run_directory(source_run)
     if source_manifest.phase != "sysid":
         raise ValueError("promotion source must be a completed SysID run")
+    source_path = require_canonical_phase_run_dir(
+        source_run,
+        repository_root=repository_root,
+        phase="sysid",
+        robot=source_manifest.robot,
+        profile=source_manifest.profile.name,
+        seed=source_manifest.seed,
+        run_input_sha256=source_manifest.run_input_sha256,
+    )
     accepted_relative = repo_relative_posix(
         accepted_state,
         repository_root=repository_root,
@@ -241,7 +251,7 @@ def promote_sysid_run(
         )
     entries = _validate_source_manifest(source_manifest)
     loaded = load_verified_sysid_candidate(
-        Path(source_run),
+        source_path,
         source_manifest,
         expected_robot=source_manifest.robot,
     )
@@ -251,7 +261,7 @@ def promote_sysid_run(
     )
     _validate_patch_contract(profile, loaded.fitted_patch)
     source_relative = repo_relative_posix(
-        source_run,
+        source_path,
         repository_root=repository_root,
     )
     evidence = _benchmark_evidence(
