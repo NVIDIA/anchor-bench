@@ -15,7 +15,14 @@ from anchor_bench.data.sage import discover_sage_motions
 
 DEFAULT_INPUT_COLUMNS = ("position", "position_error", "velocity")
 DEFAULT_TARGET_COLUMN = "torque"
-SUPPORTED_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
+SUPPORTED_INPUT_COLUMNS = {
+    "dynamic_bias",
+    "position",
+    "position_error",
+    "previous_torque",
+    "solver_pd",
+    "velocity",
+}
 MODEL_CHOICES = {"gru", "hybrid_residual"}
 EPSILON_STD = 1.0e-8
 
@@ -33,7 +40,44 @@ class TrainingSource:
     joint: str | None = None
 
 
+@dataclass(frozen=True)
+class TrainingMapping:
+    """One application of shared weights to ordered input and output joints."""
+
+    input_joints: tuple[str, ...]
+    output_joints: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Validate the recurrent tensor axes for this mapping."""
+
+        inputs = tuple(str(name) for name in self.input_joints)
+        outputs = tuple(str(name) for name in self.output_joints)
+        if not inputs or not outputs:
+            raise ValueError("training mappings require at least one input and output joint")
+        if any(not name for name in (*inputs, *outputs)):
+            raise ValueError("training mapping joint names must not be empty")
+        if len(set(inputs)) != len(inputs) or len(set(outputs)) != len(outputs):
+            raise ValueError("training mapping joint names must not contain duplicates")
+        missing = [name for name in outputs if name not in inputs]
+        if missing:
+            raise ValueError("output_joints must be a subset of input_joints: " + ", ".join(missing))
+        object.__setattr__(self, "input_joints", inputs)
+        object.__setattr__(self, "output_joints", outputs)
+
+
+@dataclass(frozen=True)
+class TrainingEpisode:
+    """Time-aligned signals for one source and one joint mapping."""
+
+    position: np.ndarray
+    position_error: np.ndarray
+    velocity: np.ndarray | None
+    torque: np.ndarray | None
+
+
 def discover_training_sources(root: str | Path) -> list[TrainingSource]:
+    """Discover recorded SAGE episodes without expanding joint mappings."""
+
     path = Path(root).expanduser()
     motions = discover_sage_motions(path)
     if not motions:
@@ -45,6 +89,8 @@ def expand_joint_sources(
     sources: Sequence[TrainingSource],
     joints: Sequence[str],
 ) -> list[TrainingSource]:
+    """Retain the legacy scalar source expansion used by older callers."""
+
     return [
         TrainingSource(source.path, joint)
         for source in sources
@@ -58,6 +104,8 @@ def split_training_sources(
     seed: int,
     val_fraction: float = 0.2,
 ) -> tuple[list[TrainingSource], list[TrainingSource]]:
+    """Split by recorded episode path so mapped sequences cannot leak."""
+
     if not sources:
         raise ValueError("cannot split an empty training source list")
     groups: dict[Path, list[TrainingSource]] = {}
@@ -87,7 +135,47 @@ def _load_training_motion(path: Path) -> MotionData:
 
 
 def read_training_header(source: TrainingSource, joint: str) -> list[str]:
+    """Return scalar training columns available for one recorded joint."""
+
     return list(_load_training_motion(source.path).training_columns(source.joint or joint))
+
+
+def load_training_motion(source: TrainingSource) -> MotionData:
+    """Load one cached full-width motion for derived episode features."""
+
+    return _load_training_motion(source.path)
+
+
+def load_training_episode(source: TrainingSource, mapping: TrainingMapping) -> TrainingEpisode:
+    """Align commands, velocity, and torque to recorded state timestamps."""
+
+    motion = load_training_motion(source)
+    input_indices = motion.joints.indices(mapping.input_joints)
+    output_indices = motion.joints.indices(mapping.output_joints)
+    state_time = np.asarray(motion.position.time, dtype=np.float64)
+    if not len(state_time):
+        raise ValueError(f"training source has no rows: {source.path}")
+    position = np.asarray(motion.position.values[:, input_indices], dtype=np.float32)
+    command = np.asarray(
+        motion.command_position.interpolate(state_time).values[:, input_indices],
+        dtype=np.float32,
+    )
+    velocity = (
+        np.asarray(motion.velocity.interpolate(state_time).values[:, input_indices], dtype=np.float32)
+        if motion.velocity is not None
+        else None
+    )
+    torque = (
+        np.asarray(motion.effort.interpolate(state_time).values[:, output_indices], dtype=np.float32)
+        if motion.effort is not None
+        else None
+    )
+    return TrainingEpisode(
+        position=position,
+        position_error=command - position,
+        velocity=velocity,
+        torque=torque,
+    )
 
 
 def load_training_table(
@@ -96,6 +184,8 @@ def load_training_table(
     joint: str,
     columns: Sequence[str],
 ) -> dict[str, np.ndarray]:
+    """Load selected scalar columns for legacy callers."""
+
     available = _load_training_motion(source.path).training_columns(source.joint or joint)
     missing = [column for column in columns if column not in available]
     if missing:
@@ -114,15 +204,20 @@ def resolve_training_columns(
     target_column: str | None = None,
     derived_columns: Sequence[str] | None = None,
 ) -> TrainingColumns:
+    """Resolve ordered feature and target semantics for GRU training."""
+
     if model not in MODEL_CHOICES:
         raise ValueError(f"model {model!r} must be one of {sorted(MODEL_CHOICES)}")
     header_set = set(header)
     inputs = list(input_columns or DEFAULT_INPUT_COLUMNS)
+    duplicates = sorted({column for column in inputs if inputs.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
     unsupported = sorted(set(inputs) - SUPPORTED_INPUT_COLUMNS)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     source_target = [target_column or DEFAULT_TARGET_COLUMN]
-    derived = set(derived_columns or ())
+    derived = {"dynamic_bias", "previous_torque", *(derived_columns or ())}
     missing = [
         column
         for column in [*inputs, *source_target]

@@ -9,16 +9,25 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from anchor_bench.training.data import EPSILON_STD, TrainingSource, load_training_table, write_stats_json
+from anchor_bench.training.data import (
+    EPSILON_STD,
+    TrainingMapping,
+    TrainingSource,
+    load_training_episode,
+    load_training_motion,
+    write_stats_json,
+)
 from anchor_bench.training.export import export_gru_checkpoint
 
 
 @dataclass(frozen=True)
 class ResidualPhysics:
-    stiffness: float = 0.0
-    damping: float = 0.0
-    dry_friction: float = 0.0
-    viscous_friction: float = 0.0
+    """Slot-wise analytical baseline used by solver-PD and residual targets."""
+
+    stiffness: float | tuple[float, ...] = 0.0
+    damping: float | tuple[float, ...] = 0.0
+    dry_friction: float | tuple[float, ...] = 0.0
+    viscous_friction: float | tuple[float, ...] = 0.0
 
 
 @dataclass(frozen=True)
@@ -34,8 +43,11 @@ class TrainingHyperParameters:
 
 @dataclass(frozen=True)
 class TrainingJob:
+    """One shared-weight GRU training job over source/mapping sequences."""
+
     model: str
     joint_type: str
+    mappings: tuple[TrainingMapping, ...]
     train_sources: Sequence[TrainingSource]
     val_sources: Sequence[TrainingSource]
     output_dir: Path
@@ -50,6 +62,7 @@ class TrainingJob:
     n_streams: int
     noise_std: float
     residual_physics: ResidualPhysics | None = None
+    dynamic_bias_provider: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -73,47 +86,179 @@ def _import_torch():
 
 
 def _safe_name(value: str) -> str:
+    """Return a filesystem-safe artifact label."""
+
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "joint"
 
 
-def _load_sequences(job: TrainingJob) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
-    def load_one(source: TrainingSource) -> tuple[np.ndarray, np.ndarray]:
-        required = (set(job.input_columns) - {"solver_pd"}) | set(job.source_target_columns)
-        if "solver_pd" in job.input_columns and job.model != "hybrid_residual":
-            required.add("solver_pd")
-        if job.model == "hybrid_residual":
-            required.update(("position_error", "velocity"))
-        table = load_training_table(
-            source,
-            joint=job.joint_type,
-            columns=sorted(required),
-        )
-        physics = job.residual_physics
-        solver_pd: np.ndarray | None = table.get("solver_pd")
-        if job.model == "hybrid_residual":
-            if physics is None:
-                raise ValueError("hybrid residual training requires residual physics parameters")
-            solver_pd = physics.stiffness * table["position_error"] - physics.damping * table["velocity"]
+def _physics_vector(value: float | tuple[float, ...], width: int, name: str) -> np.ndarray:
+    """Broadcast a scalar baseline or validate one value per model slot."""
 
-        feature_columns = [
-            solver_pd if column == "solver_pd" else table[column]
-            for column in job.input_columns
-        ]
-        features = np.column_stack(feature_columns).astype(np.float32)
+    array = np.asarray(value, dtype=np.float32)
+    if array.ndim == 0:
+        array = np.full(width, float(array), dtype=np.float32)
+    if array.shape != (width,) or not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain {width} finite value(s)")
+    return array
+
+
+def _feature_widths(job: TrainingJob) -> list[int]:
+    """Return each feature block width in configured order."""
+
+    input_width = len(job.mappings[0].input_joints)
+    output_width = len(job.mappings[0].output_joints)
+    return [output_width if column == "previous_torque" else input_width for column in job.input_columns]
+
+
+def _recorded_sample_dt(job: TrainingJob) -> float:
+    """Infer the recurrent timestep from median recorded state cadence."""
+
+    medians: list[float] = []
+    seen: set[Path] = set()
+    for source in (*job.train_sources, *job.val_sources):
+        if source.path in seen:
+            continue
+        seen.add(source.path)
+        timestamps = np.asarray(load_training_motion(source).position.time, dtype=np.float64)
+        if len(timestamps) < 2:
+            raise ValueError(f"{source.path} needs at least two state rows to infer sample_dt_s")
+        deltas = np.diff(timestamps)
+        median = float(np.median(deltas))
+        if not math.isfinite(median) or median <= 0.0 or not np.all(np.isfinite(deltas)):
+            raise ValueError(f"{source.path} has an invalid recorded state cadence")
+        if not np.allclose(deltas, median, rtol=0.1, atol=1.0e-9):
+            raise ValueError(f"{source.path} has irregular recorded state cadence")
+        medians.append(median)
+    sample_dt_s = float(np.median(medians))
+    if any(not math.isclose(value, sample_dt_s, rel_tol=0.05) for value in medians):
+        raise ValueError("training episodes have inconsistent median state cadences")
+    return sample_dt_s
+
+
+def _merge_bias_provenance(existing: dict[str, Any] | None, provenance: Any) -> dict[str, Any]:
+    """Merge episode-varying state coverage while enforcing solver identity."""
+
+    current = dict(provenance)
+    joint_keys = {"mapped_joint_names", "mapped_asset_joint_names", "defaulted_joint_names"}
+    for key in joint_keys:
+        current[key] = sorted(str(value) for value in current.get(key, ()))
+    if existing is None:
+        return current
+    for key in (existing.keys() | current.keys()) - joint_keys:
+        if existing.get(key) != current.get(key):
+            raise ValueError(f"dynamic-bias provenance changed across episodes: {key}")
+    for key in joint_keys:
+        existing[key] = sorted(set(existing.get(key, ())) | set(current[key]))
+    return existing
+
+
+def _load_sequences(
+    job: TrainingJob,
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[np.ndarray, np.ndarray]]]:
+    """Assemble one independent recurrent sequence per source and mapping."""
+
+    if not job.mappings:
+        raise ValueError("TrainingJob requires at least one joint mapping")
+    input_width = len(job.mappings[0].input_joints)
+    output_width = len(job.mappings[0].output_joints)
+    if any(
+        len(mapping.input_joints) != input_width or len(mapping.output_joints) != output_width
+        for mapping in job.mappings
+    ):
+        raise ValueError("all training mappings must have identical input and output widths")
+
+    union_joints = tuple(dict.fromkeys(name for mapping in job.mappings for name in mapping.input_joints))
+    bias_cache: dict[Path, tuple[np.ndarray, dict[str, int]]] = {}
+    bias_provenance: dict[str, Any] | None = None
+
+    def dynamic_bias(source: TrainingSource, mapping: TrainingMapping) -> np.ndarray:
+        """Evaluate one full episode once and select this mapping's input slots."""
+
+        nonlocal bias_provenance
+        cached = bias_cache.get(source.path)
+        if cached is None:
+            if job.dynamic_bias_provider is None:
+                raise ValueError("dynamic_bias input requires a dynamic-bias provider")
+            motion = load_training_motion(source)
+            result = job.dynamic_bias_provider.compute(motion, union_joints)
+            values = np.asarray(result.values, dtype=np.float32)
+            if values.shape != (len(motion.position.time), len(union_joints)):
+                raise ValueError("dynamic-bias provider returned an inconsistent episode shape")
+            cached = values, {name: index for index, name in enumerate(union_joints)}
+            bias_cache[source.path] = cached
+            bias_provenance = _merge_bias_provenance(bias_provenance, result.provenance)
+        values, indices = cached
+        return values[:, [indices[name] for name in mapping.input_joints]]
+
+    def load_one(source: TrainingSource, mapping: TrainingMapping) -> tuple[np.ndarray, np.ndarray]:
+        """Build feature-major inputs and final targets for one sequence."""
+
+        episode = load_training_episode(source, mapping)
+        if episode.torque is None:
+            raise ValueError(f"{source.path} is missing measured torque")
+        needs_velocity = (
+            job.model == "hybrid_residual"
+            or "velocity" in job.input_columns
+            or "solver_pd" in job.input_columns
+            or "dynamic_bias" in job.input_columns
+        )
+        if needs_velocity and episode.velocity is None:
+            raise ValueError(f"{source.path} is missing measured velocity")
+
+        physics = job.residual_physics
+        solver_pd: np.ndarray | None = None
+        if job.model == "hybrid_residual" or "solver_pd" in job.input_columns:
+            if physics is None:
+                raise ValueError("residual and solver_pd training require baseline physics")
+            assert episode.velocity is not None
+            kp = _physics_vector(physics.stiffness, input_width, "stiffness")
+            kd = _physics_vector(physics.damping, input_width, "damping")
+            solver_pd = episode.position_error * kp - episode.velocity * kd
+
+        target = np.asarray(episode.torque, dtype=np.float32)
         if job.model == "hybrid_residual":
-            assert solver_pd is not None
-            torque = table[job.source_target_columns[0]]
-            friction = physics.dry_friction * np.sign(table["velocity"]) + physics.viscous_friction * table["velocity"]
-            target = (torque - solver_pd - friction).astype(np.float32)[:, None]
-        else:
-            target = np.column_stack([table[column] for column in job.source_target_columns]).astype(np.float32)
-        if len(features) == 0:
-            raise ValueError(f"training source has no rows: {source.path}")
+            assert physics is not None and solver_pd is not None and episode.velocity is not None
+            output_indices = np.asarray(
+                [mapping.input_joints.index(name) for name in mapping.output_joints],
+                dtype=int,
+            )
+            velocity = episode.velocity[:, output_indices]
+            dry = _physics_vector(physics.dry_friction, output_width, "dry_friction")
+            viscous = _physics_vector(physics.viscous_friction, output_width, "viscous_friction")
+            friction = dry * np.sign(velocity) + viscous * velocity
+            target = target - solver_pd[:, output_indices] - friction
+
+        previous = np.zeros_like(target)
+        previous[1:] = target[:-1]
+        blocks: dict[str, np.ndarray | None] = {
+            "dynamic_bias": dynamic_bias(source, mapping) if "dynamic_bias" in job.input_columns else None,
+            "position": episode.position,
+            "position_error": episode.position_error,
+            "previous_torque": previous,
+            "solver_pd": solver_pd,
+            "velocity": episode.velocity,
+        }
+        missing = [column for column in job.input_columns if blocks.get(column) is None]
+        if missing:
+            raise ValueError(f"{source.path} cannot derive input features: {', '.join(missing)}")
+        features = np.concatenate([blocks[column] for column in job.input_columns], axis=1).astype(np.float32)
+        target = target.astype(np.float32)
+        if not np.all(np.isfinite(features)) or not np.all(np.isfinite(target)):
+            raise ValueError(f"{source.path} contains non-finite training values")
         return features, target
 
-    train = [load_one(source) for source in job.train_sources]
-    val = [load_one(source) for source in job.val_sources]
+    train = [load_one(source, mapping) for source in job.train_sources for mapping in job.mappings]
+    val = [load_one(source, mapping) for source in job.val_sources for mapping in job.mappings]
+    if bias_provenance is not None:
+        job.metadata["dynamic_bias_derivation"] = bias_provenance
     return train, val
+
+
+def _scalar_or_list(values: np.ndarray) -> float | list[float]:
+    """Serialize a one-wide statistic as a scalar and wider axes as lists."""
+
+    result = [float(value) for value in values]
+    return result[0] if len(result) == 1 else result
 
 
 def _normalization_stats(
@@ -121,26 +266,41 @@ def _normalization_stats(
     *,
     input_columns: Sequence[str],
     target_columns: Sequence[str],
+    input_widths: Sequence[int],
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    """Pool per-slot normalization across every training sequence."""
+
+    if len(target_columns) != 1:
+        raise ValueError("GRU training requires one target semantic")
     inputs = np.concatenate([item[0] for item in sequences], axis=0)
     targets = np.concatenate([item[1] for item in sequences], axis=0)
+    if len(input_widths) != len(input_columns) or sum(input_widths) != inputs.shape[1]:
+        raise ValueError("input feature widths do not match assembled tensors")
     input_mean = inputs.mean(axis=0)
     input_std = np.maximum(inputs.std(axis=0), EPSILON_STD)
     target_mean = targets.mean(axis=0)
     target_std = np.maximum(targets.std(axis=0), EPSILON_STD)
+    offsets = np.cumsum((0, *input_widths))
+    target = target_columns[0]
     stats = {
-        "schema_version": 1,
+        "schema_version": 3,
         "input_columns": list(input_columns),
         "target_columns": list(target_columns),
         "normalization": {
             "inputs": {
-                "mean": {column: float(input_mean[idx]) for idx, column in enumerate(input_columns)},
-                "std": {column: float(input_std[idx]) for idx, column in enumerate(input_columns)},
+                "mean": {
+                    column: _scalar_or_list(input_mean[offsets[index] : offsets[index + 1]])
+                    for index, column in enumerate(input_columns)
+                },
+                "std": {
+                    column: _scalar_or_list(input_std[offsets[index] : offsets[index + 1]])
+                    for index, column in enumerate(input_columns)
+                },
             },
             "targets": {
-                "mean": {column: float(target_mean[idx]) for idx, column in enumerate(target_columns)},
-                "std": {column: float(target_std[idx]) for idx, column in enumerate(target_columns)},
+                "mean": {target: _scalar_or_list(target_mean)},
+                "std": {target: _scalar_or_list(target_std)},
             },
         },
     }
@@ -154,13 +314,32 @@ def _normalize_sequences(
     *,
     input_columns: Sequence[str],
     target_columns: Sequence[str],
+    input_widths: Sequence[int],
+    target_width: int,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Normalize flattened tensors using domain-sized statistics."""
+
     input_norm = stats["normalization"]["inputs"]
     target_norm = stats["normalization"]["targets"]
-    input_mean = np.array([input_norm["mean"][column] for column in input_columns], dtype=np.float32)
-    input_std = np.array([input_norm["std"][column] for column in input_columns], dtype=np.float32)
-    target_mean = np.array([target_norm["mean"][column] for column in target_columns], dtype=np.float32)
-    target_std = np.array([target_norm["std"][column] for column in target_columns], dtype=np.float32)
+    if len(target_columns) != 1:
+        raise ValueError("GRU training requires one target semantic")
+
+    def vector(values: dict[str, Any], columns: Sequence[str], widths: Sequence[int]) -> np.ndarray:
+        """Flatten scalar-or-list statistics in feature-major order."""
+
+        result: list[float] = []
+        for column, width in zip(columns, widths, strict=True):
+            value = values[column]
+            items = value if isinstance(value, list) else [value]
+            if len(items) != width:
+                raise ValueError(f"normalization for {column} must contain {width} value(s)")
+            result.extend(float(item) for item in items)
+        return np.asarray(result, dtype=np.float32)
+
+    input_mean = vector(input_norm["mean"], input_columns, input_widths)
+    input_std = vector(input_norm["std"], input_columns, input_widths)
+    target_mean = vector(target_norm["mean"], target_columns, (target_width,))
+    target_std = vector(target_norm["std"], target_columns, (target_width,))
     return [((inputs - input_mean) / input_std, (targets - target_mean) / target_std) for inputs, targets in sequences]
 
 
@@ -210,6 +389,78 @@ def _run_epoch(torch, model, optimizer, loss_fn, sequences, hparams, *, train: b
     return float(sum(losses) / max(1, len(losses)))
 
 
+def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]:
+    """Build the self-contained schema-v3 contract embedded in TorchScript."""
+
+    input_width = len(job.mappings[0].input_joints)
+    output_width = len(job.mappings[0].output_joints)
+    input_widths = _feature_widths(job)
+    target = job.target_columns[0]
+    sample_dt_s = float(job.metadata.get("sample_dt_s", 0.0))
+    if not math.isfinite(sample_dt_s) or sample_dt_s <= 0.0:
+        raise ValueError("training metadata requires a positive finite sample_dt_s")
+    topology = "siso" if input_width == output_width == 1 else ("miso" if output_width == 1 else "mimo")
+    metadata: dict[str, Any] = {
+        "schema_version": 3,
+        "model_type": "gru",
+        "training_topology": topology,
+        "joint_mappings": [
+            {
+                "input_joints": list(mapping.input_joints),
+                "output_joints": list(mapping.output_joints),
+            }
+            for mapping in job.mappings
+        ],
+        "input_columns": list(job.input_columns),
+        "input_feature_specs": [
+            {
+                "name": column,
+                "domain": "output_joints" if column == "previous_torque" else "input_joints",
+                "channels": ["value"],
+            }
+            for column in job.input_columns
+        ],
+        "target_columns": [target],
+        "input_size": sum(input_widths),
+        "output_size": output_width,
+        "sample_dt_s": sample_dt_s,
+        "normalization": stats["normalization"],
+        "delay": {"handling": "learned", "external_delay_s": 0.0},
+    }
+    if "dynamic_bias" in job.input_columns:
+        derivation = job.metadata.get("dynamic_bias_derivation")
+        if not isinstance(derivation, dict):
+            raise ValueError("dynamic_bias training requires derivation provenance")
+        metadata["dynamic_bias_derivation"] = derivation
+    if "previous_torque" in job.input_columns:
+        metadata["previous_torque_derivation"] = {
+            "source": "previous_target",
+            "runtime_source": "previous_raw_network_output_pre_clamp",
+            "initialization": "physical_zero",
+            "reset_boundaries": ["recorded_episode", "joint_mapping"],
+            "value_space": "residual_torque" if target == "torque_residual" else "physical_torque",
+        }
+
+    physics = job.residual_physics
+    if target == "torque_residual" or "solver_pd" in job.input_columns:
+        if physics is None:
+            raise ValueError("residual and solver_pd models require baseline physics")
+        metadata["pd_baseline"] = {
+            "kp": _scalar_or_list(_physics_vector(physics.stiffness, input_width, "stiffness")),
+            "kd": _scalar_or_list(_physics_vector(physics.damping, input_width, "damping")),
+            "velocity_target": "zero",
+        }
+    if target == "torque_residual":
+        assert physics is not None
+        metadata["friction_baseline"] = {
+            "dry": _scalar_or_list(_physics_vector(physics.dry_friction, output_width, "dry_friction")),
+            "viscous": _scalar_or_list(
+                _physics_vector(physics.viscous_friction, output_width, "viscous_friction")
+            ),
+        }
+    return metadata
+
+
 def _fit_once(
     job: TrainingJob,
     hparams: TrainingHyperParameters,
@@ -220,6 +471,8 @@ def _fit_once(
     save_artifacts: bool,
     stats: dict[str, Any],
 ) -> tuple[float, TrainingArtifacts | None]:
+    """Fit one hyperparameter choice and optionally write final artifacts."""
+
     torch = _import_torch()
     torch.manual_seed(job.seed)
     try:
@@ -227,7 +480,20 @@ def _fit_once(
     except Exception:
         pass
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = _build_model(torch, len(job.input_columns), len(job.target_columns), hparams).to(device)
+    if not train_sequences:
+        raise ValueError("TrainingJob requires at least one training sequence")
+    input_size = train_sequences[0][0].shape[1]
+    output_size = train_sequences[0][1].shape[1]
+    for features, targets in (*train_sequences, *val_sequences):
+        if features.ndim != 2 or features.shape[1] != input_size:
+            raise ValueError("all GRU input sequences must have the same width")
+        if targets.ndim != 2 or targets.shape[1] != output_size or len(targets) != len(features):
+            raise ValueError("all GRU target sequences must match input rows and output width")
+    expected_input_size = sum(_feature_widths(job))
+    expected_output_size = len(job.mappings[0].output_joints)
+    if (input_size, output_size) != (expected_input_size, expected_output_size):
+        raise ValueError("assembled GRU tensors do not match configured mapping dimensions")
+    model = _build_model(torch, input_size, output_size, hparams).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=hparams.learning_rate, weight_decay=hparams.weight_decay)
     loss_fn = torch.nn.HuberLoss(delta=hparams.huber_delta)
     best_val = math.inf
@@ -263,13 +529,17 @@ def _fit_once(
     }
     if best_state is not None:
         model.load_state_dict(best_state)
+    runtime_metadata = _runtime_metadata(job, stats)
     checkpoint = {
         "model": job.model,
         "joint_type": job.joint_type,
         "model_state_dict": model.state_dict(),
+        "input_size": input_size,
+        "output_size": output_size,
         "input_columns": job.input_columns,
         "target_columns": job.target_columns,
         "normalization": stats["normalization"],
+        "runtime_metadata": runtime_metadata,
         "hyperparameters": hparams.__dict__,
         "metrics": metrics,
     }
@@ -327,27 +597,48 @@ def _select_hparams(
 
 
 def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
+    """Train one shared stateful GRU and export all three artifacts."""
+
+    job.metadata["sample_dt_s"] = _recorded_sample_dt(job)
     train_raw, val_raw = _load_sequences(job)
+    input_widths = _feature_widths(job)
+    target_width = len(job.mappings[0].output_joints)
     stats = _normalization_stats(
         train_raw,
         input_columns=job.input_columns,
         target_columns=job.target_columns,
+        input_widths=input_widths,
         metadata={
             **job.metadata,
             "model": job.model,
             "joint_type": job.joint_type,
+            "joint_mappings": [
+                {"input_joints": list(mapping.input_joints), "output_joints": list(mapping.output_joints)}
+                for mapping in job.mappings
+            ],
             "data": {
                 "train_source_count": len(job.train_sources),
                 "val_source_count": len(job.val_sources),
+                "sequence_count": len(job.mappings) * (len(job.train_sources) + len(job.val_sources)),
                 "n_streams": job.n_streams,
             },
         },
     )
     train_sequences = _normalize_sequences(
-        train_raw, stats, input_columns=job.input_columns, target_columns=job.target_columns
+        train_raw,
+        stats,
+        input_columns=job.input_columns,
+        target_columns=job.target_columns,
+        input_widths=input_widths,
+        target_width=target_width,
     )
     val_sequences = _normalize_sequences(
-        val_raw, stats, input_columns=job.input_columns, target_columns=job.target_columns
+        val_raw,
+        stats,
+        input_columns=job.input_columns,
+        target_columns=job.target_columns,
+        input_widths=input_widths,
+        target_width=target_width,
     ) if val_raw else []
     hparams = _select_hparams(job, train_sequences, val_sequences, stats)
     _, artifacts = _fit_once(

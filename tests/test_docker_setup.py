@@ -44,10 +44,11 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("docker build", result.stdout)
         self.assertIn("--target kitless", result.stdout)
         self.assertIn("anchor-bench:kitless", result.stdout)
-        self.assertIn("--build-arg NEWTON_VERSION=1.2.0", result.stdout)
+        self.assertIn("--build-arg NEWTON_REPO=https://github.com/newton-physics/newton.git", result.stdout)
+        self.assertIn("--build-arg NEWTON_REF=c1c508ce9304aca6ac67e39a1744c8740c1d9d2a", result.stdout)
         self.assertIn("--build-arg ISAACSIM_VERSION=6.0.0.0", result.stdout)
         self.assertIn(
-            "--build-arg ISAACLAB_REF=482d21c936b863e323f0a135c8e8e8e8a9c166b2",
+            "--build-arg ISAACLAB_REF=5f2db9902baa724427b7aa654835aa559fce64e8",
             result.stdout,
         )
         self.assertNotIn("-m venv", result.stdout)
@@ -86,11 +87,11 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("https://github.com/isaac-sim/IsaacLab.git", result.stdout)
         isaaclab_dir = REPO / "third_party" / "IsaacLab"
         self.assertIn(
-            f"git -C {isaaclab_dir} fetch origin 482d21c936b863e323f0a135c8e8e8e8a9c166b2",
+            f"git -C {isaaclab_dir} fetch origin 5f2db9902baa724427b7aa654835aa559fce64e8",
             result.stdout,
         )
         self.assertIn(
-            f"git -C {isaaclab_dir} switch --detach 482d21c936b863e323f0a135c8e8e8e8a9c166b2",
+            f"git -C {isaaclab_dir} switch --detach 5f2db9902baa724427b7aa654835aa559fce64e8",
             result.stdout,
         )
         self.assertIn(
@@ -194,14 +195,21 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("--extra-index-url https://pypi.nvidia.com", dockerfile_text)
         self.assertIn("--editable source/isaaclab", dockerfile_text)
         self.assertIn("source/isaaclab_newton", dockerfile_text)
-        self.assertIn("${NEWTON_PACKAGE}[sim]==${NEWTON_VERSION}", dockerfile_text)
+        self.assertIn(
+            "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_REF}",
+            dockerfile_text,
+        )
+        self.assertIn("https://github.com/newton-physics/newton.git", dockerfile_text)
+        self.assertIn("c1c508ce9304aca6ac67e39a1744c8740c1d9d2a", dockerfile_text)
         self.assertIn("ACCEPT_EULA=Y", dockerfile_text)
         self.assertIn("OMNI_KIT_ACCEPT_EULA=YES", dockerfile_text)
         self.assertIn("libxt6", dockerfile_text)
         self.assertIn("libglu1-mesa", dockerfile_text)
-        self.assertIn("482d21c936b863e323f0a135c8e8e8e8a9c166b2", dockerfile_text)
+        self.assertIn("5f2db9902baa724427b7aa654835aa559fce64e8", dockerfile_text)
 
         compose_text = compose.read_text(encoding="utf-8")
+        self.assertIn("NEWTON_REPO: https://github.com/newton-physics/newton.git", compose_text)
+        self.assertIn("NEWTON_REF: c1c508ce9304aca6ac67e39a1744c8740c1d9d2a", compose_text)
         self.assertIn("/workspace/anchor-bench", compose_text)
         self.assertIn("ACCEPT_EULA: Y", compose_text)
         self.assertIn("OMNI_KIT_ACCEPT_EULA: YES", compose_text)

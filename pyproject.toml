@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anchor-bench"
 version = "0.1.0"
-description = "Focused Newton 1.2 SysID and sim-to-real benchmark tooling for robot actuator models."
+description = "Focused Newton SysID and sim-to-real benchmark tooling for robot actuator models."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,7 +25,7 @@ dev = [
 ]
 full = [
   "isaacsim==6.0.0.0",
-  "newton==1.2.0",
+  "newton[sim] @ git+https://github.com/newton-physics/newton.git@c1c508ce9304aca6ac67e39a1744c8740c1d9d2a",
   "mujoco>=3.5.0",
   "mujoco-warp>=3.5.0",
   "cmaes",

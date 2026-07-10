@@ -16,10 +16,13 @@ class VersionManifestTests(unittest.TestCase):
         # Pin the major.minor compatibility line but allow patch/build bumps in
         # versions/compatibility.toml without a test edit.
         self.assertEqual(_major_minor(versions.isaac_sim_version), "6.0")
-        self.assertEqual(_major_minor(versions.newton_version), "1.2")
+        self.assertEqual(versions.newton_version, "1.4.0rc1")
+        self.assertEqual(versions.newton_package, "newton")
+        self.assertEqual(versions.newton_repo, "https://github.com/newton-physics/newton.git")
+        self.assertEqual(versions.newton_commit, "c1c508ce9304aca6ac67e39a1744c8740c1d9d2a")
         # Isaac Lab tracks a branch + exact commit, not a semver, so keep these exact.
         self.assertEqual(versions.isaac_lab_branch, "develop")
-        self.assertEqual(versions.isaac_lab_commit, "482d21c936b863e323f0a135c8e8e8e8a9c166b2")
+        self.assertEqual(versions.isaac_lab_commit, "5f2db9902baa724427b7aa654835aa559fce64e8")
 
 
 if __name__ == "__main__":

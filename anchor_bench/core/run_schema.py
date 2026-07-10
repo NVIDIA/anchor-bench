@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import Field, StrictBool, field_validator
 
-from anchor_bench.core.config_model import ConfigModel, parse_gru_columns
+from anchor_bench.core.config_model import ConfigModel, parse_gru_columns, parse_joint_names
 
 
 class CMAESConfig(ConfigModel):
@@ -66,11 +66,26 @@ class SysIdDefaults(ConfigModel):
         return [str(item) for item in value]
 
 
+class TrainingJointMapping(ConfigModel):
+    """Declare one ordered input-to-output joint mapping for GRU training."""
+
+    input_joints: list[str] = Field(min_length=1)
+    output_joints: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("input_joints", "output_joints", mode="before")
+    @classmethod
+    def _validate_joint_names(cls, value: Any) -> list[str] | None:
+        return None if value is None else parse_joint_names(value)
+
+
 class TrainingDefaults(ConfigModel):
     model: Literal["gru", "hybrid_residual"] | None = None
     real_data_dir: str | None = None
     output_dir: str | None = None
     joint_type: str | None = None
+    mappings: list[TrainingJointMapping] | None = Field(default=None, min_length=1)
+    input_joints: list[str] | None = Field(default=None, min_length=1)
+    output_joints: list[str] | None = Field(default=None, min_length=1)
     skip_optuna: StrictBool | None = None
     trials: int | None = Field(default=None, ge=1)
     trial_epochs: int | None = Field(default=None, ge=1)
@@ -85,6 +100,11 @@ class TrainingDefaults(ConfigModel):
     @classmethod
     def _validate_input_columns(cls, value: Any) -> list[str] | None:
         return None if value is None else parse_gru_columns(value)
+
+    @field_validator("input_joints", "output_joints", mode="before")
+    @classmethod
+    def _validate_joint_names(cls, value: Any) -> list[str] | None:
+        return None if value is None else parse_joint_names(value)
 
 
 class RobotRunFile(ConfigModel):

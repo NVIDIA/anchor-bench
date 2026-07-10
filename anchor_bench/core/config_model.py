@@ -9,10 +9,13 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd"}
+RUNTIME_GRU_INPUT_COLUMNS = frozenset({"position", "position_error", "velocity", "solver_pd"})
+GRU_INPUT_COLUMNS = RUNTIME_GRU_INPUT_COLUMNS | {"dynamic_bias", "previous_torque"}
 
 
-def parse_gru_columns(value: Any) -> list[str]:
+def parse_gru_columns(value: Any, *, allowed: frozenset[str] = GRU_INPUT_COLUMNS) -> list[str]:
+    """Parse an ordered GRU feature list against the requested feature set."""
+
     if isinstance(value, str):
         columns = [item.strip() for item in value.split(",") if item.strip()]
     elif isinstance(value, (list, tuple)):
@@ -21,10 +24,30 @@ def parse_gru_columns(value: Any) -> list[str]:
         raise ValueError("must be a string or list of strings")
     if not columns:
         raise ValueError("must contain at least one column")
-    unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
+    duplicates = sorted({column for column in columns if columns.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"must not contain duplicate columns: {', '.join(duplicates)}")
+    unsupported = sorted(set(columns) - allowed)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     return columns
+
+
+def parse_joint_names(value: Any) -> list[str]:
+    """Parse a non-empty ordered list of joint names."""
+
+    if isinstance(value, str):
+        names = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        names = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise ValueError("must be a string or list of strings")
+    if not names:
+        raise ValueError("must contain at least one joint")
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"must not contain duplicate joints: {', '.join(duplicates)}")
+    return names
 
 
 def _location(context: str, parts: tuple[Any, ...]) -> str:

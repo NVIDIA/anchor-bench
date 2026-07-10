@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
-from anchor_bench.core.config_model import ConfigModel, parse_gru_columns
+from anchor_bench.core.config_model import RUNTIME_GRU_INPUT_COLUMNS, ConfigModel, parse_gru_columns
 from anchor_bench.core.experiment_schema import (
     ExperimentActuatorModel,
     ExperimentAnalysis,
@@ -23,6 +23,7 @@ from anchor_bench.core.run_schema import (
     SimulationDefaults,
     SysIdDefaults,
     TrainingDefaults,
+    TrainingJointMapping,
 )
 
 
@@ -48,7 +49,9 @@ class ControllerSpec(ConfigModel):
     def _validate_parameters(cls, value: Any) -> dict[str, Any]:
         parameters = dict(value or {})
         if "input_columns" in parameters:
-            parameters["input_columns"] = parse_gru_columns(parameters["input_columns"])
+            parameters["input_columns"] = parse_gru_columns(
+                parameters["input_columns"], allowed=RUNTIME_GRU_INPUT_COLUMNS
+            )
         return parameters
 
     @model_validator(mode="after")
@@ -77,7 +80,7 @@ class ResidualSpec(ConfigModel):
     @field_validator("input_columns", mode="before")
     @classmethod
     def _validate_input_columns(cls, value: Any) -> list[str]:
-        return parse_gru_columns(value)
+        return parse_gru_columns(value, allowed=RUNTIME_GRU_INPUT_COLUMNS)
 
 
 class DelaySpec(ConfigModel):
@@ -184,6 +187,9 @@ class TrainActuatorRunConfig:
     data: str | None = None
     output: str | None = None
     joint_type: str | None = None
+    mappings: list[TrainingJointMapping] | None = None
+    input_joints: list[str] | None = None
+    output_joints: list[str] | None = None
     input_columns: list[str] | None = None
     target_column: str | None = None
     dry_run: bool = True
@@ -236,5 +242,6 @@ __all__ = [
     "SysIdDefaults",
     "SysIdRunConfig",
     "TrainingDefaults",
+    "TrainingJointMapping",
     "TrainActuatorRunConfig",
 ]

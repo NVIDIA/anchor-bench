@@ -47,9 +47,10 @@ mounted checkout.
 
 Use `--dry-run` for host-safe command construction checks. Actual SysID and
 benchmark runs require the full Isaac Sim/Newton runtime and, for SysID, the
-`cmaes` package. Neural actuator training does not require Isaac Sim/Newton,
-but execution requires `torch`; omit `--skip-optuna` only in an environment
-with `optuna` installed.
+`cmaes` package. Neural actuator training requires `torch`;
+`dynamic_bias` additionally requires upstream Newton 1.4 and the robot USD.
+Dry runs import neither dependency. Omit `--skip-optuna` only in an
+environment with `optuna` installed.
 
 Robot `run.yaml` provides default SysID data/output paths, training
 data/output/model settings, benchmark motion/output paths, simulation timing,
@@ -76,16 +77,41 @@ anchor-bench train-actuator \
 ```
 
 Training consumes SAGE motion folders. Command position, measured position,
-velocity, torque, and `position_error` are mapped directly in memory;
-per-joint training CSV copies
-are not required. `--joint-type full` creates one independent sequence per
-canonical robot joint without splitting joints from the same motion across
-training and validation.
+velocity, torque, and `position_error` are aligned directly in memory.
+Recorded episodes are split before joint mappings are expanded.
+
+Use `training.mappings` when one artifact shares weights across more than one
+physical application:
+
+```yaml
+training:
+  mappings:
+    - input_joints: [Rotation]
+      output_joints: [Rotation]
+    - input_joints: [Elbow]
+      output_joints: [Elbow]
+```
+
+Every mapping in one run has the same input and output width. A single 1-to-1
+mapping is SISO, several 1-to-1 mappings share one SISO model, an N-to-1 mapping
+is MISO, and an N-to-M mapping is MIMO. `output_joints` defaults to
+`input_joints`. The existing `--joint-type full` spelling remains shorthand
+for one shared SISO mapping per canonical robot joint. CLI
+`--input-joints/--output-joints` replaces the YAML mapping selection for one
+run.
 
 Use `--model gru` for full-torque GRU prediction from
 `[position, position_error, velocity]`. Use `--model hybrid_residual`
 when the native PD/friction actuator remains active and the GRU should
-learn residual torque. Training writes the raw checkpoint, stats JSON,
-and a TorchScript GRU network under `outputs/training/<robot>/...`. The
-TorchScript archive exposes a `.gru` module for the local compatibility runtime
-shim; Newton-native GRU loading is not available in the pinned Newton snapshot.
+learn residual torque. `dynamic_bias` derives MuJoCo `qfrc_bias` from the
+recorded state without stepping. `previous_torque` is the previous final
+training target, initialized to zero for every episode and mapping. Shared
+mappings using `solver_pd` or residual targets must have identical baseline
+values by model slot; otherwise train separate artifacts.
+
+Training writes a raw checkpoint, stats JSON, and TorchScript network under
+`outputs/training/<robot>/...`. The TorchScript `.pt` embeds
+`metadata.json` with mappings, feature order and domains, dimensions,
+normalization, the median recorded state timestep, target semantics, and
+derivation/baseline metadata.
+The current upstream Newton 1.4 controller does not yet consume this schema.

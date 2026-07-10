@@ -12,3 +12,4 @@ joint_aliases:
 actuator_file: actuators.yaml
 bounds_file: bounds.yaml
 ee_frame: right_hand
+runtime_usd: g1.usd

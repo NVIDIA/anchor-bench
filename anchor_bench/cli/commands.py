@@ -21,6 +21,24 @@ def _csv_columns(value: str | None) -> list[str] | None:
     return None if value is None else [column.strip() for column in value.split(",") if column.strip()]
 
 
+def _json_mappings(value: str | None) -> list[Any] | None:
+    """Parse the compact CLI representation of multiple shared mappings."""
+
+    if value is None:
+        return None
+    parsed = json.loads(value)
+    if not isinstance(parsed, list) or not parsed:
+        raise ValueError("--mappings must be a non-empty JSON list")
+    if not all(isinstance(item, dict) for item in parsed):
+        raise ValueError("--mappings entries must be JSON objects")
+    from anchor_bench.core.schemas import TrainingJointMapping
+
+    return [
+        TrainingJointMapping.from_dict(item, f"--mappings[{index}]")
+        for index, item in enumerate(parsed)
+    ]
+
+
 def _handle_robots(args: argparse.Namespace) -> int:
     from anchor_bench.robots.registry import get_robot, list_robots, validate_robot
 
@@ -65,6 +83,9 @@ def _handle_train(args: argparse.Namespace) -> int:
         data=args.data,
         output=args.output,
         joint_type=args.joint_type,
+        mappings=_json_mappings(args.mappings),
+        input_joints=_csv_columns(args.input_joints),
+        output_joints=_csv_columns(args.output_joints),
         input_columns=_csv_columns(args.input_columns),
         target_column=args.target_column,
         dry_run=args.dry_run,

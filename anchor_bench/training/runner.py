@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from anchor_bench.actuators.loader import load_actuator_file
 from anchor_bench.core.plan import CommandPlan
 from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text, resolve_value_with_source
-from anchor_bench.core.schemas import TrainActuatorRunConfig
+from anchor_bench.core.schemas import TrainActuatorRunConfig, TrainingJointMapping
 from anchor_bench.robots.registry import get_robot
 from anchor_bench.training.data import (
     DEFAULT_INPUT_COLUMNS,
     DEFAULT_TARGET_COLUMN,
     MODEL_CHOICES,
     SUPPORTED_INPUT_COLUMNS,
+    TrainingMapping,
     discover_training_sources,
-    expand_joint_sources,
     read_training_header,
     resolve_training_columns,
     split_training_sources,
@@ -31,7 +34,9 @@ class ResolvedTrainActuatorRunConfig:
     model: str
     data: str
     output: str
-    joint_type: str
+    joint_type: str | None
+    artifact_name: str
+    mappings: tuple[TrainingMapping, ...]
     dry_run: bool
     skip_optuna: bool
     trials: int
@@ -72,8 +77,133 @@ def _column_list(value: Any) -> list[str] | None:
     return columns
 
 
+def _canonical_joints(bundle, values: Sequence[str], label: str) -> tuple[str, ...]:
+    """Resolve aliases and the explicit coupled all shorthand."""
+
+    names = tuple(str(value).strip() for value in values)
+    if names == ("all",):
+        return tuple(bundle.spec.joint_names)
+    if "all" in names:
+        raise ValueError(f"{label} cannot combine 'all' with named joints")
+    aliases = bundle.spec.joint_aliases
+    resolved = tuple(aliases.get(name, name) for name in names)
+    unknown = [name for name in resolved if name not in bundle.spec.joint_names]
+    if unknown:
+        raise ValueError(f"unknown training joints in {label}: {', '.join(unknown)}")
+    duplicates = sorted({name for name in resolved if resolved.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate training joints in {label}: {', '.join(duplicates)}")
+    return resolved
+
+
+def _mapping_from_value(bundle, value: Any) -> TrainingMapping:
+    """Convert one YAML/Pydantic mapping into canonical physical joints."""
+
+    if isinstance(value, dict):
+        value = TrainingJointMapping.from_dict(value, "training.mapping")
+    inputs = value.input_joints
+    outputs = value.output_joints
+    canonical_inputs = _canonical_joints(bundle, inputs, "input_joints")
+    canonical_outputs = (
+        canonical_inputs if outputs is None else _canonical_joints(bundle, outputs, "output_joints")
+    )
+    return TrainingMapping(canonical_inputs, canonical_outputs)
+
+
+def _validated_mappings(mappings: Sequence[TrainingMapping]) -> tuple[TrainingMapping, ...]:
+    """Enforce the shared-weight shape contract across mappings."""
+
+    result = tuple(mappings)
+    if not result:
+        raise ValueError("training requires at least one joint mapping")
+    shape = (len(result[0].input_joints), len(result[0].output_joints))
+    if any((len(item.input_joints), len(item.output_joints)) != shape for item in result):
+        raise ValueError("all training mappings must have identical input and output widths")
+    identities = [(item.input_joints, item.output_joints) for item in result]
+    if len(set(identities)) != len(identities):
+        raise ValueError("training mappings must not contain duplicates")
+    return result
+
+
+def _mapping_artifact_name(mappings: Sequence[TrainingMapping]) -> str:
+    """Create a stable collision-resistant label from canonical mappings."""
+
+    payload = [
+        {"input_joints": item.input_joints, "output_joints": item.output_joints}
+        for item in mappings
+    ]
+    digest = hashlib.sha256(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()[:10]
+    return f"mapped_{digest}"
+
+
+def _resolve_training_mappings(
+    bundle, config: TrainActuatorRunConfig
+) -> tuple[str | None, str, tuple[TrainingMapping, ...], str]:
+    """Resolve CLI topology as an override of the robot training YAML."""
+
+    defaults = bundle.run_config.training
+    explicit_modes = sum(
+        (
+            config.mappings is not None,
+            config.input_joints is not None or config.output_joints is not None,
+            config.joint_type is not None,
+        )
+    )
+    if explicit_modes > 1:
+        raise ValueError("choose only one of mappings, input/output joints, or joint_type")
+
+    source = "cli" if explicit_modes else "run.yaml"
+    mappings_value = config.mappings if config.mappings is not None else defaults.mappings
+    input_joints = config.input_joints if config.input_joints is not None else defaults.input_joints
+    output_joints = config.output_joints if config.output_joints is not None else defaults.output_joints
+    joint_type = config.joint_type if config.joint_type is not None else defaults.joint_type
+    if explicit_modes:
+        if config.mappings is not None:
+            input_joints = output_joints = joint_type = None
+        elif config.input_joints is not None or config.output_joints is not None:
+            mappings_value = joint_type = None
+            input_joints = config.input_joints
+            output_joints = config.output_joints
+        else:
+            mappings_value = input_joints = output_joints = None
+    else:
+        configured_modes = sum(
+            (
+                mappings_value is not None,
+                input_joints is not None or output_joints is not None,
+                joint_type is not None,
+            )
+        )
+        if configured_modes > 1:
+            raise ValueError("run.yaml training must choose mappings, input/output joints, or joint_type")
+        if configured_modes == 0:
+            source = "fallback"
+
+    if mappings_value is not None:
+        mappings = _validated_mappings([_mapping_from_value(bundle, value) for value in mappings_value])
+        return None, _mapping_artifact_name(mappings), mappings, source
+    if input_joints is not None or output_joints is not None:
+        if input_joints is None:
+            raise ValueError("input_joints is required when output_joints is configured")
+        mapping = _mapping_from_value(
+            bundle,
+            {"input_joints": input_joints, "output_joints": output_joints},
+        )
+        return None, _mapping_artifact_name((mapping,)), (mapping,), source
+
+    legacy = str(joint_type or "full")
+    if legacy == "full":
+        mappings = tuple(TrainingMapping((joint,), (joint,)) for joint in bundle.spec.joint_names)
+        return legacy, legacy, mappings, source
+    canonical = _canonical_joints(bundle, (legacy,), "joint_type")[0]
+    return legacy, canonical, (TrainingMapping((canonical,), (canonical,)),), source
+
+
 def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> ResolvedTrainActuatorRunConfig:
-    training_cfg = get_robot(config.robot).run_config.training
+    bundle = get_robot(config.robot)
+    training_cfg = bundle.run_config.training
     values: dict[str, Any] = {}
     sources: dict[str, str] = {}
 
@@ -97,15 +227,14 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         None,
         "--output",
     )
-    joint_type = resolve_required_text(
-        select("joint_type", config.joint_type, "full"),
-        None,
-        None,
-        "--joint-type",
-    )
+    joint_type, artifact_name, mappings, mapping_source = _resolve_training_mappings(bundle, config)
+    sources["joint_selection"] = mapping_source
     input_columns = _column_list(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
     if input_columns is None:
         raise ValueError("input_columns must contain at least one column")
+    duplicates = sorted({column for column in input_columns if input_columns.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
     unsupported_columns = sorted(set(input_columns) - SUPPORTED_INPUT_COLUMNS)
     if unsupported_columns:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported_columns)}")
@@ -115,7 +244,9 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         model=model,
         data=resolve_repo_path_text(data),
         output=resolve_repo_path_text(output),
-        joint_type=str(joint_type),
+        joint_type=joint_type,
+        artifact_name=artifact_name,
+        mappings=mappings,
         dry_run=config.dry_run,
         skip_optuna=bool(select("skip_optuna", config.skip_optuna, True)),
         trials=_positive_int("trials", select("trials", config.trials, 20)),
@@ -131,6 +262,8 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
 
 
 def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str]:
+    """Render a reproducible command for the resolved topology."""
+
     command = [
         "anchor-bench",
         "train-actuator",
@@ -140,8 +273,6 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         resolved.model,
         "--data",
         resolved.data,
-        "--joint-type",
-        resolved.joint_type,
         "--output",
         resolved.output,
         "--trials",
@@ -161,6 +292,25 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         "--target-column",
         resolved.target_column,
     ]
+    if resolved.joint_type is not None:
+        command.extend(("--joint-type", resolved.joint_type))
+    elif len(resolved.mappings) == 1:
+        mapping = resolved.mappings[0]
+        command.extend(("--input-joints", ",".join(mapping.input_joints)))
+        command.extend(("--output-joints", ",".join(mapping.output_joints)))
+    else:
+        command.extend(
+            (
+                "--mappings",
+                json.dumps(
+                    [
+                        {"input_joints": item.input_joints, "output_joints": item.output_joints}
+                        for item in resolved.mappings
+                    ],
+                    separators=(",", ":"),
+                ),
+            )
+        )
     if resolved.skip_optuna:
         command.append("--skip-optuna")
     if resolved.dry_run:
@@ -176,6 +326,10 @@ def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConf
     ]
     if resolved.model == "hybrid_residual":
         notes.append("hybrid_residual trains residual torque after subtracting native PD and friction terms")
+    if "dynamic_bias" in resolved.input_columns:
+        notes.append("dynamic_bias is derived from recorded state with Anchor's upstream-Newton MuJoCo adapter")
+    if "previous_torque" in resolved.input_columns:
+        notes.append("previous_torque is the preceding final target and resets at every episode and mapping")
     return CommandPlan(
         workflow="train-actuator",
         robot=resolved.robot,
@@ -185,6 +339,10 @@ def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConf
         metadata={
             "model": resolved.model,
             "joint_type": resolved.joint_type,
+            "joint_mappings": [
+                {"input_joints": list(item.input_joints), "output_joints": list(item.output_joints)}
+                for item in resolved.mappings
+            ],
             "data": resolved.data,
             "output": resolved.output,
             "input_columns": resolved.input_columns,
@@ -200,58 +358,110 @@ def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConf
     )
 
 
-def _param_for_joint(value: Any, joint_type: str, default: float = 0.0) -> float:
+def _param_for_joint(value: Any, joint: str, name: str, default: float | None = None) -> float:
+    """Read one scalar-or-per-joint actuator parameter."""
+
     if isinstance(value, dict):
-        if joint_type in value:
-            return float(value[joint_type])
-        return default
+        if joint in value:
+            return float(value[joint])
+        raise ValueError(f"{name} is missing a value for joint {joint!r}")
     if value is None:
-        return default
+        if default is None:
+            raise ValueError(f"{name} is missing a value for joint {joint!r}")
+        return float(default)
     return float(value)
 
 
-def _residual_physics_for_joint(robot: str, joint_type: str) -> "ResidualPhysics":
+def _actuator_for_joint(spec, joint: str):
+    """Find the single declarative actuator covering one physical joint."""
+
+    matches = [actuator for actuator in spec.actuators if joint in actuator.joints]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one actuator entry covering joint {joint!r}")
+    return matches[0]
+
+
+def _residual_physics_for_mappings(
+    robot: str,
+    mappings: Sequence[TrainingMapping],
+) -> "ResidualPhysics":
+    """Resolve one slot-wise baseline shared by every physical mapping."""
+
     from anchor_bench.training.trainer import ResidualPhysics
 
     bundle = get_robot(robot)
     spec = load_actuator_file(bundle.paths.actuators)
-    matching = [actuator for actuator in spec.actuators if joint_type in actuator.joints or actuator.name == joint_type]
-    if not matching:
-        raise ValueError(f"no actuator entry in {bundle.paths.actuators} covers joint_type {joint_type!r}")
-    actuator = matching[0]
-    controller_params = actuator.controller.parameters
-    physical = actuator.physical_parameters
-    dry = physical.get("dry_friction")
-    return ResidualPhysics(
-        stiffness=_param_for_joint(controller_params.get("stiffness"), joint_type),
-        damping=_param_for_joint(controller_params.get("damping"), joint_type),
-        dry_friction=_param_for_joint(dry, joint_type),
-        viscous_friction=_param_for_joint(physical.get("viscous_friction"), joint_type),
-    )
+    candidates: list[ResidualPhysics] = []
+    for mapping in mappings:
+        stiffness: list[float] = []
+        damping: list[float] = []
+        for joint in mapping.input_joints:
+            actuator = _actuator_for_joint(spec, joint)
+            params = actuator.controller.parameters
+            stiffness.append(_param_for_joint(params.get("stiffness"), joint, "stiffness"))
+            damping.append(_param_for_joint(params.get("damping"), joint, "damping"))
+        dry_friction: list[float] = []
+        viscous_friction: list[float] = []
+        for joint in mapping.output_joints:
+            actuator = _actuator_for_joint(spec, joint)
+            physical = actuator.physical_parameters
+            dry = physical.get("dry_friction", physical.get("dynamic_friction"))
+            dry_friction.append(_param_for_joint(dry, joint, "dry_friction", default=0.0))
+            viscous_friction.append(
+                _param_for_joint(
+                    physical.get("viscous_friction"), joint, "viscous_friction", default=0.0
+                )
+            )
+        candidates.append(
+            ResidualPhysics(
+                stiffness=tuple(stiffness),
+                damping=tuple(damping),
+                dry_friction=tuple(dry_friction),
+                viscous_friction=tuple(viscous_friction),
+            )
+        )
+
+    first = candidates[0]
+    for candidate in candidates[1:]:
+        for name in ("stiffness", "damping", "dry_friction", "viscous_friction"):
+            left = tuple(getattr(first, name))
+            right = tuple(getattr(candidate, name))
+            if len(left) != len(right) or not all(
+                math.isclose(a, b, rel_tol=1.0e-6, abs_tol=1.0e-9)
+                for a, b in zip(left, right, strict=True)
+            ):
+                raise ValueError(
+                    f"shared mappings require identical slot-wise {name}; train separate artifacts instead"
+                )
+    return first
 
 
 def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> CommandPlan:
+    """Return a dry-run plan or execute one resolved shared-weight training job."""
+
+    if resolved.target_column != "torque":
+        raise ValueError("SAGE actuator training currently supports target_column='torque'")
     plan = build_resolved_train_actuator_command(resolved)
     if resolved.dry_run:
         return plan
 
     from anchor_bench.training.trainer import TrainingJob, train_stateful_gru
 
+    bundle = get_robot(resolved.robot)
     sources = discover_training_sources(resolved.data)
-    if resolved.joint_type == "full":
-        sources = expand_joint_sources(sources, get_robot(resolved.robot).spec.joint_names)
     train_sources, val_sources = split_training_sources(sources, seed=resolved.seed)
-    derived_columns = ["solver_pd"] if resolved.model == "hybrid_residual" else []
+    derived_columns = ["solver_pd"] if "solver_pd" in resolved.input_columns else []
     columns = resolve_training_columns(
-        read_training_header(train_sources[0], resolved.joint_type),
+        read_training_header(train_sources[0], resolved.mappings[0].input_joints[0]),
         model=resolved.model,
         input_columns=resolved.input_columns,
         target_column=resolved.target_column,
         derived_columns=derived_columns,
     )
+    needs_physics = resolved.model == "hybrid_residual" or "solver_pd" in columns.input_columns
     residual_physics = (
-        _residual_physics_for_joint(resolved.robot, resolved.joint_type)
-        if resolved.model == "hybrid_residual"
+        _residual_physics_for_mappings(resolved.robot, resolved.mappings)
+        if needs_physics
         else None
     )
     metadata: dict[str, Any] = {
@@ -262,10 +472,16 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
     }
     if residual_physics is not None:
         metadata["physics_params"] = residual_physics.__dict__
+    dynamic_bias_provider = None
+    if "dynamic_bias" in columns.input_columns:
+        from anchor_bench.training.dynamic_bias import NewtonMuJoCoDynamicBiasProvider
+
+        dynamic_bias_provider = NewtonMuJoCoDynamicBiasProvider(bundle)
     artifacts = train_stateful_gru(
         TrainingJob(
             model=resolved.model,
-            joint_type=resolved.joint_type,
+            joint_type=resolved.artifact_name,
+            mappings=resolved.mappings,
             train_sources=train_sources,
             val_sources=val_sources,
             output_dir=Path(resolved.output),
@@ -280,6 +496,7 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
             n_streams=resolved.n_streams,
             noise_std=resolved.noise_std,
             residual_physics=residual_physics,
+            dynamic_bias_provider=dynamic_bias_provider,
             metadata=metadata,
         )
     )

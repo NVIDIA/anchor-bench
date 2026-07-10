@@ -33,7 +33,7 @@ class CliDryRunTests(unittest.TestCase):
             sysid_output = Path(tmp) / "anchor-bench-sysid"
             result = run_cli("sysid", "--robot", "so101", "--data", data, "--output", str(sysid_output), "--dry-run")
         self.assertIn("dry_run: true", result.stdout)
-        self.assertIn("newton 1.2", result.stdout)
+        self.assertIn("newton 1.4.0rc1", result.stdout)
 
         result = run_cli("benchmark", "--robot", "so101", "--motion", data, "--dry-run")
         self.assertIn("benchmark", result.stdout)
@@ -121,6 +121,26 @@ class CliDryRunTests(unittest.TestCase):
             )
             self.assertIn("hybrid_residual", result.stdout)
             self.assertIn("residual torque", result.stdout)
+
+    def test_train_mapping_and_derived_features_remain_host_safe(self):
+        result = run_cli(
+            "train-actuator",
+            "--robot",
+            "g1",
+            "--input-joints",
+            "shoulder_pitch,elbow",
+            "--output-joints",
+            "elbow",
+            "--input-columns",
+            "position,dynamic_bias,previous_torque",
+            "--dry-run",
+        )
+
+        self.assertIn("--input-joints", result.stdout)
+        self.assertIn("right_shoulder_pitch,right_elbow", result.stdout)
+        self.assertIn("--output-joints", result.stdout)
+        self.assertIn("dynamic_bias", result.stdout)
+        self.assertIn("previous_torque", result.stdout)
 
 
 if __name__ == "__main__":
