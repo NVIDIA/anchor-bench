@@ -159,9 +159,8 @@ class RunManifest(ConfigModel):
             return None
         return validate_sha256(value, label=info.field_name)
 
-    @model_validator(mode="after")
-    def _validate_identity(self) -> Self:
-        """Verify canonical identities and the generated-file index."""
+    def _validate_canonical_documents(self) -> None:
+        """Require every embedded identity document to be canonicalizable."""
 
         for value in (
             self.resolved_config,
@@ -172,6 +171,9 @@ class RunManifest(ConfigModel):
         ):
             canonical_object(value)
 
+    def _validate_content_hashes(self) -> None:
+        """Match stored resolved-config and run-input hashes to their content."""
+
         resolved_hash = canonical_sha256(self.resolved_config)
         if resolved_hash != self.resolved_config_sha256:
             raise ValueError(f"resolved_config_sha256 mismatch: expected {resolved_hash}")
@@ -179,6 +181,9 @@ class RunManifest(ConfigModel):
         input_hash = canonical_sha256(self.run_input)
         if input_hash != self.run_input_sha256:
             raise ValueError(f"run_input_sha256 mismatch: expected {input_hash}")
+
+    def _validate_run_input_duplicates(self) -> None:
+        """Match top-level identity fields duplicated inside run_input."""
 
         duplicated = {
             "phase": self.phase,
@@ -195,6 +200,9 @@ class RunManifest(ConfigModel):
                 raise ValueError(
                     f"top-level {name} does not match run_input.{name}"
                 )
+
+    def _validate_profile_duplicate(self) -> None:
+        """Match the semantic profile identity duplicated inside run_input."""
 
         run_profile = self.run_input.get("profile")
         if not isinstance(run_profile, Mapping):
@@ -214,6 +222,9 @@ class RunManifest(ConfigModel):
                     f"top-level profile.{name} does not match run_input.profile.{name}"
                 )
 
+    def _validate_upstream_duplicates(self) -> None:
+        """Match optional upstream identities duplicated by phase candidates."""
+
         if "upstream" in self.run_input and canonical_sha256(
             self.run_input["upstream"]
         ) != canonical_sha256(self.upstream):
@@ -232,16 +243,34 @@ class RunManifest(ConfigModel):
                     "run_input.candidate.source"
                 )
 
+    def _validate_generated_file_index(self) -> None:
+        """Require generated file paths to be unique and sorted."""
+
         paths = [entry.path for entry in self.generated_files]
         if len(paths) != len(set(paths)):
             raise ValueError("generated_files contains duplicate paths")
         if paths != sorted(paths):
             raise ValueError("generated_files must be sorted by path")
 
+    def _validate_self_hash(self) -> None:
+        """Match an optional finalized manifest hash to canonical content."""
+
         if self.run_manifest_sha256 is not None:
             actual = manifest_sha256(self)
             if actual != self.run_manifest_sha256:
                 raise ValueError(f"run_manifest_sha256 mismatch: expected {actual}")
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> Self:
+        """Verify canonical identities and the generated-file index."""
+
+        self._validate_canonical_documents()
+        self._validate_content_hashes()
+        self._validate_run_input_duplicates()
+        self._validate_profile_duplicate()
+        self._validate_upstream_duplicates()
+        self._validate_generated_file_index()
+        self._validate_self_hash()
         return self
 
     @classmethod

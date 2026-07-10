@@ -20,6 +20,7 @@ from anchor_bench.core.hashing import (
     validate_sha256,
 )
 from anchor_bench.core.profiles import LoadedProfile, load_profile, load_yaml_mapping, require_logical_name
+from anchor_bench.robots.fingerprints import runtime_asset_package_sha256
 from anchor_bench.deploy.schema import (
     DeployProfile,
     DeploySourceProvenance,
@@ -379,10 +380,23 @@ def _validate_training_contract(
         raise ValueError(
             f"accepted model {model_key!r} metadata asset hash does not match its source manifest"
         )
-    source_hash = _fingerprint_digest(manifest.fingerprints.get("dataset"), label="dataset")
+    asset_fingerprint = manifest.fingerprints.get("asset")
+    if not isinstance(asset_fingerprint, Mapping):
+        raise ValueError("training manifest asset fingerprint must be a mapping")
+    asset_package_hash = runtime_asset_package_sha256(asset_fingerprint)
+    if metadata.hashes.asset_package_sha256 != asset_package_hash:
+        raise ValueError(
+            f"accepted model {model_key!r} metadata asset package hash does not match its source manifest"
+        )
+    dataset_hash = _fingerprint_digest(manifest.fingerprints.get("dataset"), label="dataset")
+    if metadata.hashes.dataset_sha256 != dataset_hash:
+        raise ValueError(
+            f"accepted model {model_key!r} metadata dataset hash does not match its source manifest"
+        )
+    source_hash = _fingerprint_digest(manifest.fingerprints.get("source"), label="source")
     if metadata.hashes.source_sha256 != source_hash:
         raise ValueError(
-            f"accepted model {model_key!r} metadata source hash does not match its source manifest"
+            f"accepted model {model_key!r} metadata Anchor source hash does not match its source manifest"
         )
     target = metadata.target_columns[0]
     if target != accepted.contract.target:

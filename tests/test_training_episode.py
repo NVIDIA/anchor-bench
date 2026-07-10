@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from anchor_bench.data.motion import JointLayout, MotionData, MotionSignal
+from anchor_bench.data.sage import write_sage_motion
 from anchor_bench.training.episode import (
     EpisodeAssembler,
     FeatureBlock,
@@ -50,6 +52,30 @@ def _motion() -> MotionData:
     )
 
 
+def _write_alias_motion(root: Path, names: tuple[str, ...]) -> None:
+    """Write one training episode with a three-column recorded joint axis."""
+
+    write_sage_motion(
+        root,
+        names,
+        control_rows=(
+            ("CONTROL", 0.0, [1.0, 2.0, 9.0]),
+            ("CONTROL", 0.2, [1.2, 2.2, 9.2]),
+        ),
+        state_rows=(
+            ("STATE_MOTOR", 0.0, [3.0, 4.0, 8.0], [0.1, 0.2, 0.3], [5.0, 6.0, 7.0]),
+            ("STATE_MOTOR", 0.1, [3.1, 4.1, 8.1], [0.4, 0.5, 0.6], [5.1, 6.1, 7.1]),
+            ("STATE_MOTOR", 0.2, [3.2, 4.2, 8.2], [0.7, 0.8, 0.9], [5.2, 6.2, 7.2]),
+        ),
+        metadata={
+            "time_unit": "seconds",
+            "position_unit": "rad",
+            "velocity_unit": "rad/s",
+            "torque_unit": "N*m",
+        },
+    )
+
+
 class _BiasProvider:
     def __init__(self):
         self.calls = []
@@ -77,6 +103,34 @@ class FeatureBlockTests(unittest.TestCase):
 
 
 class EpisodeAssemblerTests(unittest.TestCase):
+    def test_load_canonicalizes_aliases_and_keeps_dynamic_bias_context(self):
+        """Canonicalize mapped columns without dropping an unmapped recorded joint."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_alias_motion(root, ("AliasA", "b", "context"))
+            provider = _BiasProvider()
+            assembler = EpisodeAssembler(
+                provider,
+                canonical_joint_names=("a", "b"),
+                joint_aliases={"AliasA": "a"},
+            )
+            source = assembler.load(root, 0.1)
+            episode = assembler.assemble(
+                source,
+                mapping=ResolvedTrainingMapping(
+                    input_joints=("b", "a"),
+                    output_joints=("b",),
+                ),
+                features=(TrainingFeature(name="dynamic_bias", domain="input"),),
+                target="torque",
+            )
+
+        self.assertEqual(("a", "b", "context"), source.motion.joints.names)
+        self.assertEqual(("a", "b", "context"), provider.calls[0]["joint_names"])
+        self.assertEqual((3, 3), provider.calls[0]["positions"].shape)
+        np.testing.assert_allclose(episode.measured_torque[:, 0], [6.0, 6.1, 6.2])
+
     def test_preserves_state_grid_and_linearly_interpolates_commands(self):
         source = prepare_episode_source(_motion(), 0.1)
         mapping = ResolvedTrainingMapping(

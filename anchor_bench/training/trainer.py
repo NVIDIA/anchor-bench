@@ -78,61 +78,10 @@ class TrainingJob:
         mappings = _typed_tuple(self.mappings, ResolvedTrainingMapping, label="mappings")
         runtime = _typed_tuple(self.mapping_runtime, RuntimeMapping, label="mapping_runtime")
         features = _typed_tuple(self.input_features, TrainingFeature, label="input_features")
-        if len(runtime) != len(mappings):
-            raise ValueError("mapping_runtime must contain one entry per resolved mapping")
-
-        identities = tuple(_mapping_identity(mapping) for mapping in mappings)
-        if len(set(identities)) != len(identities):
-            raise ValueError("mappings must not contain duplicates")
-        first_width = (len(mappings[0].input_joints), len(mappings[0].output_joints))
-        for index, (mapping, constants) in enumerate(zip(mappings, runtime, strict=True)):
-            identity = _mapping_identity(mapping)
-            runtime_identity = (constants.input_joints, constants.output_joints)
-            if runtime_identity != identity:
-                raise ValueError(f"mapping_runtime[{index}] axes must exactly match mappings[{index}]")
-            width = (len(mapping.input_joints), len(mapping.output_joints))
-            if width != first_width:
-                raise ValueError(
-                    f"mapping {index} has dimensions {width[0]}->{width[1]}; "
-                    f"expected {first_width[0]}->{first_width[1]}"
-                )
-
-        configured = set(identities)
-        for split, episodes in (("train", train), ("validation", validation)):
-            for index, episode in enumerate(episodes):
-                if _mapping_identity(episode.mapping) not in configured:
-                    raise ValueError(f"{split} episode {index} uses an unconfigured mapping")
-        covered = {_mapping_identity(episode.mapping) for episode in train}
-        if covered != configured:
-            raise ValueError("training episodes must cover every configured mapping")
-
-        feature_names = tuple(feature.name for feature in features)
-        if len(set(feature_names)) != len(feature_names):
-            raise ValueError("input_features must not contain duplicate names")
-        if self.target not in {"torque", "torque_residual"}:
-            raise ValueError(f"unsupported training target {self.target!r}")
-        sample_dt_s = float(self.sample_dt_s)
-        if not math.isfinite(sample_dt_s) or sample_dt_s <= 0.0:
-            raise ValueError("sample_dt_s must be finite and positive")
-        if not isinstance(self.network, TrainingNetwork):
-            raise TypeError("network must be a TrainingNetwork")
-        if not isinstance(self.fit, TrainingFit):
-            raise TypeError("fit must be a TrainingFit")
-        if not isinstance(self.hashes, RuntimeHashes):
-            raise TypeError("hashes must be RuntimeHashes")
-
-        provenance = self.dynamic_bias_provenance
-        needs_bias = "dynamic_bias" in feature_names
-        if needs_bias and not isinstance(provenance, Mapping):
-            raise ValueError("dynamic_bias training requires derivation provenance")
-        if not needs_bias and provenance is not None:
-            raise ValueError("dynamic_bias provenance requires a dynamic_bias input feature")
-
-        metadata = dict(self.stats_metadata)
-        reserved = set(RuntimeGRUMetadata.model_fields).union({"metrics", "training"})
-        collisions = sorted(reserved.intersection(metadata))
-        if collisions:
-            raise ValueError("stats_metadata cannot override reserved fields: " + ", ".join(collisions))
+        configured = _validate_mapping_contract(mappings, runtime)
+        _validate_episode_coverage(train, validation, configured)
+        sample_dt_s, provenance = _validate_job_configuration(self, features)
+        metadata = _validate_stats_metadata(self.stats_metadata)
 
         object.__setattr__(self, "train_episodes", train)
         object.__setattr__(self, "val_episodes", validation)
@@ -177,6 +126,90 @@ def _mapping_identity(mapping: ResolvedTrainingMapping) -> tuple[tuple[str, ...]
     """Return the ordered physical axes that identify a training mapping."""
 
     return mapping.input_joints, mapping.output_joints
+
+
+def _validate_mapping_contract(
+    mappings: tuple[ResolvedTrainingMapping, ...],
+    runtime: tuple[RuntimeMapping, ...],
+) -> set[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Validate unique shared-weight mappings and their matching runtime constants."""
+
+    if len(runtime) != len(mappings):
+        raise ValueError("mapping_runtime must contain one entry per resolved mapping")
+
+    identities = tuple(_mapping_identity(mapping) for mapping in mappings)
+    if len(set(identities)) != len(identities):
+        raise ValueError("mappings must not contain duplicates")
+    first_width = (len(mappings[0].input_joints), len(mappings[0].output_joints))
+    for index, (mapping, constants) in enumerate(zip(mappings, runtime, strict=True)):
+        identity = _mapping_identity(mapping)
+        runtime_identity = (constants.input_joints, constants.output_joints)
+        if runtime_identity != identity:
+            raise ValueError(f"mapping_runtime[{index}] axes must exactly match mappings[{index}]")
+        width = (len(mapping.input_joints), len(mapping.output_joints))
+        if width != first_width:
+            raise ValueError(
+                f"mapping {index} has dimensions {width[0]}->{width[1]}; "
+                f"expected {first_width[0]}->{first_width[1]}"
+            )
+    return set(identities)
+
+
+def _validate_episode_coverage(
+    train: tuple[TrainingEpisode, ...],
+    validation: tuple[TrainingEpisode, ...],
+    configured: set[tuple[tuple[str, ...], tuple[str, ...]]],
+) -> None:
+    """Require every episode mapping to be configured and every mapping to train."""
+
+    for split, episodes in (("train", train), ("validation", validation)):
+        for index, episode in enumerate(episodes):
+            if _mapping_identity(episode.mapping) not in configured:
+                raise ValueError(f"{split} episode {index} uses an unconfigured mapping")
+    covered = {_mapping_identity(episode.mapping) for episode in train}
+    if covered != configured:
+        raise ValueError("training episodes must cover every configured mapping")
+
+
+def _validate_job_configuration(
+    job: TrainingJob,
+    features: tuple[TrainingFeature, ...],
+) -> tuple[float, Mapping[str, Any] | None]:
+    """Validate feature, target, timing, model, and dynamic-bias inputs."""
+
+    feature_names = tuple(feature.name for feature in features)
+    if len(set(feature_names)) != len(feature_names):
+        raise ValueError("input_features must not contain duplicate names")
+    if job.target not in {"torque", "torque_residual"}:
+        raise ValueError(f"unsupported training target {job.target!r}")
+    sample_dt_s = float(job.sample_dt_s)
+    if not math.isfinite(sample_dt_s) or sample_dt_s <= 0.0:
+        raise ValueError("sample_dt_s must be finite and positive")
+    if not isinstance(job.network, TrainingNetwork):
+        raise TypeError("network must be a TrainingNetwork")
+    if not isinstance(job.fit, TrainingFit):
+        raise TypeError("fit must be a TrainingFit")
+    if not isinstance(job.hashes, RuntimeHashes):
+        raise TypeError("hashes must be RuntimeHashes")
+
+    provenance = job.dynamic_bias_provenance
+    needs_bias = "dynamic_bias" in feature_names
+    if needs_bias and not isinstance(provenance, Mapping):
+        raise ValueError("dynamic_bias training requires derivation provenance")
+    if not needs_bias and provenance is not None:
+        raise ValueError("dynamic_bias provenance requires a dynamic_bias input feature")
+    return sample_dt_s, provenance
+
+
+def _validate_stats_metadata(stats_metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy stats metadata while rejecting reserved output fields."""
+
+    metadata = dict(stats_metadata)
+    reserved = set(RuntimeGRUMetadata.model_fields).union({"metrics", "training"})
+    collisions = sorted(reserved.intersection(metadata))
+    if collisions:
+        raise ValueError("stats_metadata cannot override reserved fields: " + ", ".join(collisions))
+    return metadata
 
 
 def _import_torch():

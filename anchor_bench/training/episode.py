@@ -163,10 +163,22 @@ def prepare_episode_source(motion: MotionData, sample_dt_s: float) -> PreparedEp
 class EpisodeAssembler:
     """Per-run source cache and mapping-specific episode assembler."""
 
-    def __init__(self, dynamic_bias_provider: DynamicBiasProvider | None = None):
+    def __init__(
+        self,
+        dynamic_bias_provider: DynamicBiasProvider | None = None,
+        *,
+        canonical_joint_names: Sequence[str] | None = None,
+        joint_aliases: Mapping[str, str] | None = None,
+    ) -> None:
         """Create an assembler with an optional injectable dynamic-bias provider."""
 
+        if canonical_joint_names is None and joint_aliases:
+            raise ValueError("joint_aliases requires canonical_joint_names")
         self._dynamic_bias_provider = dynamic_bias_provider
+        self._canonical_joint_names = (
+            None if canonical_joint_names is None else tuple(canonical_joint_names)
+        )
+        self._joint_aliases = dict(joint_aliases or {})
         self._prepared: dict[tuple[Path, float], PreparedEpisodeSource] = {}
 
     def load(self, path: str | Path, sample_dt_s: float) -> PreparedEpisodeSource:
@@ -177,7 +189,12 @@ class EpisodeAssembler:
         if key not in self._prepared:
             from anchor_bench.data.sage import load_sage_motion
 
-            self._prepared[key] = prepare_episode_source(load_sage_motion(source), sample_dt_s)
+            motion = load_sage_motion(
+                source,
+                canonical_joint_names=self._canonical_joint_names,
+                joint_aliases=self._joint_aliases,
+            )
+            self._prepared[key] = prepare_episode_source(motion, sample_dt_s)
         return self._prepared[key]
 
     def assemble(

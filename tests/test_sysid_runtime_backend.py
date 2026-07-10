@@ -4,6 +4,7 @@ import builtins
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -99,6 +100,31 @@ def _resolved(tmp_path: Path):
     return resolve_sysid_run(
         SysIdInvocation(robot="demo", dry_run=False),
         inputs,
+    )
+
+
+def _write_sysid_axis_motion(root: Path, names: tuple[str, ...]) -> None:
+    """Write one two-row SysID motion with a caller-selected three-column axis."""
+
+    from anchor_bench.data.sage import write_sage_motion
+
+    write_sage_motion(
+        root,
+        names,
+        control_rows=(
+            ("CONTROL", 0.0, [1.0, 2.0, 9.0]),
+            ("CONTROL", 0.002, [1.1, 2.1, 9.1]),
+        ),
+        state_rows=(
+            ("STATE_MOTOR", 0.0, [3.0, 4.0, 8.0], [0.1, 0.2, 0.3], [5.0, 6.0, 7.0]),
+            ("STATE_MOTOR", 0.002, [3.1, 4.1, 8.1], [0.4, 0.5, 0.6], [5.1, 6.1, 7.1]),
+        ),
+        metadata={
+            "time_unit": "seconds",
+            "position_unit": "rad",
+            "velocity_unit": "rad/s",
+            "torque_unit": "N*m",
+        },
     )
 
 
@@ -353,6 +379,46 @@ def test_robot_identity_loader_ignores_legacy_phase_files(
     assert spec.runtime_usd == "demo.usd"
 
 
+def test_sysid_motion_canonicalizes_aliases_before_joint_selection(tmp_path: Path) -> None:
+    """Accept alias-backed inputs while preserving collision and missing failures."""
+
+    from anchor_bench.robots.schema import RobotIdentity
+    from anchor_bench.sysid import runtime
+
+    resolved = replace(
+        _resolved(tmp_path),
+        canonical_joint_names=("joint_a", "joint_b"),
+        joint_aliases={"AliasA": "joint_a"},
+    )
+    spec = RobotIdentity.from_dict(
+        {
+            "schema_version": 1,
+            "name": "demo",
+            "display_name": "Demo",
+            "fixed_base": True,
+            "asset_path": "assets/robots/demo/manifest.yaml",
+            "runtime_usd": "demo.usd",
+            "joint_names": ["joint_a", "joint_b"],
+            "joint_aliases": {"AliasA": "joint_a"},
+        },
+        "test robot",
+    )
+    data = tmp_path / resolved.resolved_config.data
+    _write_sysid_axis_motion(data, ("AliasA", "joint_b", "context"))
+
+    motion = runtime._load_sysid_motion(resolved, spec, target_dt=0.002)
+    assert motion.joints.names == ("joint_a", "joint_b")
+    np.testing.assert_allclose(motion.position.values[0], [3.0, 4.0])
+
+    _write_sysid_axis_motion(data, ("AliasA", "joint_a", "context"))
+    with pytest.raises(ValueError, match="maps columns 'AliasA' and 'joint_a'"):
+        runtime._load_sysid_motion(resolved, spec, target_dt=0.002)
+
+    _write_sysid_axis_motion(data, ("AliasA", "context", "outside"))
+    with pytest.raises(ValueError, match="joints not found.*joint_b"):
+        runtime._load_sysid_motion(resolved, spec, target_dt=0.002)
+
+
 def test_runtime_rechecks_asset_and_dataset_fingerprints(
     tmp_path: Path,
 ) -> None:
@@ -428,3 +494,169 @@ def test_runtime_rechecks_asset_and_dataset_fingerprints(
     data_file.write_text("time,value\n0,1\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="dataset changed after resolution"):
         runtime._verify_runtime_inputs(resolved, usd)
+
+
+class _FakeTensor:
+    """Small NumPy-backed tensor implementing reset-path operations only."""
+
+    def __init__(self, values) -> None:
+        """Copy finite test values into a mutable array."""
+
+        self.values = np.asarray(values, dtype=float).copy()
+
+    def __getitem__(self, key):
+        """Return one copied tensor slice."""
+
+        return _FakeTensor(self.values[key])
+
+    def __setitem__(self, key, value) -> None:
+        """Assign a tensor or array-like slice."""
+
+        self.values[key] = value.values if isinstance(value, _FakeTensor) else value
+
+    def zero_(self):
+        """Clear this tensor in place."""
+
+        self.values.fill(0.0)
+        return self
+
+    def unsqueeze(self, axis: int):
+        """Insert one singleton dimension."""
+
+        return _FakeTensor(np.expand_dims(self.values, axis=axis))
+
+    def expand(self, *shape: int):
+        """Broadcast into the requested Torch-like shape."""
+
+        resolved = tuple(
+            current if requested == -1 else requested
+            for current, requested in zip(self.values.shape, shape, strict=True)
+        )
+        return _FakeTensor(np.broadcast_to(self.values, resolved))
+
+
+def test_sysid_rollout_uses_command_t_and_measurement_t_plus_one() -> None:
+    """Score exactly T-1 intervals without command-T or measurement-zero leakage."""
+
+    from anchor_bench.sysid import runtime
+
+    adapter = object.__new__(runtime.IsaacNewtonRuntimeAdapter)
+    adapter._row_count = 4
+    events = []
+    adapter._set_command_row = lambda row: events.append(("command", row))
+    adapter._advance_control_interval = lambda: events.append(("advance", None))
+
+    def accumulate(measured_row, position_error, velocity_error):
+        """Record the compared row and expose error accumulator flow."""
+
+        events.append(("measure", measured_row))
+        return position_error + measured_row, velocity_error + 10 * measured_row
+
+    adapter._accumulate_measurement_error = accumulate
+    position_error, velocity_error = adapter._rollout_errors(0, 0)
+
+    assert events == [
+        ("command", 0),
+        ("advance", None),
+        ("measure", 1),
+        ("command", 1),
+        ("advance", None),
+        ("measure", 2),
+        ("command", 2),
+        ("advance", None),
+        ("measure", 3),
+    ]
+    assert position_error == 6
+    assert velocity_error == 60
+    assert runtime._rollout_sample_count(4, 2) == 6
+
+
+def test_sysid_settle_restores_exact_measured_row_zero_without_stepping() -> None:
+    """Warm the configured buffer, then make the final operation an exact restore."""
+
+    from anchor_bench.sysid import runtime
+
+    events: list[str] = []
+    states = []
+    targets = []
+
+    def write_state(position, velocity) -> None:
+        """Capture exact state values and their place in reset order."""
+
+        states.append((position.values.copy(), velocity.values.copy()))
+        events.append("state")
+
+    def set_target(target) -> None:
+        """Capture the full-layout warm-up target."""
+
+        targets.append(target.values.copy())
+        events.append("target")
+
+    adapter = object.__new__(runtime.IsaacNewtonRuntimeAdapter)
+    adapter._resolved = SimpleNamespace(
+        resolved_config=SimpleNamespace(num_envs=2, buffer_time=0.004)
+    )
+    adapter._timing = SimpleNamespace(
+        control_dt=0.002,
+        control_divisor=2,
+        physics_dt=0.001,
+    )
+    adapter._joint_ids_long = np.asarray([1, 3], dtype=int)
+    adapter._measured_position = _FakeTensor([[10.0, 20.0], [11.0, 21.0]])
+    adapter._measured_velocity = _FakeTensor([[1.0, 2.0], [1.1, 2.1]])
+    adapter._commands = _FakeTensor([[0.5, 0.6], [0.7, 0.8]])
+    adapter._joint_position = _FakeTensor(np.full((2, 4), 99.0))
+    adapter._joint_velocity = _FakeTensor(np.full((2, 4), 88.0))
+    adapter._target = _FakeTensor(np.full((2, 4), 77.0))
+    adapter._robot = SimpleNamespace(
+        write_joint_state_to_sim=write_state,
+        set_joint_position_target=set_target,
+    )
+    adapter._scene = SimpleNamespace(
+        write_data_to_sim=lambda: events.append("write")
+    )
+    adapter._advance_physics_step = lambda: events.append("step")
+
+    adapter._reset_trajectory()
+
+    expected_position = np.asarray([[0, 10, 0, 20], [0, 10, 0, 20]], dtype=float)
+    expected_velocity = np.asarray([[0, 1, 0, 2], [0, 1, 0, 2]], dtype=float)
+    for position, velocity in states:
+        np.testing.assert_allclose(position, expected_position)
+        np.testing.assert_allclose(velocity, expected_velocity)
+    np.testing.assert_allclose(
+        targets[0],
+        [[0, 0.5, 0, 0.6], [0, 0.5, 0, 0.6]],
+    )
+    assert events == [
+        "state",
+        "write",
+        "target",
+        "step",
+        "step",
+        "step",
+        "step",
+        "state",
+        "write",
+    ]
+
+
+def test_sysid_rollout_requires_two_synchronized_rows() -> None:
+    """Reject a one-row or mismatched command/state rollout before simulation."""
+
+    from anchor_bench.sysid import runtime
+
+    one_row = np.asarray([0.0])
+    motion = SimpleNamespace(
+        command_position=SimpleNamespace(time=one_row),
+        position=SimpleNamespace(time=one_row),
+        velocity=SimpleNamespace(time=one_row),
+    )
+    with pytest.raises(ValueError, match="at least 2 synchronized"):
+        runtime._synchronized_rollout_rows(motion)
+
+    motion.command_position.time = np.asarray([0.0, 0.003])
+    motion.position.time = np.asarray([0.0, 0.002])
+    motion.velocity.time = np.asarray([0.0, 0.002])
+    with pytest.raises(ValueError, match="requires synchronized"):
+        runtime._synchronized_rollout_rows(motion)

@@ -46,11 +46,15 @@ from anchor_bench.training.schema import (
     TrainingAcceptedCatalog,
     TrainingArtifactReference,
     TrainingBenchmarkEvidence,
+    TrainingFeature,
     TrainingSourceReference,
 )
 
 
 _ASSET_HASH = "a" * 64
+_ASSET_PACKAGE_HASH = "b" * 64
+
+
 def _profile(*, mapping=None, target="torque"):
     """Return a compact profile document suitable for phase tests."""
 
@@ -137,7 +141,14 @@ class TrainingPhaseFixture:
                 "raw_sha256": "e" * 64,
                 "canonical_sha256": "f" * 64,
             },
-            asset_fingerprint={"sha256": _ASSET_HASH},
+            asset_fingerprint={
+                "kind": "runtime_asset_package",
+                "runtime_usd": "demo.usd",
+                "asset_sha256": _ASSET_HASH,
+                "root_usd_sha256": _ASSET_HASH,
+                "package_tree_sha256": _ASSET_PACKAGE_HASH,
+                "package_files": {"demo.usd": _ASSET_HASH},
+            },
             source_fingerprint={"source_sha256": "c" * 64},
             dependency_fingerprints={"torch": "test", "newton": "test"},
             dataset_fingerprint=tree_fingerprint(self.dataset),
@@ -150,7 +161,12 @@ def _runtime_metadata(resolved, staging: Path) -> RuntimeGRUMetadata:
 
     input_width = len(resolved.mappings[0].input_joints)
     output_width = len(resolved.mappings[0].output_joints)
-    scalar_or_vector = lambda values: values[0] if len(values) == 1 else tuple(values)
+
+    def scalar_or_vector(values):
+        """Encode one-element metadata vectors as scalars."""
+
+        return values[0] if len(values) == 1 else tuple(values)
+
     mappings = tuple(
         RuntimeMapping(
             input_joints=mapping.input_joints,
@@ -193,7 +209,9 @@ def _runtime_metadata(resolved, staging: Path) -> RuntimeGRUMetadata:
             ),
             sysid_state_sha256=sha256_file(staging / "sysid_state.yaml"),
             asset_sha256=_ASSET_HASH,
-            source_sha256=resolved.fingerprints["dataset"]["tree_sha256"],
+            asset_package_sha256=_ASSET_PACKAGE_HASH,
+            dataset_sha256=resolved.fingerprints["dataset"]["tree_sha256"],
+            source_sha256=resolved.fingerprints["source"]["source_sha256"],
         ),
     )
 
@@ -361,6 +379,30 @@ def _sysid_candidate(fixture: TrainingPhaseFixture) -> Path:
 
 
 class TrainingResolutionTests(unittest.TestCase):
+    def test_resolution_rejects_components_builtin_providers_cannot_produce(self):
+        """Keep generic feature blocks while failing unsupported recipes before runtime."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TrainingPhaseFixture(Path(temporary))
+            with self.assertRaisesRegex(
+                ValueError,
+                "built-in training feature 'velocity'.*only the 'value' component",
+            ):
+                resolve_training_run(
+                    TrainingInvocation(
+                        robot="demo",
+                        profile="arm",
+                        input_features=(
+                            TrainingFeature(
+                                name="velocity",
+                                domain="input",
+                                components=("vx", "vy", "vz"),
+                            ),
+                        ),
+                    ),
+                    fixture.inputs(),
+                )
+
     def test_cli_mapping_and_fit_overrides_replace_yaml_and_resolve_aliases(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TrainingPhaseFixture(Path(temporary))

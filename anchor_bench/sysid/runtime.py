@@ -404,6 +404,30 @@ def _verify_runtime_inputs(
         )
 
 
+def _load_sysid_motion(
+    resolved: ResolvedSysIdRun,
+    spec: RobotIdentity,
+    *,
+    target_dt: float,
+) -> Any:
+    """Load selected SysID columns after canonicalizing the full recorded axis."""
+
+    if tuple(spec.joint_names) != resolved.canonical_joint_names:
+        raise RuntimeError("resolved SysID canonical joints do not match robot identity")
+    if dict(spec.joint_aliases) != resolved.joint_aliases:
+        raise RuntimeError("resolved SysID joint aliases do not match robot identity")
+    from anchor_bench.data.sage import load_sage_motion
+
+    return load_sage_motion(
+        resolved.repository_root / resolved.resolved_config.data,
+        joint_names=resolved.resolved_config.joints,
+        canonical_joint_names=resolved.canonical_joint_names,
+        joint_aliases=resolved.joint_aliases,
+        target_dt=target_dt,
+        require_velocity=resolved.resolved_config.loss.velocity > 0.0,
+    )
+
+
 def _base_actuator_parameters(
     resolved: ResolvedSysIdRun,
 ) -> dict[str, dict[str, float]]:
@@ -489,6 +513,36 @@ def _apply_population(
         writer(torch.tensor(rows, dtype=torch.float32, device=robot.device))
 
 
+def _synchronized_rollout_rows(motion: Any) -> int:
+    """Require at least two command/state rows on one shared time axis."""
+
+    signals = [motion.command_position, motion.position]
+    if motion.velocity is not None:
+        signals.append(motion.velocity)
+    reference_time = np.asarray(motion.position.time)
+    if any(
+        len(signal.time) != len(reference_time)
+        or not np.array_equal(np.asarray(signal.time), reference_time)
+        for signal in signals
+    ):
+        raise ValueError("SysID rollout requires synchronized command and state rows")
+    row_count = len(reference_time)
+    if row_count < 2:
+        raise ValueError(
+            "SysID rollout requires at least 2 synchronized command/state rows; "
+            f"got {row_count}"
+        )
+    return row_count
+
+
+def _rollout_sample_count(row_count: int, joint_count: int) -> int:
+    """Return scalar samples from T-1 scored intervals and all selected joints."""
+
+    if row_count < 2 or joint_count < 1:
+        raise ValueError("SysID rollout sample count requires at least two rows and one joint")
+    return (row_count - 1) * joint_count
+
+
 class IsaacNewtonRuntimeAdapter:
     """Real batched Isaac Lab/Newton trajectory evaluator for one resolved run."""
 
@@ -505,7 +559,6 @@ class IsaacNewtonRuntimeAdapter:
     def _initialize(self, resolved: ResolvedSysIdRun) -> None:
         """Load immutable inputs and create the simulator after AppLauncher starts."""
 
-        from anchor_bench.data.sage import load_sage_motion
         from anchor_bench.runtime.app_launcher import launch_isaac_sim
 
         config = resolved.resolved_config
@@ -516,14 +569,12 @@ class IsaacNewtonRuntimeAdapter:
             config.simulation,
             f"{resolved.robot} resolved SysID simulation",
         )
-        motion = load_sage_motion(
-            resolved.repository_root / config.data,
-            joint_names=config.joints,
+        motion = _load_sysid_motion(
+            resolved,
+            spec,
             target_dt=timing.control_dt,
-            require_velocity=config.loss.velocity > 0.0,
         )
-        if not len(motion.position.time):
-            raise ValueError(f"SysID dataset {config.data!r} contains no state rows")
+        row_count = _synchronized_rollout_rows(motion)
         actuator_parameters = _base_actuator_parameters(resolved)
 
         _launcher, self._application = launch_isaac_sim(headless=True)
@@ -555,6 +606,7 @@ class IsaacNewtonRuntimeAdapter:
         self._simulation = simulation
         self._scene = scene
         self._robot = robot
+        self._row_count = row_count
         self._joint_names = tuple(config.joints)
         self._joint_ids = joint_ids_for(robot, list(config.joints), torch)
         self._joint_ids_long = self._joint_ids.long()
@@ -590,11 +642,10 @@ class IsaacNewtonRuntimeAdapter:
         self._joint_velocity = torch.zeros_like(self._joint_position)
         self._target = torch.zeros_like(self._joint_position)
 
-    def _reset_trajectory(self) -> None:
-        """Reset every environment to the measured initial state and settle it."""
+    def _restore_measured_initial_state(self) -> None:
+        """Write measured row zero exactly without advancing simulation time."""
 
         config = self._resolved.resolved_config
-        torch = self._torch
         start_position = self._measured_position[0].unsqueeze(0).expand(
             config.num_envs,
             -1,
@@ -613,18 +664,79 @@ class IsaacNewtonRuntimeAdapter:
             self._joint_velocity,
         )
         self._scene.write_data_to_sim()
+
+    def _set_command_row(self, row: int) -> None:
+        """Apply one recorded command row to every candidate environment."""
+
+        config = self._resolved.resolved_config
+        command = self._commands[row].unsqueeze(0).expand(config.num_envs, -1)
+        self._target[:, self._joint_ids_long] = command
+        self._robot.set_joint_position_target(self._target)
+
+    def _advance_physics_step(self) -> None:
+        """Advance one configured physics step and refresh the scene cache."""
+
+        self._scene.write_data_to_sim()
         self._simulation.step(render=False)
         self._scene.update(self._timing.physics_dt)
 
-        first_command = self._commands[0].unsqueeze(0).expand(config.num_envs, -1)
+    def _advance_control_interval(self) -> None:
+        """Advance exactly one configured control interval."""
+
+        for _ in range(self._timing.control_divisor):
+            self._advance_physics_step()
+
+    def _reset_trajectory(self) -> None:
+        """Warm configured buffers, then restore measured row zero exactly."""
+
+        config = self._resolved.resolved_config
+        self._restore_measured_initial_state()
         self._target.zero_()
-        self._target[:, self._joint_ids_long] = first_command
-        self._robot.set_joint_position_target(self._target)
+        self._set_command_row(0)
         buffer_steps = int(round(config.buffer_time / self._timing.control_dt))
         for _ in range(buffer_steps * self._timing.control_divisor):
-            self._scene.write_data_to_sim()
-            self._simulation.step(render=False)
-            self._scene.update(self._timing.physics_dt)
+            self._advance_physics_step()
+        self._restore_measured_initial_state()
+
+    def _accumulate_measurement_error(
+        self,
+        measured_row: int,
+        position_error: Any,
+        velocity_error: Any,
+    ) -> tuple[Any, Any]:
+        """Accumulate one simulated state against its aligned measured row."""
+
+        simulated_position = self._to_torch(
+            self._robot.data.joint_pos,
+            self._wp,
+        )[:, self._joint_ids_long]
+        position_delta = simulated_position - self._measured_position[measured_row]
+        position_error += (position_delta.double() ** 2).sum(dim=1)
+        if self._measured_velocity is not None:
+            simulated_velocity = self._to_torch(
+                self._robot.data.joint_vel,
+                self._wp,
+            )[:, self._joint_ids_long]
+            velocity_delta = simulated_velocity - self._measured_velocity[measured_row]
+            velocity_error += (velocity_delta.double() ** 2).sum(dim=1)
+        return position_error, velocity_error
+
+    def _rollout_errors(
+        self,
+        position_error: Any,
+        velocity_error: Any,
+    ) -> tuple[Any, Any]:
+        """Apply command t and score the state reached at measured row t+1."""
+
+        for command_row in range(self._row_count - 1):
+            self._set_command_row(command_row)
+            self._advance_control_interval()
+            position_error, velocity_error = self._accumulate_measurement_error(
+                command_row + 1,
+                position_error,
+                velocity_error,
+            )
+        return position_error, velocity_error
 
     def evaluate_population(
         self,
@@ -654,29 +766,11 @@ class IsaacNewtonRuntimeAdapter:
             device=self._robot.device,
         )
         velocity_error = self._torch.zeros_like(position_error)
-        for row in range(self._commands.shape[0]):
-            command = self._commands[row].unsqueeze(0).expand(config.num_envs, -1)
-            self._target[:, self._joint_ids_long] = command
-            self._robot.set_joint_position_target(self._target)
-            for _ in range(self._timing.control_divisor):
-                self._scene.write_data_to_sim()
-                self._simulation.step(render=False)
-                self._scene.update(self._timing.physics_dt)
-            simulated_position = self._to_torch(
-                self._robot.data.joint_pos,
-                self._wp,
-            )[:, self._joint_ids_long]
-            position_delta = simulated_position - self._measured_position[row]
-            position_error += (position_delta.double() ** 2).sum(dim=1)
-            if self._measured_velocity is not None:
-                simulated_velocity = self._to_torch(
-                    self._robot.data.joint_vel,
-                    self._wp,
-                )[:, self._joint_ids_long]
-                velocity_delta = simulated_velocity - self._measured_velocity[row]
-                velocity_error += (velocity_delta.double() ** 2).sum(dim=1)
-
-        samples = int(self._commands.shape[0]) * len(self._joint_names)
+        position_error, velocity_error = self._rollout_errors(
+            position_error,
+            velocity_error,
+        )
+        samples = _rollout_sample_count(self._row_count, len(self._joint_names))
         position_mse = (position_error / samples).detach().cpu().numpy()
         velocity_mse = (velocity_error / samples).detach().cpu().numpy()
         return PopulationEvaluation(position_mse, velocity_mse)

@@ -7,6 +7,72 @@ from typing import Any, Mapping, Self, Sequence
 import numpy as np
 
 
+def canonicalize_recorded_joint_names(
+    names: Sequence[str],
+    *,
+    canonical_joint_names: Sequence[str],
+    aliases: Mapping[str, str],
+    context: str = "recorded joint axis",
+    permit_unmapped: bool = True,
+) -> tuple[str, ...]:
+    """Resolve known robot columns while preserving optional context columns."""
+
+    canonical = tuple(canonical_joint_names)
+    if not canonical or any(
+        not isinstance(name, str) or not name or name != name.strip()
+        for name in canonical
+    ):
+        raise ValueError("canonical_joint_names must contain non-empty names")
+    if len(canonical) != len(set(canonical)):
+        raise ValueError("canonical_joint_names must be unique")
+    canonical_set = set(canonical)
+    for alias, target in aliases.items():
+        if (
+            not isinstance(alias, str)
+            or not alias
+            or alias != alias.strip()
+            or not isinstance(target, str)
+            or not target
+            or target != target.strip()
+        ):
+            raise ValueError("joint aliases must map non-empty names")
+    bad_targets = sorted({target for target in aliases.values() if target not in canonical_set})
+    if bad_targets:
+        raise ValueError("joint aliases target unknown canonical joints: " + ", ".join(bad_targets))
+    collisions = sorted(set(aliases).intersection(canonical_set))
+    if collisions:
+        raise ValueError("joint aliases collide with canonical names: " + ", ".join(collisions))
+
+    result: list[str] = []
+    owner_by_joint: dict[str, str] = {}
+    raw_names: set[str] = set()
+    for raw_name in names:
+        if (
+            not isinstance(raw_name, str)
+            or not raw_name
+            or raw_name != raw_name.strip()
+        ):
+            raise ValueError(f"{context} contains an invalid joint name")
+        if raw_name in raw_names:
+            raise ValueError(f"{context} contains duplicate joint name {raw_name!r}")
+        raw_names.add(raw_name)
+        resolved = aliases.get(raw_name, raw_name)
+        if resolved not in canonical_set:
+            if not permit_unmapped:
+                raise ValueError(f"{context} contains unknown robot joint {raw_name!r}")
+            result.append(raw_name)
+            continue
+        previous = owner_by_joint.get(resolved)
+        if previous is not None:
+            raise ValueError(
+                f"{context} maps columns {previous!r} and {raw_name!r} "
+                f"to robot joint {resolved!r}"
+            )
+        owner_by_joint[resolved] = raw_name
+        result.append(resolved)
+    return tuple(result)
+
+
 def _readonly_array(values: Any, *, ndim: int, label: str) -> np.ndarray:
     array = np.asarray(values, dtype=float)
     if array.ndim != ndim:

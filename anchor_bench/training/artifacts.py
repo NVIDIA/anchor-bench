@@ -10,6 +10,7 @@ import yaml
 
 from anchor_bench.core.artifacts import generated_files, write_manifest_last
 from anchor_bench.core.hashing import canonical_sha256, sha256_file, validate_sha256
+from anchor_bench.robots.fingerprints import runtime_asset_package_sha256
 from anchor_bench.core.manifest_schema import RunManifest
 from anchor_bench.training.archive import read_runtime_metadata_archive
 
@@ -74,7 +75,15 @@ def _validate_network_contract(run_dir: Path, resolved: "ResolvedTrainingRun") -
         "resolved_config_sha256": canonical_sha256(resolved.resolved_config.to_dict()),
         "sysid_state_sha256": sha256_file(run_dir / "sysid_state.yaml"),
         "asset_sha256": _fingerprint_digest(resolved.fingerprints["asset"], label="asset"),
-        "source_sha256": _fingerprint_digest(resolved.fingerprints["dataset"], label="dataset"),
+        "asset_package_sha256": runtime_asset_package_sha256(
+            resolved.fingerprints["asset"]
+        ),
+        "dataset_sha256": _fingerprint_digest(
+            resolved.fingerprints["dataset"], label="dataset"
+        ),
+        "source_sha256": _fingerprint_digest(
+            resolved.fingerprints["source"], label="source"
+        ),
     }
     if metadata.hashes.to_dict() != expected_hashes:
         raise ValueError("embedded runtime hashes do not match the resolved Training run")

@@ -131,6 +131,19 @@ def runtime_asset_fingerprint(
     return fingerprint
 
 
+def runtime_asset_package_sha256(fingerprint: Mapping[str, Any]) -> str:
+    """Return the authoritative package-tree digest from a runtime asset identity."""
+
+    if fingerprint.get("kind") != ASSET_PACKAGE_KIND:
+        raise ValueError("runtime asset fingerprint is not an authoritative package identity")
+    value = fingerprint.get("package_tree_sha256")
+    if not isinstance(value, str):
+        raise ValueError(
+            "authoritative runtime asset fingerprint is missing package_tree_sha256"
+        )
+    return validate_sha256(value, label="runtime asset package_tree_sha256")
+
+
 def preview_asset_fingerprint(
     manifest_path: str | Path,
     *,
@@ -196,6 +209,7 @@ __all__ = [
     "preview_asset_fingerprint",
     "robot_identity_fingerprint",
     "runtime_asset_fingerprint",
+    "runtime_asset_package_sha256",
     "verify_robot_identity_fingerprint",
     "verify_runtime_asset_fingerprint",
 ]

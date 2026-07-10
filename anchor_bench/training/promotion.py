@@ -9,13 +9,13 @@ from typing import Any
 
 from anchor_bench.core.artifacts import atomic_write_yaml, sibling_lock, verify_run_directory
 from anchor_bench.core.hashing import (
-    canonical_sha256,
     contained_path,
     repo_relative_posix,
     validate_sha256,
 )
 from anchor_bench.core.profiles import load_yaml_mapping
 from anchor_bench.core.paths import require_canonical_phase_run_dir
+from anchor_bench.robots.fingerprints import runtime_asset_package_sha256
 from anchor_bench.training.archive import (
     EmbeddedRuntimeMetadata,
     read_runtime_metadata_archive,
@@ -131,9 +131,14 @@ def _validate_archive_contract(
         "resolved_config_sha256": manifest.resolved_config_sha256,
         "sysid_state_sha256": entries["sysid_state"].sha256,
         "asset_sha256": _fingerprint_digest(fingerprints["asset"], label="asset"),
-        "source_sha256": _fingerprint_digest(
+        "asset_package_sha256": runtime_asset_package_sha256(fingerprints["asset"]),
+        "dataset_sha256": _fingerprint_digest(
             fingerprints["dataset"],
             label="dataset",
+        ),
+        "source_sha256": _fingerprint_digest(
+            fingerprints["source"],
+            label="source",
         ),
     }
     if metadata.hashes.to_dict() != expected_hashes:

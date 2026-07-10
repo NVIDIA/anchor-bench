@@ -9,6 +9,9 @@ from anchor_bench.training.schema import TrainingAcceptedCatalog, TrainingProfil
 
 
 _HASH = "a" * 64
+_ASSET_PACKAGE_HASH = "b" * 64
+_DATASET_HASH = "c" * 64
+_SOURCE_HASH = "d" * 64
 
 
 def _valid_metadata() -> dict:
@@ -69,7 +72,9 @@ def _valid_metadata() -> dict:
             "resolved_config_sha256": _HASH,
             "sysid_state_sha256": _HASH,
             "asset_sha256": _HASH,
-            "source_sha256": _HASH,
+            "asset_package_sha256": _ASSET_PACKAGE_HASH,
+            "dataset_sha256": _DATASET_HASH,
+            "source_sha256": _SOURCE_HASH,
         },
     }
 

@@ -22,6 +22,9 @@ from anchor_bench.benchmark.schema import (
     BenchmarkSimulationConfig,
 )
 from anchor_bench.core.artifacts import RunManifest, run_slot, verify_run_directory
+from anchor_bench.data.motion import (
+    canonicalize_recorded_joint_names as _canonicalize_joint_names,
+)
 from anchor_bench.core.hashing import (
     canonical_object,
     canonical_sha256,
@@ -34,7 +37,10 @@ from anchor_bench.core.manifest_schema import GeneratedFile, ProfileSnapshot
 from anchor_bench.core.paths import benchmark_run_dir
 from anchor_bench.core.plan import CommandPlan, command_identity_metadata
 from anchor_bench.core.profiles import load_profile, require_logical_name
-from anchor_bench.robots.fingerprints import fingerprint_contains_preview
+from anchor_bench.robots.fingerprints import (
+    fingerprint_contains_preview,
+    runtime_asset_package_sha256,
+)
 from anchor_bench.sysid.state import LoadedSysIdCandidate, load_verified_sysid_candidate
 from anchor_bench.training.archive import (
     EmbeddedRuntimeMetadata,
@@ -238,41 +244,6 @@ def _manifest_entry(manifest: RunManifest, role: str, expected_path: str) -> Gen
             f"source generated-file role {role!r} must use path {expected_path!r}"
         )
     return entry
-
-
-def _canonicalize_joint_names(
-    names: Sequence[str],
-    *,
-    canonical_joint_names: Sequence[str],
-    aliases: Mapping[str, str],
-    context: str,
-    permit_unmapped: bool,
-) -> tuple[str, ...]:
-    """Resolve robot aliases and reject duplicate physical joint columns."""
-
-    canonical = tuple(canonical_joint_names)
-    if not canonical or len(canonical) != len(set(canonical)):
-        raise ValueError("canonical_joint_names must be non-empty and unique")
-    canonical_set = set(canonical)
-    bad_targets = sorted({target for target in aliases.values() if target not in canonical_set})
-    if bad_targets:
-        raise ValueError("joint aliases target unknown canonical joints: " + ", ".join(bad_targets))
-    result: list[str] = []
-    mapped: list[str] = []
-    for name in names:
-        if not isinstance(name, str) or not name or name != name.strip():
-            raise ValueError(f"{context} contains an invalid joint name")
-        resolved = aliases.get(name, name)
-        if resolved not in canonical_set:
-            if permit_unmapped:
-                result.append(name)
-                continue
-            raise ValueError(f"{context} contains unknown robot joint {name!r}")
-        if resolved in mapped:
-            raise ValueError(f"{context} maps more than one column to robot joint {resolved!r}")
-        mapped.append(resolved)
-        result.append(resolved)
-    return tuple(result)
 
 
 def _is_sage_motion(path: Path) -> bool:
@@ -493,18 +464,31 @@ def _validate_metadata_hashes(metadata: RuntimeGRUMetadata, manifest: RunManifes
         raise ValueError("embedded sysid_state_sha256 does not match the training manifest")
     asset = manifest.fingerprints.get("asset")
     dataset = manifest.fingerprints.get("dataset")
-    if not isinstance(asset, Mapping) or not isinstance(dataset, Mapping):
-        raise ValueError("training source manifest is missing asset/dataset fingerprints")
+    source = manifest.fingerprints.get("source")
+    if (
+        not isinstance(asset, Mapping)
+        or not isinstance(dataset, Mapping)
+        or not isinstance(source, Mapping)
+    ):
+        raise ValueError("training source manifest is missing asset/dataset/source fingerprints")
     asset_sha = _fingerprint_digest(
         asset, ("asset_sha256", "tree_sha256", "sha256"), label="asset"
     )
-    source_sha = _fingerprint_digest(
+    asset_package_sha = runtime_asset_package_sha256(asset)
+    dataset_sha = _fingerprint_digest(
         dataset, ("dataset_sha256", "tree_sha256", "sha256"), label="dataset"
     )
+    source_sha = _fingerprint_digest(source, ("source_sha256", "sha256"), label="source")
     if metadata.hashes.asset_sha256 != asset_sha:
         raise ValueError("embedded asset_sha256 does not match the training manifest")
+    if metadata.hashes.asset_package_sha256 != asset_package_sha:
+        raise ValueError(
+            "embedded asset_package_sha256 does not match the training asset package"
+        )
+    if metadata.hashes.dataset_sha256 != dataset_sha:
+        raise ValueError("embedded dataset_sha256 does not match the training dataset fingerprint")
     if metadata.hashes.source_sha256 != source_sha:
-        raise ValueError("embedded source_sha256 does not match the training dataset fingerprint")
+        raise ValueError("embedded source_sha256 does not match the Anchor source fingerprint")
 
 
 def _ordered_union(rows: Sequence[Sequence[str]]) -> tuple[str, ...]:

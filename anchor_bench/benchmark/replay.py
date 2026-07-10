@@ -15,7 +15,6 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from io import StringIO
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
 

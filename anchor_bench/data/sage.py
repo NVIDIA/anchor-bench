@@ -4,12 +4,17 @@ import ast
 import csv
 import shutil
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 import yaml
 
-from anchor_bench.data.motion import JointLayout, MotionData, MotionSignal
+from anchor_bench.data.motion import (
+    JointLayout,
+    MotionData,
+    MotionSignal,
+    canonicalize_recorded_joint_names,
+)
 
 
 SAGE_FILES = ("control.csv", "state_motor.csv", "joint_list.txt", "metadata.yaml")
@@ -151,6 +156,8 @@ def load_sage_motion(
     data_dir: str | Path,
     *,
     joint_names: Sequence[str] | None = None,
+    canonical_joint_names: Sequence[str] | None = None,
+    joint_aliases: Mapping[str, str] | None = None,
     target_dt: float | None = None,
     require_velocity: bool = False,
     require_effort: bool = False,
@@ -159,7 +166,21 @@ def load_sage_motion(
 
     root = Path(data_dir)
     metadata = validate_sage_dir(root)
-    layout = JointLayout(tuple(load_joint_list(root / "joint_list.txt")))
+    recorded_names = tuple(load_joint_list(root / "joint_list.txt"))
+    if canonical_joint_names is None:
+        if joint_aliases:
+            raise ValueError("joint_aliases requires canonical_joint_names")
+        layout = JointLayout(recorded_names)
+    else:
+        layout = JointLayout(
+            canonicalize_recorded_joint_names(
+                recorded_names,
+                canonical_joint_names=canonical_joint_names,
+                aliases=joint_aliases or {},
+                context=f"{root}/joint_list.txt",
+                permit_unmapped=True,
+            )
+        )
     control_time, control_vectors = load_vector_csv(root / "control.csv", ("positions",), row_type="CONTROL")
     state_path = root / "state_motor.csv"
     with state_path.open(newline="", encoding="utf-8") as stream:

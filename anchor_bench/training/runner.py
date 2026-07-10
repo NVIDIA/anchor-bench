@@ -28,7 +28,10 @@ from anchor_bench.core.manifest_schema import ProfileSnapshot
 from anchor_bench.core.paths import phase_run_dir
 from anchor_bench.core.plan import CommandPlan, command_identity_metadata
 from anchor_bench.core.profiles import load_profile, load_yaml_mapping, require_logical_name
-from anchor_bench.robots.fingerprints import fingerprint_contains_preview
+from anchor_bench.robots.fingerprints import (
+    fingerprint_contains_preview,
+    runtime_asset_package_sha256,
+)
 from anchor_bench.sysid.state import (
     AcceptedSysIdState,
     CompleteSysIdState,
@@ -115,6 +118,8 @@ class ResolvedTrainingRun:
     sysid_state: CompleteSysIdState
     sysid_state_sha256: str
     mappings: tuple[ResolvedTrainingMapping, ...]
+    canonical_joint_names: tuple[str, ...]
+    joint_aliases: dict[str, str]
     fingerprints: dict[str, Any]
     upstream: dict[str, Any]
     run_input: dict[str, Any]
@@ -415,6 +420,19 @@ def _validate_sysid_requirements(
         require_parameter_cells(state, (parameter,), joints)
 
 
+def _validate_builtin_feature_components(
+    features: Sequence[TrainingFeature],
+) -> None:
+    """Reject component axes that current built-in data providers cannot produce."""
+
+    for feature in features:
+        if feature.components != ("value",):
+            raise ValueError(
+                f"built-in training feature {feature.name!r} currently provides only "
+                f"the 'value' component; requested {feature.components!r}"
+            )
+
+
 def _fingerprints(
     dataset: Mapping[str, Any],
     inputs: TrainingResolverInputs,
@@ -507,6 +525,7 @@ def resolve_training_run(
         preliminary_document,
         "resolved training config",
     )
+    _validate_builtin_feature_components(preliminary.input_features)
     mappings = _canonical_mappings(
         preliminary.mappings,
         canonical_joint_names=inputs.canonical_joint_names,
@@ -592,6 +611,8 @@ def resolve_training_run(
         sysid_state=sysid_state,
         sysid_state_sha256=sysid_state_sha256,
         mappings=mappings,
+        canonical_joint_names=tuple(inputs.canonical_joint_names),
+        joint_aliases=dict(inputs.joint_aliases),
         fingerprints=fingerprints,
         upstream=upstream,
         run_input=run_input,
@@ -859,7 +880,11 @@ def train_resolved_run(
         feature.name == "dynamic_bias"
         for feature in resolved.resolved_config.input_features
     )
-    assembler = EpisodeAssembler(provider if needs_bias else None)
+    assembler = EpisodeAssembler(
+        provider if needs_bias else None,
+        canonical_joint_names=resolved.canonical_joint_names,
+        joint_aliases=resolved.joint_aliases,
+    )
     train_episodes, validation_episodes = _assemble_episodes(resolved, assembler)
     runtime_mappings = _runtime_mappings(resolved, snapshot.effort_limits)
     provenance = _dynamic_bias_provenance(
@@ -872,9 +897,16 @@ def train_resolved_run(
         ),
         sysid_state_sha256=sha256_file(staging_dir / "sysid_state.yaml"),
         asset_sha256=snapshot.sha256,
-        source_sha256=_fingerprint_digest(
+        asset_package_sha256=runtime_asset_package_sha256(
+            resolved.fingerprints["asset"]
+        ),
+        dataset_sha256=_fingerprint_digest(
             resolved.fingerprints["dataset"],
             label="dataset",
+        ),
+        source_sha256=_fingerprint_digest(
+            resolved.fingerprints["source"],
+            label="source",
         ),
     )
     return train_stateful_gru(

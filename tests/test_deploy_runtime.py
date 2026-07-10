@@ -343,7 +343,9 @@ def _metadata(*, dynamic_bias: bool = False) -> RuntimeGRUMetadata:
             resolved_config_sha256="b" * 64,
             sysid_state_sha256="c" * 64,
             asset_sha256="d" * 64,
-            source_sha256="e" * 64,
+            asset_package_sha256="e" * 64,
+            dataset_sha256="f" * 64,
+            source_sha256="0" * 64,
         ),
     )
 
@@ -716,7 +718,9 @@ def test_shared_siso_builds_one_default_application_per_mapping(
             resolved_config_sha256="b" * 64,
             sysid_state_sha256="c" * 64,
             asset_sha256="d" * 64,
-            source_sha256="e" * 64,
+            asset_package_sha256="e" * 64,
+            dataset_sha256="f" * 64,
+            source_sha256="0" * 64,
         ),
     )
     frozen, artifact = _frozen(tmp_path)
@@ -1123,7 +1127,9 @@ def test_production_gru_assembles_all_features_for_mimo_total_torque(
             resolved_config_sha256="b" * 64,
             sysid_state_sha256="c" * 64,
             asset_sha256="d" * 64,
-            source_sha256="e" * 64,
+            asset_package_sha256="e" * 64,
+            dataset_sha256="f" * 64,
+            source_sha256="0" * 64,
         ),
     )
 

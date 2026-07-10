@@ -117,6 +117,8 @@ class ResolvedSysIdRun:
     replicate: str | None
     parent_state: SysIdParentState
     parent_state_sha256: str
+    canonical_joint_names: tuple[str, ...]
+    joint_aliases: dict[str, str]
     fingerprints: dict[str, Any]
     upstream: dict[str, Any]
     run_input: dict[str, Any]
@@ -480,6 +482,8 @@ def resolve_sysid_run(
         replicate=invocation.replicate,
         parent_state=parent_state,
         parent_state_sha256=parent_state_sha256,
+        canonical_joint_names=tuple(inputs.canonical_joint_names),
+        joint_aliases=dict(inputs.joint_aliases),
         fingerprints=fingerprints,
         upstream=upstream,
         run_input=run_input,

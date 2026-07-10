@@ -36,6 +36,7 @@ from anchor_bench.training.metadata import RuntimeGRUMetadata
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+SHA_D = "d" * 64
 
 
 def _write_yaml(path: Path, document: dict[str, Any]) -> None:
@@ -234,7 +235,9 @@ def _runtime_metadata(
                 "resolved_config_sha256": resolved_config_sha256,
                 "sysid_state_sha256": sysid_state_sha256,
                 "asset_sha256": SHA_A,
-                "source_sha256": SHA_B,
+                "asset_package_sha256": SHA_B,
+                "dataset_sha256": SHA_C,
+                "source_sha256": SHA_D,
             },
         },
         "runtime metadata",
@@ -255,8 +258,16 @@ def _install_training_source(
     )
     resolved_config = {"target": "torque", "sample_dt_s": sample_dt_s}
     fingerprints = {
-        "asset": {"asset_sha256": SHA_A},
-        "dataset": {"tree_sha256": SHA_B},
+        "asset": {
+            "kind": "runtime_asset_package",
+            "runtime_usd": "demo.usd",
+            "asset_sha256": SHA_A,
+            "root_usd_sha256": SHA_A,
+            "package_tree_sha256": SHA_B,
+            "package_files": {"demo.usd": SHA_A},
+        },
+        "dataset": {"tree_sha256": SHA_C},
+        "source": {"source_sha256": SHA_D},
     }
     run_input = {
         "phase": "train",

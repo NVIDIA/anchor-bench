@@ -151,7 +151,9 @@ def _runtime_metadata(
             resolved_config_sha256=resolved_config_sha256,
             sysid_state_sha256=sysid_state_sha256,
             asset_sha256="a" * 64,
-            source_sha256="b" * 64,
+            asset_package_sha256="b" * 64,
+            dataset_sha256="c" * 64,
+            source_sha256="d" * 64,
         ),
     )
 
@@ -200,8 +202,16 @@ def _setup(
     metadata_bytes = serialize_runtime_metadata(metadata).encode("utf-8")
 
     fingerprints = {
-        "asset": {"asset_sha256": "a" * 64},
-        "dataset": {"tree_sha256": "b" * 64},
+        "asset": {
+            "kind": "runtime_asset_package",
+            "runtime_usd": "demo.usd",
+            "asset_sha256": "a" * 64,
+            "root_usd_sha256": "a" * 64,
+            "package_tree_sha256": "b" * 64,
+            "package_files": {"demo.usd": "a" * 64},
+        },
+        "dataset": {"tree_sha256": "c" * 64},
+        "source": {"source_sha256": "d" * 64},
     }
     upstream = {"sysid_state_sha256": training_sysid_hash}
     run_input = {
@@ -290,7 +300,14 @@ def _setup(
             "raw_sha256": "d" * 64,
             "canonical_sha256": "e" * 64,
         },
-        asset_fingerprint={"asset_sha256": "a" * 64},
+        asset_fingerprint={
+            "kind": "runtime_asset_package",
+            "runtime_usd": "demo.usd",
+            "asset_sha256": "a" * 64,
+            "root_usd_sha256": "a" * 64,
+            "package_tree_sha256": "b" * 64,
+            "package_files": {"demo.usd": "a" * 64},
+        },
     )
     return inputs, metadata
 
@@ -432,10 +449,15 @@ def test_artifact_and_embedded_metadata_hashes_are_authenticated(tmp_path: Path)
         resolve_deploy_state(inputs, metadata_loader=_loader(metadata))
 
     inputs, metadata = _setup(tmp_path / "metadata")
-    wrong_loader = lambda _path: LoadedNeuralMetadata(
-        metadata=metadata,
-        metadata_sha256="0" * 64,
-    )
+
+    def wrong_loader(_path):
+        """Return valid metadata under an intentionally wrong embedded hash."""
+
+        return LoadedNeuralMetadata(
+            metadata=metadata,
+            metadata_sha256="0" * 64,
+        )
+
     with pytest.raises(ValueError, match="embedded metadata hash does not match"):
         resolve_deploy_state(inputs, metadata_loader=wrong_loader)
 
@@ -477,7 +499,9 @@ def test_metadata_must_match_accepted_catalog_and_source_manifest(tmp_path: Path
     ("field", "message"),
     [
         ("asset_sha256", "metadata asset hash does not match"),
-        ("source_sha256", "metadata source hash does not match"),
+        ("asset_package_sha256", "metadata asset package hash does not match"),
+        ("dataset_sha256", "metadata dataset hash does not match"),
+        ("source_sha256", "metadata Anchor source hash does not match"),
     ],
 )
 def test_metadata_asset_and_source_hashes_bind_to_training_manifest(

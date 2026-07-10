@@ -23,7 +23,74 @@ def write_sage(root: Path, control_rows: int = 2, state_rows: int = 2, time_unit
     (root / "state_motor.csv").write_text("\n".join(state) + "\n", encoding="utf-8")
 
 
+def write_named_sage(root: Path, names: tuple[str, ...]) -> None:
+    """Write one two-row SAGE motion with a caller-selected three-column axis."""
+
+    if len(names) != 3:
+        raise ValueError("test joint axis must contain three names")
+    (root / "joint_list.txt").write_text("\n".join(names) + "\n", encoding="utf-8")
+    (root / "metadata.yaml").write_text(
+        "time_unit: seconds\nposition_unit: rad\nvelocity_unit: rad/s\ntorque_unit: N*m\n",
+        encoding="utf-8",
+    )
+    (root / "control.csv").write_text(
+        'type,timestamp,positions\nCONTROL,0,"[1.0, 2.0, 9.0]"\n'
+        'CONTROL,0.1,"[1.1, 2.1, 9.1]"\n',
+        encoding="utf-8",
+    )
+    (root / "state_motor.csv").write_text(
+        "type,timestamp,positions,velocities,torques\n"
+        'STATE_MOTOR,0,"[3.0, 4.0, 8.0]","[0.1, 0.2, 0.3]","[5.0, 6.0, 7.0]"\n'
+        'STATE_MOTOR,0.1,"[3.1, 4.1, 8.1]","[0.4, 0.5, 0.6]","[5.1, 6.1, 7.1]"\n',
+        encoding="utf-8",
+    )
+
+
 class SageLoaderTests(unittest.TestCase):
+    def test_alias_axis_canonicalizes_before_selection_and_preserves_context(self):
+        """Resolve known aliases without dropping an unmapped dynamic-bias column."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_named_sage(root, ("AliasA", "b", "context"))
+            complete = load_sage_motion(
+                root,
+                canonical_joint_names=("a", "b"),
+                joint_aliases={"AliasA": "a"},
+            )
+            selected = load_sage_motion(
+                root,
+                joint_names=("b", "a"),
+                canonical_joint_names=("a", "b"),
+                joint_aliases={"AliasA": "a"},
+            )
+
+        self.assertEqual(["a", "b", "context"], complete.joint_names)
+        self.assertEqual(["b", "a"], selected.joint_names)
+        np.testing.assert_allclose(selected.position.values[0], [4.0, 3.0])
+
+    def test_alias_collision_and_missing_selected_joint_fail(self):
+        """Reject duplicate physical columns while retaining normal missing checks."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_named_sage(root, ("AliasA", "a", "context"))
+            with self.assertRaisesRegex(ValueError, "maps columns 'AliasA' and 'a'.*joint 'a'"):
+                load_sage_motion(
+                    root,
+                    canonical_joint_names=("a", "b"),
+                    joint_aliases={"AliasA": "a"},
+                )
+
+            write_named_sage(root, ("AliasA", "b", "context"))
+            with self.assertRaisesRegex(ValueError, "joints not found.*missing"):
+                load_sage_motion(
+                    root,
+                    joint_names=("a", "missing"),
+                    canonical_joint_names=("a", "b"),
+                    joint_aliases={"AliasA": "a"},
+                )
+
     def test_loader_preserves_requested_joint_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

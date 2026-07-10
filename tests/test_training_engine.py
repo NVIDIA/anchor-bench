@@ -34,7 +34,9 @@ _HASHES = RuntimeHashes(
     resolved_config_sha256="1" * 64,
     sysid_state_sha256="2" * 64,
     asset_sha256="3" * 64,
-    source_sha256="4" * 64,
+    asset_package_sha256="4" * 64,
+    dataset_sha256="5" * 64,
+    source_sha256="6" * 64,
 )
 
 

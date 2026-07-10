@@ -33,6 +33,8 @@ from anchor_bench.training.metadata import RuntimeGRUMetadata
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+SHA_C = "c" * 64
+SHA_D = "d" * 64
 
 
 def _write_motion(
@@ -374,7 +376,9 @@ def _residual_metadata() -> RuntimeGRUMetadata:
                 "resolved_config_sha256": SHA_A,
                 "sysid_state_sha256": SHA_A,
                 "asset_sha256": SHA_A,
-                "source_sha256": SHA_B,
+                "asset_package_sha256": SHA_B,
+                "dataset_sha256": SHA_C,
+                "source_sha256": SHA_D,
             },
         },
         "test residual metadata",
