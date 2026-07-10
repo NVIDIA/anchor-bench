@@ -46,7 +46,7 @@ class TrainingJob:
     """One shared-weight GRU training job over source/mapping sequences."""
 
     model: str
-    joint_type: str
+    artifact_name: str
     mappings: tuple[TrainingMapping, ...]
     train_sources: Sequence[TrainingSource]
     val_sources: Sequence[TrainingSource]
@@ -499,10 +499,10 @@ def _fit_once(
         return best_val, None
     job.output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "hybrid_residual" if job.model == "hybrid_residual" else "gru"
-    joint = _safe_name(job.joint_type)
-    checkpoint_path = job.output_dir / f"{prefix}_{joint}_best.pt"
-    stats_path = job.output_dir / f"{prefix}_{joint}_stats.json"
-    network_path = job.output_dir / f"{prefix}_{joint}_network.pt"
+    artifact = _safe_name(job.artifact_name)
+    checkpoint_path = job.output_dir / f"{prefix}_{artifact}_best.pt"
+    stats_path = job.output_dir / f"{prefix}_{artifact}_stats.json"
+    network_path = job.output_dir / f"{prefix}_{artifact}_network.pt"
     metrics = {
         "best_val_loss": best_val,
         "history": history,
@@ -514,7 +514,7 @@ def _fit_once(
     runtime_metadata = _runtime_metadata(job, stats)
     checkpoint = {
         "model": job.model,
-        "joint_type": job.joint_type,
+        "artifact_name": job.artifact_name,
         "model_state_dict": model.state_dict(),
         "input_size": input_size,
         "output_size": output_size,
@@ -592,7 +592,7 @@ def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
         metadata={
             **job.metadata,
             "model": job.model,
-            "joint_type": job.joint_type,
+            "artifact_name": job.artifact_name,
             "joint_mappings": [
                 {"input_joints": list(mapping.input_joints), "output_joints": list(mapping.output_joints)}
                 for mapping in job.mappings

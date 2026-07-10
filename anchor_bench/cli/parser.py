@@ -28,7 +28,6 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--robot", required=True)
     train.add_argument("--model", choices=("gru", "hybrid_residual"))
     train.add_argument("--data")
-    train.add_argument("--joint-type")
     train.add_argument("--mappings")
     train.add_argument("--input-joints")
     train.add_argument("--output-joints")

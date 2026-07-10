@@ -235,7 +235,7 @@ class TrainingTensorTests(unittest.TestCase):
 
         return TrainingJob(
             model=model,
-            joint_type="mapped",
+            artifact_name="mapped",
             mappings=tuple(mappings or (mapping,)),
             train_sources=(TrainingSource(root),),
             val_sources=(),
@@ -439,11 +439,21 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual("gru", resolved.model)
         self.assertTrue(resolved.data.endswith("so101_arm_50motion/train"))
         self.assertTrue(resolved.output.endswith("outputs/training/so101"))
-        self.assertEqual("full", resolved.joint_type)
+        self.assertEqual(6, len(resolved.mappings))
+        self.assertTrue(all(len(mapping.input_joints) == 1 for mapping in resolved.mappings))
         self.assertTrue(resolved.skip_optuna)
         self.assertEqual(42, resolved.seed)
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
         self.assertEqual("torque", resolved.target_column)
+
+    def test_training_config_requires_joint_selection(self):
+        from anchor_bench.core.schemas import TrainActuatorRunConfig
+        from anchor_bench.training.runner import resolve_train_actuator_run_config
+
+        with self.assertRaisesRegex(ValueError, "requires mappings or input_joints"):
+            resolve_train_actuator_run_config(
+                TrainActuatorRunConfig(robot="h1", data="inputs/datasets/demo")
+            )
 
     def test_training_config_resolves_cli_column_overrides(self):
         from anchor_bench.core.schemas import TrainActuatorRunConfig
@@ -488,7 +498,6 @@ class TrainingRunnerTests(unittest.TestCase):
             )
         )
 
-        self.assertIsNone(resolved.joint_type)
         self.assertEqual(
             ("right_shoulder_pitch", "right_elbow"),
             resolved.mappings[0].input_joints,
@@ -568,7 +577,8 @@ class TrainingRunnerTests(unittest.TestCase):
                     model="gru",
                     data=str(data_dir),
                     output=str(output_dir),
-                    joint_type="Rotation",
+                    input_joints=["Rotation"],
+                    output_joints=["Rotation"],
                     skip_optuna=True,
                     final_epochs=1,
                     n_streams=1,
@@ -577,17 +587,21 @@ class TrainingRunnerTests(unittest.TestCase):
                 )
             )
             plan = run_resolved_train_actuator(resolved)
+            prefix = f"gru_{resolved.artifact_name}"
+            checkpoint_path = output_dir / f"{prefix}_best.pt"
+            network_path = output_dir / f"{prefix}_network.pt"
+            stats_path = output_dir / f"{prefix}_stats.json"
 
             self.assertFalse(plan.dry_run)
-            self.assertTrue((output_dir / "gru_Rotation_best.pt").exists())
-            self.assertTrue((output_dir / "gru_Rotation_network.pt").exists())
-            stats = json.loads((output_dir / "gru_Rotation_stats.json").read_text(encoding="utf-8"))
+            self.assertTrue(checkpoint_path.exists())
+            self.assertTrue(network_path.exists())
+            stats = json.loads(stats_path.read_text(encoding="utf-8"))
             self.assertEqual("gru", stats["model"])
-            self.assertEqual("Rotation", stats["joint_type"])
+            self.assertEqual(resolved.artifact_name, stats["artifact_name"])
             self.assertIn("network", plan.metadata["artifacts"])
             import torch
             extra_files = {"metadata.json": ""}
-            torch.jit.load(str(output_dir / "gru_Rotation_network.pt"), _extra_files=extra_files)
+            torch.jit.load(str(network_path), _extra_files=extra_files)
             metadata = json.loads(extra_files["metadata.json"])
             self.assertEqual(3, metadata["schema_version"])
             self.assertEqual(0.002, metadata["sample_dt_s"])
@@ -605,7 +619,7 @@ class TrainingRunnerTests(unittest.TestCase):
             torch.save(
                 {
                     "model": "gru",
-                    "joint_type": "demo",
+                    "artifact_name": "demo",
                     "model_state_dict": model.state_dict(),
                     "input_size": 3,
                     "output_size": 1,

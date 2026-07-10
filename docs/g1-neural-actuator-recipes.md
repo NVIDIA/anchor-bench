@@ -32,7 +32,8 @@ anchor-bench train-actuator \
   --robot g1 \
   --model hybrid_residual \
   --data <g1-sage-motion-or-dataset-root> \
-  --joint-type right_shoulder_pitch \
+  --input-joints right_shoulder_pitch \
+  --output-joints right_shoulder_pitch \
   --output outputs/training/g1/right_shoulder_pitch \
   --input-columns position,position_error,velocity \
   --target-column torque \

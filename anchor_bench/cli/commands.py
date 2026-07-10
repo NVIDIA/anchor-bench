@@ -82,7 +82,6 @@ def _handle_train(args: argparse.Namespace) -> int:
         model=args.model,
         data=args.data,
         output=args.output,
-        joint_type=args.joint_type,
         mappings=_json_mappings(args.mappings),
         input_joints=_csv_columns(args.input_joints),
         output_joints=_csv_columns(args.output_joints),

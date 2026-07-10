@@ -39,7 +39,6 @@ class ResolvedTrainActuatorRunConfig:
     model: str
     data: str
     output: str
-    joint_type: str | None
     artifact_name: str
     mappings: tuple[TrainingMapping, ...]
     dry_run: bool
@@ -132,65 +131,50 @@ def _mapping_artifact_name(mappings: Sequence[TrainingMapping]) -> str:
 
 def _resolve_training_mappings(
     bundle, config: TrainActuatorRunConfig
-) -> tuple[str | None, str, tuple[TrainingMapping, ...], str]:
-    """Resolve CLI topology as an override of the robot training YAML."""
+) -> tuple[str, tuple[TrainingMapping, ...], str]:
+    """Resolve mappings from a complete CLI override or robot training YAML."""
 
     defaults = bundle.run_config.training
-    explicit_modes = sum(
+    cli_modes = sum(
         (
             config.mappings is not None,
             config.input_joints is not None or config.output_joints is not None,
-            config.joint_type is not None,
         )
     )
-    if explicit_modes > 1:
-        raise ValueError("choose only one of mappings, input/output joints, or joint_type")
+    if cli_modes > 1:
+        raise ValueError("choose only one of mappings or input/output joints")
 
-    source = "cli" if explicit_modes else "run.yaml"
-    mappings_value = config.mappings if config.mappings is not None else defaults.mappings
-    input_joints = config.input_joints if config.input_joints is not None else defaults.input_joints
-    output_joints = config.output_joints if config.output_joints is not None else defaults.output_joints
-    joint_type = config.joint_type if config.joint_type is not None else defaults.joint_type
-    if explicit_modes:
-        if config.mappings is not None:
-            input_joints = output_joints = joint_type = None
-        elif config.input_joints is not None or config.output_joints is not None:
-            mappings_value = joint_type = None
-            input_joints = config.input_joints
-            output_joints = config.output_joints
-        else:
-            mappings_value = input_joints = output_joints = None
+    if cli_modes:
+        source = "cli"
+        mappings_value = config.mappings
+        input_joints = config.input_joints
+        output_joints = config.output_joints
     else:
+        source = "run.yaml"
+        mappings_value = defaults.mappings
+        input_joints = defaults.input_joints
+        output_joints = defaults.output_joints
         configured_modes = sum(
             (
                 mappings_value is not None,
                 input_joints is not None or output_joints is not None,
-                joint_type is not None,
             )
         )
         if configured_modes > 1:
-            raise ValueError("run.yaml training must choose mappings, input/output joints, or joint_type")
+            raise ValueError("run.yaml training must choose mappings or input/output joints")
         if configured_modes == 0:
-            source = "fallback"
+            raise ValueError("training requires mappings or input_joints")
 
     if mappings_value is not None:
         mappings = _validated_mappings([_mapping_from_value(bundle, value) for value in mappings_value])
-        return None, _mapping_artifact_name(mappings), mappings, source
-    if input_joints is not None or output_joints is not None:
-        if input_joints is None:
-            raise ValueError("input_joints is required when output_joints is configured")
-        mapping = _mapping_from_value(
-            bundle,
-            {"input_joints": input_joints, "output_joints": output_joints},
-        )
-        return None, _mapping_artifact_name((mapping,)), (mapping,), source
-
-    legacy = str(joint_type or "full")
-    if legacy == "full":
-        mappings = tuple(TrainingMapping((joint,), (joint,)) for joint in bundle.spec.joint_names)
-        return legacy, legacy, mappings, source
-    canonical = _canonical_joints(bundle, (legacy,), "joint_type")[0]
-    return legacy, canonical, (TrainingMapping((canonical,), (canonical,)),), source
+        return _mapping_artifact_name(mappings), mappings, source
+    if input_joints is None:
+        raise ValueError("input_joints is required when output_joints is configured")
+    mapping = _mapping_from_value(
+        bundle,
+        {"input_joints": input_joints, "output_joints": output_joints},
+    )
+    return _mapping_artifact_name((mapping,)), (mapping,), source
 
 
 def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> ResolvedTrainActuatorRunConfig:
@@ -219,7 +203,7 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         None,
         "--output",
     )
-    joint_type, artifact_name, mappings, mapping_source = _resolve_training_mappings(bundle, config)
+    artifact_name, mappings, mapping_source = _resolve_training_mappings(bundle, config)
     sources["joint_selection"] = mapping_source
     input_columns = parse_gru_columns(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
 
@@ -228,7 +212,6 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         model=model,
         data=resolve_repo_path_text(data),
         output=resolve_repo_path_text(output),
-        joint_type=joint_type,
         artifact_name=artifact_name,
         mappings=mappings,
         dry_run=config.dry_run,
@@ -276,9 +259,7 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         "--target-column",
         resolved.target_column,
     ]
-    if resolved.joint_type is not None:
-        command.extend(("--joint-type", resolved.joint_type))
-    elif len(resolved.mappings) == 1:
+    if len(resolved.mappings) == 1:
         mapping = resolved.mappings[0]
         command.extend(("--input-joints", ",".join(mapping.input_joints)))
         command.extend(("--output-joints", ",".join(mapping.output_joints)))
@@ -322,7 +303,6 @@ def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConf
         notes=notes,
         metadata={
             "model": resolved.model,
-            "joint_type": resolved.joint_type,
             "joint_mappings": [
                 {"input_joints": list(item.input_joints), "output_joints": list(item.output_joints)}
                 for item in resolved.mappings
@@ -468,7 +448,7 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
     artifacts = train_stateful_gru(
         TrainingJob(
             model=resolved.model,
-            joint_type=resolved.artifact_name,
+            artifact_name=resolved.artifact_name,
             mappings=resolved.mappings,
             train_sources=train_sources,
             val_sources=val_sources,

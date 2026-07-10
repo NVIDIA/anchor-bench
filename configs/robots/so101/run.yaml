@@ -32,7 +32,19 @@ training:
   model: gru
   real_data_dir: inputs/datasets/so101/so101_arm_50motion/train
   output_dir: outputs/training/so101
-  joint_type: full
+  mappings:
+    - input_joints: [Rotation]
+      output_joints: [Rotation]
+    - input_joints: [Pitch]
+      output_joints: [Pitch]
+    - input_joints: [Elbow]
+      output_joints: [Elbow]
+    - input_joints: [Wrist_Pitch]
+      output_joints: [Wrist_Pitch]
+    - input_joints: [Wrist_Roll]
+      output_joints: [Wrist_Roll]
+    - input_joints: [Jaw]
+      output_joints: [Jaw]
   input_columns: [position, position_error, velocity]
   target_column: torque
   skip_optuna: true

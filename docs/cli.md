@@ -68,7 +68,8 @@ anchor-bench train-actuator \
   --robot so101 \
   --model gru \
   --data inputs/datasets/so101/so101_arm_50motion/train \
-  --joint-type Rotation \
+  --input-joints Rotation \
+  --output-joints Rotation \
   --output outputs/training/so101/rotation \
   --input-columns position,position_error,velocity \
   --target-column torque \
@@ -95,10 +96,10 @@ training:
 Every mapping in one run has the same input and output width. A single 1-to-1
 mapping is SISO, several 1-to-1 mappings share one SISO model, an N-to-1 mapping
 is MISO, and an N-to-M mapping is MIMO. `output_joints` defaults to
-`input_joints`. The existing `--joint-type full` spelling remains shorthand
-for one shared SISO mapping per canonical robot joint. CLI
-`--input-joints/--output-joints` replaces the YAML mapping selection for one
-run.
+`input_joints`. `--input-joints`/`--output-joints` is shorthand for one
+mapping and replaces
+the YAML mapping selection for one run. Shared SISO must list each physical
+mapping explicitly.
 
 Use `--model gru` for full-torque GRU prediction from
 `[position, position_error, velocity]`. Use `--model hybrid_residual`

@@ -184,7 +184,6 @@ class TrainActuatorRunConfig:
     model: str | None = None
     data: str | None = None
     output: str | None = None
-    joint_type: str | None = None
     mappings: list[TrainingJointMapping] | None = None
     input_joints: list[str] | None = None
     output_joints: list[str] | None = None

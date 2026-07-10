@@ -82,7 +82,6 @@ class TrainingDefaults(ConfigModel):
     model: Literal["gru", "hybrid_residual"] | None = None
     real_data_dir: str | None = None
     output_dir: str | None = None
-    joint_type: str | None = None
     mappings: list[TrainingJointMapping] | None = Field(default=None, min_length=1)
     input_joints: list[str] | None = Field(default=None, min_length=1)
     output_joints: list[str] | None = Field(default=None, min_length=1)
