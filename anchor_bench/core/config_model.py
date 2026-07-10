@@ -9,12 +9,11 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-RUNTIME_GRU_INPUT_COLUMNS = frozenset({"position", "position_error", "velocity", "solver_pd"})
-GRU_INPUT_COLUMNS = RUNTIME_GRU_INPUT_COLUMNS | {"dynamic_bias", "previous_torque"}
+GRU_INPUT_COLUMNS = {"position", "position_error", "velocity", "solver_pd", "dynamic_bias", "previous_torque"}
 
 
-def parse_gru_columns(value: Any, *, allowed: frozenset[str] = GRU_INPUT_COLUMNS) -> list[str]:
-    """Parse an ordered GRU feature list against the requested feature set."""
+def parse_gru_columns(value: Any) -> list[str]:
+    """Parse an ordered GRU feature list."""
 
     if isinstance(value, str):
         columns = [item.strip() for item in value.split(",") if item.strip()]
@@ -27,7 +26,7 @@ def parse_gru_columns(value: Any, *, allowed: frozenset[str] = GRU_INPUT_COLUMNS
     duplicates = sorted({column for column in columns if columns.count(column) > 1})
     if duplicates:
         raise ValueError(f"must not contain duplicate columns: {', '.join(duplicates)}")
-    unsupported = sorted(set(columns) - allowed)
+    unsupported = sorted(set(columns) - GRU_INPUT_COLUMNS)
     if unsupported:
         raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
     return columns

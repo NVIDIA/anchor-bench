@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
-from anchor_bench.core.config_model import RUNTIME_GRU_INPUT_COLUMNS, ConfigModel, parse_gru_columns
+from anchor_bench.core.config_model import ConfigModel, parse_gru_columns
 from anchor_bench.core.experiment_schema import (
     ExperimentActuatorModel,
     ExperimentAnalysis,
@@ -49,9 +49,7 @@ class ControllerSpec(ConfigModel):
     def _validate_parameters(cls, value: Any) -> dict[str, Any]:
         parameters = dict(value or {})
         if "input_columns" in parameters:
-            parameters["input_columns"] = parse_gru_columns(
-                parameters["input_columns"], allowed=RUNTIME_GRU_INPUT_COLUMNS
-            )
+            parameters["input_columns"] = parse_gru_columns(parameters["input_columns"])
         return parameters
 
     @model_validator(mode="after")
@@ -80,7 +78,7 @@ class ResidualSpec(ConfigModel):
     @field_validator("input_columns", mode="before")
     @classmethod
     def _validate_input_columns(cls, value: Any) -> list[str]:
-        return parse_gru_columns(value, allowed=RUNTIME_GRU_INPUT_COLUMNS)
+        return parse_gru_columns(value)
 
 
 class DelaySpec(ConfigModel):

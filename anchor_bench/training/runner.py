@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 from anchor_bench.actuators.loader import load_actuator_file
+from anchor_bench.core.config_model import parse_gru_columns
 from anchor_bench.core.plan import CommandPlan
 from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text, resolve_value_with_source
 from anchor_bench.core.schemas import TrainActuatorRunConfig, TrainingJointMapping
@@ -16,7 +17,6 @@ from anchor_bench.training.data import (
     DEFAULT_INPUT_COLUMNS,
     DEFAULT_TARGET_COLUMN,
     MODEL_CHOICES,
-    SUPPORTED_INPUT_COLUMNS,
     TrainingMapping,
     discover_training_sources,
     read_training_header,
@@ -62,19 +62,6 @@ def _nonnegative_float(name: str, value: Any) -> float:
     if resolved < 0.0:
         raise ValueError(f"{name} must be >= 0")
     return resolved
-
-
-def _column_list(value: Any) -> list[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        columns = [item.strip() for item in value.split(",")]
-    else:
-        columns = [str(item).strip() for item in value]
-    columns = [column for column in columns if column]
-    if not columns:
-        raise ValueError("input_columns must contain at least one column")
-    return columns
 
 
 def _canonical_joints(bundle, values: Sequence[str], label: str) -> tuple[str, ...]:
@@ -229,15 +216,7 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
     )
     joint_type, artifact_name, mappings, mapping_source = _resolve_training_mappings(bundle, config)
     sources["joint_selection"] = mapping_source
-    input_columns = _column_list(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
-    if input_columns is None:
-        raise ValueError("input_columns must contain at least one column")
-    duplicates = sorted({column for column in input_columns if input_columns.count(column) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
-    unsupported_columns = sorted(set(input_columns) - SUPPORTED_INPUT_COLUMNS)
-    if unsupported_columns:
-        raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported_columns)}")
+    input_columns = parse_gru_columns(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
 
     return ResolvedTrainActuatorRunConfig(
         robot=config.robot,

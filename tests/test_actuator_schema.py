@@ -261,14 +261,14 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             "network_file": "outputs/training/demo/gru_JointA_network.pt",
             "parameters": {
                 "stats_file": "outputs/training/demo/gru_JointA_stats.json",
-                "input_columns": ["position", "position_error", "velocity"],
+                "input_columns": ["position", "dynamic_bias", "previous_torque"],
             },
         }
         parsed = ActuatorSpec.from_dict(actuator, "actuator")
 
         self.assertEqual("gru", parsed.controller.type)
         self.assertEqual("outputs/training/demo/gru_JointA_network.pt", parsed.controller.network_file)
-        self.assertEqual(["position", "position_error", "velocity"], parsed.controller.parameters["input_columns"])
+        self.assertEqual(["position", "dynamic_bias", "previous_torque"], parsed.controller.parameters["input_columns"])
 
     def test_gru_residual_metadata_is_validated(self):
         from anchor_bench.core.schemas import ActuatorSpec
@@ -278,14 +278,14 @@ class NativeActuatorSchemaTests(unittest.TestCase):
             "type": "gru",
             "network_file": "outputs/training/demo/hybrid_residual_JointA_network.pt",
             "stats_file": "outputs/training/demo/hybrid_residual_JointA_stats.json",
-            "input_columns": ["position", "position_error", "velocity", "solver_pd"],
+            "input_columns": ["solver_pd", "dynamic_bias", "previous_torque"],
         }
         parsed = ActuatorSpec.from_dict(actuator, "actuator")
 
         self.assertIsNotNone(parsed.residual)
         self.assertEqual("gru", parsed.residual.type)
         self.assertEqual("torque_residual", parsed.residual.output_column)
-        self.assertEqual(["position", "position_error", "velocity", "solver_pd"], parsed.residual.input_columns)
+        self.assertEqual(["solver_pd", "dynamic_bias", "previous_torque"], parsed.residual.input_columns)
 
         actuator["residual"] = {"type": "gru", "network_file": "net.pt", "typo": True}
         with self.assertRaisesRegex(ValueError, "actuator.residual has unknown keys: typo"):

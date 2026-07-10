@@ -214,7 +214,7 @@ class TrainingDataTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "subset"):
             TrainingMapping(("JointA",), ("JointB",))
-        with self.assertRaisesRegex(ValueError, "duplicate GRU input"):
+        with self.assertRaisesRegex(ValueError, "must not contain duplicate columns"):
             resolve_training_columns(
                 ["position", "torque"],
                 model="gru",

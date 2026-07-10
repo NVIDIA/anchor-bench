@@ -114,4 +114,5 @@ Training writes a raw checkpoint, stats JSON, and TorchScript network under
 `metadata.json` with mappings, feature order and domains, dimensions,
 normalization, the median recorded state timestep, target semantics, and
 derivation/baseline metadata.
-The current upstream Newton 1.4 controller does not yet consume this schema.
+Schema-v3 artifacts target the future Newton `GRUActuator`; the legacy Anchor
+Isaac Lab GRU shim is not a supported consumer.

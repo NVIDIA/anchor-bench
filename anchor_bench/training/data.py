@@ -9,20 +9,13 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
+from anchor_bench.core.config_model import parse_gru_columns
 from anchor_bench.data.motion import MotionData
 from anchor_bench.data.sage import discover_sage_motions
 
 
 DEFAULT_INPUT_COLUMNS = ("position", "position_error", "velocity")
 DEFAULT_TARGET_COLUMN = "torque"
-SUPPORTED_INPUT_COLUMNS = {
-    "dynamic_bias",
-    "position",
-    "position_error",
-    "previous_torque",
-    "solver_pd",
-    "velocity",
-}
 MODEL_CHOICES = {"gru", "hybrid_residual"}
 EPSILON_STD = 1.0e-8
 
@@ -209,13 +202,7 @@ def resolve_training_columns(
     if model not in MODEL_CHOICES:
         raise ValueError(f"model {model!r} must be one of {sorted(MODEL_CHOICES)}")
     header_set = set(header)
-    inputs = list(input_columns or DEFAULT_INPUT_COLUMNS)
-    duplicates = sorted({column for column in inputs if inputs.count(column) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate GRU input columns: {', '.join(duplicates)}")
-    unsupported = sorted(set(inputs) - SUPPORTED_INPUT_COLUMNS)
-    if unsupported:
-        raise ValueError(f"unsupported GRU input columns: {', '.join(unsupported)}")
+    inputs = parse_gru_columns(input_columns or DEFAULT_INPUT_COLUMNS)
     source_target = [target_column or DEFAULT_TARGET_COLUMN]
     derived = {"dynamic_bias", "previous_torque", *(derived_columns or ())}
     missing = [
