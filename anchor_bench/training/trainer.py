@@ -124,30 +124,6 @@ def _feature_widths(job: TrainingJob) -> list[int]:
     return [output_width if column == "previous_torque" else input_width for column in job.input_columns]
 
 
-def _recorded_sample_dt(job: TrainingJob) -> float:
-    """Infer the recurrent timestep from median recorded state cadence."""
-
-    medians: list[float] = []
-    seen: set[Path] = set()
-    for source in (*job.train_sources, *job.val_sources):
-        if source.path in seen:
-            continue
-        seen.add(source.path)
-        timestamps = np.asarray(load_training_motion(source.path).position.time, dtype=np.float64)
-        if len(timestamps) < 2:
-            raise ValueError(f"{source.path} needs at least two state rows to infer sample_dt_s")
-        deltas = np.diff(timestamps)
-        median = float(np.median(deltas))
-        if not math.isfinite(median) or median <= 0.0 or not np.all(np.isfinite(deltas)):
-            raise ValueError(f"{source.path} has an invalid recorded state cadence")
-        if not np.allclose(deltas, median, rtol=0.1, atol=1.0e-9):
-            raise ValueError(f"{source.path} has irregular recorded state cadence")
-        medians.append(median)
-    sample_dt_s = float(np.median(medians))
-    if any(not math.isclose(value, sample_dt_s, rel_tol=0.05) for value in medians):
-        raise ValueError("training episodes have inconsistent median state cadences")
-    return sample_dt_s
-
 
 def _merge_bias_provenance(existing: dict[str, Any] | None, provenance: Any) -> dict[str, Any]:
     """Merge episode-varying state coverage while enforcing solver identity."""
@@ -605,7 +581,6 @@ def _select_hparams(
 def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
     """Train one shared stateful GRU and export all three artifacts."""
 
-    job.metadata["sample_dt_s"] = _recorded_sample_dt(job)
     train_raw, val_raw = _load_sequences(job)
     input_widths = _feature_widths(job)
     target_width = len(job.mappings[0].output_joints)

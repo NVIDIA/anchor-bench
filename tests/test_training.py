@@ -348,7 +348,6 @@ class TrainingTensorTests(unittest.TestCase):
         from anchor_bench.training.trainer import (
             _load_sequences,
             _normalization_stats,
-            _recorded_sample_dt,
             _runtime_metadata,
         )
 
@@ -357,7 +356,6 @@ class TrainingTensorTests(unittest.TestCase):
             _write_multi_joint_motion(root)
             mapping = TrainingMapping(("JointA", "JointB"), ("JointB",))
             job = self._job(root, mapping, ["position", "previous_torque"])
-            self.assertEqual(1.0, _recorded_sample_dt(job))
             sequences, _ = _load_sequences(job)
             stats = _normalization_stats(
                 sequences,
@@ -369,6 +367,7 @@ class TrainingTensorTests(unittest.TestCase):
             metadata = _runtime_metadata(job, stats)
 
         self.assertEqual(3, metadata["schema_version"])
+        self.assertEqual(1.0, metadata["sample_dt_s"])
         self.assertEqual("miso", metadata["training_topology"])
         self.assertEqual(3, metadata["input_size"])
         self.assertEqual(1, metadata["output_size"])
@@ -415,23 +414,6 @@ class TrainingTensorTests(unittest.TestCase):
         self.assertEqual([("JointA", "JointB")], provider.calls)
         np.testing.assert_allclose(sequences[0][0][:, 0], [0.0, 1.0, 2.0])
         np.testing.assert_allclose(sequences[1][0][:, 0], [10.0, 11.0, 12.0])
-
-    def test_sample_dt_rejects_a_large_gap_inside_an_episode(self):
-        from anchor_bench.training.data import TrainingMapping
-        from anchor_bench.training.trainer import _recorded_sample_dt
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _write_multi_joint_motion(root)
-            state_path = root / "state_motor.csv"
-            state_path.write_text(
-                state_path.read_text(encoding="utf-8").replace("STATE_MOTOR,2.0", "STATE_MOTOR,10.0"),
-                encoding="utf-8",
-            )
-            job = self._job(root, TrainingMapping(("JointA",), ("JointA",)), ["position"])
-
-            with self.assertRaisesRegex(ValueError, "irregular recorded state cadence"):
-                _recorded_sample_dt(job)
 
     def test_dynamic_bias_provenance_pools_episode_state_coverage(self):
         from anchor_bench.training.trainer import _merge_bias_provenance
@@ -606,7 +588,9 @@ class TrainingRunnerTests(unittest.TestCase):
             import torch
             extra_files = {"metadata.json": ""}
             torch.jit.load(str(output_dir / "gru_Rotation_network.pt"), _extra_files=extra_files)
-            self.assertEqual(3, json.loads(extra_files["metadata.json"])["schema_version"])
+            metadata = json.loads(extra_files["metadata.json"])
+            self.assertEqual(3, metadata["schema_version"])
+            self.assertEqual(0.002, metadata["sample_dt_s"])
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export test requires torch")
     def test_gru_checkpoint_export_writes_scripted_network_with_gru_attribute(self):

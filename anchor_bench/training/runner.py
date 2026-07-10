@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any, Sequence
 from anchor_bench.actuators.loader import load_actuator_file
 from anchor_bench.core.config_model import parse_gru_columns
 from anchor_bench.core.plan import CommandPlan
-from anchor_bench.core.run_config import resolve_repo_path_text, resolve_required_text, resolve_value_with_source
+from anchor_bench.core.run_config import (
+    resolve_repo_path_text,
+    resolve_required_text,
+    resolve_simulation_timing,
+    resolve_value_with_source,
+)
 from anchor_bench.core.schemas import TrainActuatorRunConfig, TrainingJointMapping
 from anchor_bench.robots.registry import get_robot
 from anchor_bench.training.data import (
@@ -448,6 +453,10 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
         "config_sources": resolved.config_sources,
         "skip_optuna": resolved.skip_optuna,
         "noise_std": resolved.noise_std,
+        "sample_dt_s": resolve_simulation_timing(
+            bundle.run_config.simulation,
+            f"{bundle.spec.display_name} actuator training simulation",
+        ).control_dt,
     }
     if residual_physics is not None:
         metadata["physics_params"] = residual_physics.__dict__
