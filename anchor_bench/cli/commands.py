@@ -21,6 +21,18 @@ def _csv_columns(value: str | None) -> list[str] | None:
     return None if value is None else [column.strip() for column in value.split(",") if column.strip()]
 
 
+def _scalar_or_csv_floats(value: str | None) -> float | list[float] | None:
+    """Parse one scalar or an ordered comma-separated float vector."""
+
+    if value is None:
+        return None
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items:
+        raise ValueError("gain override must contain at least one value")
+    values = [float(item) for item in items]
+    return values[0] if len(values) == 1 else values
+
+
 def _json_mappings(value: str | None) -> list[Any] | None:
     """Parse the compact CLI representation of multiple shared mappings."""
 
@@ -97,6 +109,15 @@ def _handle_train(args: argparse.Namespace) -> int:
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         dropout=args.dropout,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        huber_delta=args.huber_delta,
+        chunk_length=args.chunk_length,
+        output_activation=args.output_activation,
+        output_scale=args.output_scale,
+        target_normalization=args.target_normalization,
+        pd_kp=_scalar_or_csv_floats(args.pd_kp),
+        pd_kd=_scalar_or_csv_floats(args.pd_kd),
         seed=args.seed,
     )
     resolved = resolve_train_actuator_run_config(config)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -54,6 +55,15 @@ class ResolvedTrainActuatorRunConfig:
     hidden_size: int | None = None
     num_layers: int | None = None
     dropout: float | None = None
+    learning_rate: float | None = None
+    weight_decay: float | None = None
+    huber_delta: float | None = None
+    chunk_length: int | None = None
+    output_activation: str = "linear"
+    output_scale: float = 1.0
+    target_normalization: str = "standard"
+    pd_kp: float | tuple[float, ...] | None = None
+    pd_kd: float | tuple[float, ...] | None = None
 
 
 def _positive_int(name: str, value: Any) -> int:
@@ -64,9 +74,20 @@ def _positive_int(name: str, value: Any) -> int:
 
 
 def _nonnegative_float(name: str, value: Any) -> float:
+    """Validate one finite non-negative float."""
+
     resolved = float(value)
-    if resolved < 0.0:
-        raise ValueError(f"{name} must be >= 0")
+    if not math.isfinite(resolved) or resolved < 0.0:
+        raise ValueError(f"{name} must be finite and >= 0")
+    return resolved
+
+
+def _positive_float(name: str, value: Any) -> float:
+    """Validate one finite positive float."""
+
+    resolved = float(value)
+    if not math.isfinite(resolved) or resolved <= 0.0:
+        raise ValueError(f"{name} must be finite and > 0")
     return resolved
 
 
@@ -85,6 +106,24 @@ def _optional_dropout(value: Any | None) -> float | None:
     if not 0.0 <= resolved < 1.0:
         raise ValueError("dropout must be >= 0 and < 1")
     return resolved
+
+
+def _optional_pd_gain(name: str, value: Any | None) -> float | tuple[float, ...] | None:
+    """Validate one optional scalar gain or ordered gain vector."""
+
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            raise ValueError(f"{name} must contain at least one value")
+        result: float | tuple[float, ...] = tuple(float(item) for item in value)
+        items = result
+    else:
+        result = float(value)
+        items = (result,)
+    if any(not math.isfinite(item) or item < 0.0 for item in items):
+        raise ValueError(f"{name} must contain only finite values >= 0")
+    return result
 
 
 def _canonical_joints(bundle, values: Sequence[str], label: str) -> tuple[str, ...]:
@@ -225,11 +264,36 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
     artifact_name, mappings, mapping_source = _resolve_training_mappings(bundle, config)
     sources["joint_selection"] = mapping_source
     input_columns = parse_gru_columns(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
-    hidden_size = _optional_positive_int("hidden_size", config.hidden_size)
-    num_layers = _optional_positive_int("num_layers", config.num_layers)
-    dropout = _optional_dropout(config.dropout)
+    hidden_size = _optional_positive_int(
+        "hidden_size", select("hidden_size", config.hidden_size, None)
+    )
+    num_layers = _optional_positive_int("num_layers", select("num_layers", config.num_layers, None))
+    dropout = _optional_dropout(select("dropout", config.dropout, None))
     if num_layers == 1 and dropout not in (None, 0.0):
         raise ValueError("dropout must be zero when num_layers is 1")
+    learning_rate = select("learning_rate", config.learning_rate, None)
+    if learning_rate is not None:
+        learning_rate = _positive_float("learning_rate", learning_rate)
+    weight_decay = select("weight_decay", config.weight_decay, None)
+    if weight_decay is not None:
+        weight_decay = _nonnegative_float("weight_decay", weight_decay)
+    huber_delta = select("huber_delta", config.huber_delta, None)
+    if huber_delta is not None:
+        huber_delta = _positive_float("huber_delta", huber_delta)
+    chunk_length = select("chunk_length", config.chunk_length, None)
+    if chunk_length is not None:
+        chunk_length = _positive_int("chunk_length", chunk_length)
+    output_activation = str(select("output_activation", config.output_activation, "linear"))
+    if output_activation not in {"linear", "tanh"}:
+        raise ValueError("output_activation must be 'linear' or 'tanh'")
+    output_scale = _positive_float("output_scale", select("output_scale", config.output_scale, 1.0))
+    target_normalization = str(
+        select("target_normalization", config.target_normalization, "standard")
+    )
+    if target_normalization not in {"standard", "identity"}:
+        raise ValueError("target_normalization must be 'standard' or 'identity'")
+    pd_kp = _optional_pd_gain("pd_kp", select("pd_kp", config.pd_kp, None))
+    pd_kd = _optional_pd_gain("pd_kd", select("pd_kd", config.pd_kd, None))
 
     return ResolvedTrainActuatorRunConfig(
         robot=config.robot,
@@ -248,11 +312,28 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         hidden_size=hidden_size,
         num_layers=num_layers,
         dropout=dropout,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        huber_delta=huber_delta,
+        chunk_length=chunk_length,
+        output_activation=output_activation,
+        output_scale=output_scale,
+        target_normalization=target_normalization,
+        pd_kp=pd_kp,
+        pd_kd=pd_kd,
         seed=int(select("seed", config.seed, 42)),
         input_columns=input_columns,
         target_column=str(select("target_column", config.target_column, DEFAULT_TARGET_COLUMN)),
         config_sources=sources,
     )
+
+
+def _gain_text(value: float | tuple[float, ...]) -> str:
+    """Render a scalar or ordered gain vector for the CLI."""
+
+    if isinstance(value, tuple):
+        return ",".join(str(item) for item in value)
+    return str(value)
 
 
 def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str]:
@@ -292,6 +373,21 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         command.extend(("--num-layers", str(resolved.num_layers)))
     if resolved.dropout is not None:
         command.extend(("--dropout", str(resolved.dropout)))
+    if resolved.learning_rate is not None:
+        command.extend(("--learning-rate", str(resolved.learning_rate)))
+    if resolved.weight_decay is not None:
+        command.extend(("--weight-decay", str(resolved.weight_decay)))
+    if resolved.huber_delta is not None:
+        command.extend(("--huber-delta", str(resolved.huber_delta)))
+    if resolved.chunk_length is not None:
+        command.extend(("--chunk-length", str(resolved.chunk_length)))
+    command.extend(("--output-activation", resolved.output_activation))
+    command.extend(("--output-scale", str(resolved.output_scale)))
+    command.extend(("--target-normalization", resolved.target_normalization))
+    if resolved.pd_kp is not None:
+        command.extend(("--pd-kp", _gain_text(resolved.pd_kp)))
+    if resolved.pd_kd is not None:
+        command.extend(("--pd-kd", _gain_text(resolved.pd_kd)))
     if len(resolved.mappings) == 1:
         mapping = resolved.mappings[0]
         command.extend(("--input-joints", ",".join(mapping.input_joints)))
@@ -378,14 +474,28 @@ def _actuator_for_joint(spec, joint: str):
     return matches[0]
 
 
+def _gain_for_slot(
+    value: float | tuple[float, ...] | None, index: int, width: int, name: str
+) -> float | None:
+    """Select one configured gain slot, preserving scalar broadcast."""
+
+    if isinstance(value, tuple):
+        if len(value) != width:
+            raise ValueError(f"{name} must contain {width} value(s)")
+        return value[index]
+    return value
+
+
 def _physics_baselines_for_mappings(
     robot: str,
     mappings: Sequence[TrainingMapping],
     *,
     include_solver_pd: bool,
     include_residual: bool,
+    pd_kp: float | tuple[float, ...] | None = None,
+    pd_kd: float | tuple[float, ...] | None = None,
 ) -> "PhysicsBaselines":
-    """Resolve one PD vector and optional output friction per mapping."""
+    """Resolve configured PD overrides or actuator fallbacks plus output friction."""
 
     from anchor_bench.training.trainer import PhysicsBaselines
 
@@ -395,10 +505,23 @@ def _physics_baselines_for_mappings(
         pd_joints = mapping.input_joints if include_solver_pd else mapping.output_joints
         kp: list[float] = []
         kd: list[float] = []
-        for joint in pd_joints:
-            params = _actuator_for_joint(spec, joint).controller.parameters
-            kp.append(_param_for_joint(params.get("stiffness"), joint, "stiffness"))
-            kd.append(_param_for_joint(params.get("damping"), joint, "damping"))
+        for index, joint in enumerate(pd_joints):
+            kp_value = _gain_for_slot(pd_kp, index, len(pd_joints), "pd_kp")
+            kd_value = _gain_for_slot(pd_kd, index, len(pd_joints), "pd_kd")
+            if kp_value is None or kd_value is None:
+                params = _actuator_for_joint(spec, joint).controller.parameters
+                kp_value = (
+                    kp_value
+                    if kp_value is not None
+                    else _param_for_joint(params.get("stiffness"), joint, "stiffness")
+                )
+                kd_value = (
+                    kd_value
+                    if kd_value is not None
+                    else _param_for_joint(params.get("damping"), joint, "damping")
+                )
+            kp.append(kp_value)
+            kd.append(kd_value)
 
         dry: list[float] = []
         viscous: list[float] = []
@@ -465,6 +588,8 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
             resolved.mappings,
             include_solver_pd=include_solver_pd,
             include_residual=include_residual,
+            pd_kp=resolved.pd_kp,
+            pd_kd=resolved.pd_kd,
         )
         if include_solver_pd or include_residual
         else None
@@ -507,6 +632,13 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
             hidden_size=resolved.hidden_size,
             num_layers=resolved.num_layers,
             dropout=resolved.dropout,
+            learning_rate=resolved.learning_rate,
+            weight_decay=resolved.weight_decay,
+            huber_delta=resolved.huber_delta,
+            chunk_length=resolved.chunk_length,
+            output_activation=resolved.output_activation,
+            output_scale=resolved.output_scale,
+            target_normalization=resolved.target_normalization,
             physics_baselines=physics_baselines,
             dynamic_bias_provider=dynamic_bias_provider,
             metadata=metadata,

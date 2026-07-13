@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 
@@ -21,7 +22,16 @@ def build_runtime_gru(
     hidden_size: int,
     num_layers: int,
     dropout: float,
+    output_activation: str = "linear",
+    output_scale: float = 1.0,
 ):
+    """Build an inference GRU with the same output head used for training."""
+
+    if output_activation not in {"linear", "tanh"}:
+        raise ValueError("output_activation must be 'linear' or 'tanh'")
+    if not math.isfinite(output_scale) or output_scale <= 0.0:
+        raise ValueError("output_scale must be a positive finite value")
+
     torch = _import_torch()
 
     class RuntimeGRU(torch.nn.Module):
@@ -36,10 +46,14 @@ def build_runtime_gru(
                 batch_first=True,
             )
             self.head = torch.nn.Linear(hidden_size, output_size)
+            self.activation = (
+                torch.nn.Tanh() if output_activation == "tanh" else torch.nn.Identity()
+            )
+            self.output_scale = output_scale
 
         def forward(self, x, hidden):
             out, hidden = self.gru(x, hidden)
-            return self.head(out), hidden
+            return self.activation(self.head(out)) * self.output_scale, hidden
 
     return RuntimeGRU()
 
@@ -58,6 +72,13 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
     if (runtime_metadata.get("input_size"), runtime_metadata.get("output_size")) != (input_size, output_size):
         raise ValueError(f"{source} checkpoint dimensions disagree with runtime_metadata")
     hparams = checkpoint.get("hyperparameters") or {}
+    checkpoint_head = checkpoint.get("output_head")
+    metadata_head = runtime_metadata.get("output_head")
+    if (checkpoint_head is None) != (metadata_head is None) or (
+        checkpoint_head is not None and checkpoint_head != metadata_head
+    ):
+        raise ValueError(f"{source} checkpoint output_head disagrees with runtime_metadata")
+    output_head = checkpoint_head or {}
 
     model = build_runtime_gru(
         input_size=input_size,
@@ -65,6 +86,8 @@ def export_gru_checkpoint(checkpoint_path: str | Path, output_path: str | Path |
         hidden_size=int(hparams.get("hidden_size", 64)),
         num_layers=int(hparams.get("num_layers", 1)),
         dropout=float(hparams.get("dropout", 0.0)),
+        output_activation=str(output_head.get("activation", "linear")),
+        output_scale=float(output_head.get("scale", 1.0)),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()

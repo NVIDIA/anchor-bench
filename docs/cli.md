@@ -84,10 +84,42 @@ Training consumes SAGE motion folders. Command position, measured position,
 velocity, torque, and `position_error` are aligned directly in memory.
 Recorded episodes are split before joint mappings are expanded.
 
-Without Optuna, the default GRU architecture is 192 hidden units, two layers,
-and 0.225 dropout. `--hidden-size`, `--num-layers`, and `--dropout`
-override those values and also hold those dimensions fixed during Optuna.
+Training architecture, optimization, TBPTT, output-head, normalization, and
+PD-baseline settings can live under `training:` in the robot's `run.yaml`.
+The matching CLI option overrides the YAML value and appears in the dry-run's
+reproducible command:
+
+```yaml
+training:
+  hidden_size: 192
+  num_layers: 2
+  dropout: 0.225
+  learning_rate: 0.0004949926657319083
+  weight_decay: 0.0000003376044479094932
+  huber_delta: 0.3149430512234676
+  chunk_length: 100
+  output_activation: tanh
+  output_scale: 15.0
+  target_normalization: identity
+  pd_kp: 40.0
+  pd_kd: 1.0
+```
+
+The corresponding flags are `--hidden-size`, `--num-layers`, `--dropout`,
+`--learning-rate`, `--weight-decay`, `--huber-delta`, `--chunk-length`,
+`--output-activation`, `--output-scale`, `--target-normalization`,
+`--pd-kp`, and `--pd-kd`. Explicit architecture, optimizer, and chunk
+settings stay fixed during Optuna; omitted searchable values are tuned.
 Dropout must be zero when explicitly selecting a one-layer GRU.
+
+A `linear` head returns the scaled linear output. A `tanh` head returns
+`tanh(linear_output) * output_scale`, so the example is bounded to ±15.
+`standard` normalizes training targets by their measured mean and standard
+deviation; `identity` trains in physical torque units. PD gains accept either
+one broadcast scalar or an ordered comma-separated/YAML vector, for example
+`--pd-kp 40` or `--pd-kp 40,35,30,25`. Vector order follows the active PD
+domain: input-joint order for `solver_pd`, otherwise residual output-joint
+order. Shared mappings must still have identical values by model slot.
 
 Use `training.mappings` when one artifact shares weights across more than one
 physical application:

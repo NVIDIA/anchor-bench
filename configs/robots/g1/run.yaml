@@ -28,17 +28,32 @@ sysid:
     max_iterations: 100
     epsilon: 0.001
 training:
-  model: hybrid_residual
-  real_data_dir: inputs/datasets/g1/g1_arm_multi_joint/csv
-  output_dir: outputs/training/g1/right_shoulder_pitch
-  input_joints: [right_shoulder_pitch]
-  output_joints: [right_shoulder_pitch]
-  input_columns: [position, position_error, velocity]
+  model: gru
+  real_data_dir: inputs/datasets/g1/g1_arm_multijoint/train
+  output_dir: outputs/training/g1/right_arm_fulltorque_fixed192
+  input_joints:
+    [right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+  output_joints:
+    [right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw, right_elbow]
+  input_columns:
+    [position, position_error, velocity, solver_pd, dynamic_bias, previous_torque]
   target_column: torque
   skip_optuna: true
   trials: 20
   trial_epochs: 5
-  final_epochs: 5
+  final_epochs: 50
   n_streams: 4
   noise_std: 0.0
-  seed: 42
+  seed: 48
+  hidden_size: 192
+  num_layers: 2
+  dropout: 0.225
+  learning_rate: 0.0004949926657319083
+  weight_decay: 0.0000003376044479094932
+  huber_delta: 0.3149430512234676
+  chunk_length: 100
+  output_activation: tanh
+  output_scale: 15.0
+  target_normalization: identity
+  pd_kp: 40.0
+  pd_kd: 1.0

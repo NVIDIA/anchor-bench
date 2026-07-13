@@ -200,6 +200,15 @@ class TrainActuatorRunConfig:
     hidden_size: int | None = None
     num_layers: int | None = None
     dropout: float | None = None
+    learning_rate: float | None = None
+    weight_decay: float | None = None
+    huber_delta: float | None = None
+    chunk_length: int | None = None
+    output_activation: str | None = None
+    output_scale: float | None = None
+    target_normalization: str | None = None
+    pd_kp: float | list[float] | None = None
+    pd_kd: float | list[float] | None = None
 
 
 @dataclass(frozen=True)

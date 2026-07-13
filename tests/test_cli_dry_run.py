@@ -102,6 +102,24 @@ class CliDryRunTests(unittest.TestCase):
                 "3",
                 "--dropout",
                 "0.1",
+                "--learning-rate",
+                "0.0005",
+                "--weight-decay",
+                "0.000001",
+                "--huber-delta",
+                "0.3",
+                "--chunk-length",
+                "100",
+                "--output-activation",
+                "tanh",
+                "--output-scale",
+                "15",
+                "--target-normalization",
+                "identity",
+                "--pd-kp",
+                "40",
+                "--pd-kd",
+                "1",
                 "--dry-run",
             )
             self.assertIn("workflow: train-actuator", result.stdout)
@@ -116,6 +134,21 @@ class CliDryRunTests(unittest.TestCase):
             self.assertIn("'3'", result.stdout)
             self.assertIn("--dropout", result.stdout)
             self.assertIn("'0.1'", result.stdout)
+            for flag in (
+                "--learning-rate",
+                "--weight-decay",
+                "--huber-delta",
+                "--chunk-length",
+                "--output-activation",
+                "--output-scale",
+                "--target-normalization",
+                "--pd-kp",
+                "--pd-kd",
+            ):
+                self.assertIn(flag, result.stdout)
+            self.assertIn("identity", result.stdout)
+            self.assertIn("tanh", result.stdout)
+            self.assertIn("'100'", result.stdout)
             self.assertIn("outputs/training", result.stdout)
 
             result = run_cli(

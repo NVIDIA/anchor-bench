@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -92,6 +93,18 @@ class TrainingDefaults(ConfigModel):
     n_streams: int | None = Field(default=None, ge=1)
     noise_std: float | None = Field(default=None, ge=0.0)
     seed: int | None = None
+    hidden_size: int | None = Field(default=None, ge=1)
+    num_layers: int | None = Field(default=None, ge=1)
+    dropout: float | None = Field(default=None, ge=0.0, lt=1.0)
+    learning_rate: float | None = Field(default=None, gt=0.0)
+    weight_decay: float | None = Field(default=None, ge=0.0)
+    huber_delta: float | None = Field(default=None, gt=0.0)
+    chunk_length: int | None = Field(default=None, ge=1)
+    output_activation: Literal["linear", "tanh"] | None = None
+    output_scale: float | None = Field(default=None, gt=0.0)
+    target_normalization: Literal["standard", "identity"] | None = None
+    pd_kp: float | list[float] | None = None
+    pd_kd: float | list[float] | None = None
     input_columns: list[str] | None = None
     target_column: str | None = None
 
@@ -104,6 +117,21 @@ class TrainingDefaults(ConfigModel):
     @classmethod
     def _validate_joint_names(cls, value: Any) -> list[str] | None:
         return None if value is None else parse_joint_names(value)
+
+    @field_validator("pd_kp", "pd_kd", mode="before")
+    @classmethod
+    def _validate_pd_values(cls, value: Any) -> float | list[float] | None:
+        """Validate one shared gain or an ordered gain vector."""
+
+        if value is None:
+            return None
+        values = value if isinstance(value, (list, tuple)) else [value]
+        if not values:
+            raise ValueError("must contain at least one value")
+        result = [float(item) for item in values]
+        if any(not math.isfinite(item) or item < 0.0 for item in result):
+            raise ValueError("must contain only finite values >= 0")
+        return result if isinstance(value, (list, tuple)) else result[0]
 
 
 class RobotRunFile(ConfigModel):

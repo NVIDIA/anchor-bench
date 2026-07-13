@@ -304,6 +304,7 @@ class TrainingTensorTests(unittest.TestCase):
                 input_columns=["previous_torque"],
                 target_columns=["torque"],
                 input_widths=[1],
+                target_normalization="standard",
                 metadata={},
             )
 
@@ -497,6 +498,7 @@ class TrainingTensorTests(unittest.TestCase):
                 input_columns=job.input_columns,
                 target_columns=job.target_columns,
                 input_widths=(2, 1),
+                target_normalization="standard",
                 metadata={},
             )
             metadata = _runtime_metadata(job, stats)
@@ -519,6 +521,42 @@ class TrainingTensorTests(unittest.TestCase):
             "previous_raw_network_output_pre_clamp",
             metadata["previous_torque_derivation"]["runtime_source"],
         )
+
+    def test_identity_target_normalization_preserves_physical_torque(self):
+        import numpy as np
+
+        from anchor_bench.training.trainer import (
+            _normalization_stats,
+            _normalize_sequences,
+        )
+
+        sequences = [
+            (
+                np.asarray([[1.0], [3.0]], dtype=np.float32),
+                np.asarray([[-2.0], [6.0]], dtype=np.float32),
+            )
+        ]
+        stats = _normalization_stats(
+            sequences,
+            input_columns=["position"],
+            target_columns=["torque"],
+            input_widths=[1],
+            target_normalization="identity",
+            metadata={},
+        )
+        normalized = _normalize_sequences(
+            sequences,
+            stats,
+            input_columns=["position"],
+            target_columns=["torque"],
+            input_widths=[1],
+            target_width=1,
+        )
+
+        np.testing.assert_allclose(normalized[0][0][:, 0], [-1.0, 1.0])
+        np.testing.assert_allclose(normalized[0][1], sequences[0][1])
+        self.assertEqual(0.0, stats["normalization"]["targets"]["mean"]["torque"])
+        self.assertEqual(1.0, stats["normalization"]["targets"]["std"]["torque"])
 
     def test_dynamic_bias_is_evaluated_once_per_source_then_sliced(self):
         import numpy as np
@@ -575,7 +613,7 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
         self.assertEqual("torque", resolved.target_column)
 
-    def test_benchmark_architecture_defaults_and_cli_overrides(self):
+    def test_parity_yaml_defaults_and_cli_overrides_are_reproducible(self):
         from types import SimpleNamespace
 
         from anchor_bench.core.schemas import TrainActuatorRunConfig
@@ -585,14 +623,69 @@ class TrainingRunnerTests(unittest.TestCase):
         )
         from anchor_bench.training.trainer import _default_hparams
 
-        defaults = _default_hparams(
-            SimpleNamespace(hidden_size=None, num_layers=None, dropout=None)
+        yaml_resolved = resolve_train_actuator_run_config(
+            TrainActuatorRunConfig(robot="g1", dry_run=True)
         )
+        right_arm = (
+            "right_shoulder_pitch",
+            "right_shoulder_roll",
+            "right_shoulder_yaw",
+            "right_elbow",
+        )
+        self.assertEqual("gru", yaml_resolved.model)
+        self.assertTrue(yaml_resolved.data.endswith("g1_arm_multijoint/train"))
+        self.assertTrue(yaml_resolved.output.endswith("right_arm_fulltorque_fixed192"))
+        self.assertEqual(1, len(yaml_resolved.mappings))
+        self.assertEqual(right_arm, yaml_resolved.mappings[0].input_joints)
+        self.assertEqual(right_arm, yaml_resolved.mappings[0].output_joints)
+        self.assertEqual(
+            [
+                "position",
+                "position_error",
+                "velocity",
+                "solver_pd",
+                "dynamic_bias",
+                "previous_torque",
+            ],
+            yaml_resolved.input_columns,
+        )
+        self.assertEqual("torque", yaml_resolved.target_column)
+        self.assertEqual(50, yaml_resolved.final_epochs)
+        parity = {
+            "hidden_size": 192,
+            "num_layers": 2,
+            "dropout": 0.225,
+            "learning_rate": 0.0004949926657319083,
+            "weight_decay": 3.376044479094932e-7,
+            "huber_delta": 0.3149430512234676,
+            "chunk_length": 100,
+            "output_activation": "tanh",
+            "output_scale": 15.0,
+            "target_normalization": "identity",
+            "pd_kp": 40.0,
+            "pd_kd": 1.0,
+        }
+        for name, expected in parity.items():
+            self.assertEqual(expected, getattr(yaml_resolved, name))
+            self.assertEqual("run.yaml", yaml_resolved.config_sources[name])
+
+        empty = {
+            "hidden_size": None,
+            "num_layers": None,
+            "dropout": None,
+            "learning_rate": None,
+            "weight_decay": None,
+            "huber_delta": None,
+            "chunk_length": None,
+            "output_activation": None,
+            "output_scale": None,
+        }
+        defaults = _default_hparams(SimpleNamespace(**empty))
         self.assertEqual(192, defaults.hidden_size)
         self.assertEqual(2, defaults.num_layers)
         self.assertEqual(0.225, defaults.dropout)
         single_layer = _default_hparams(
-            SimpleNamespace(hidden_size=None, num_layers=1, dropout=None)
+            SimpleNamespace(**{**empty, "num_layers": 1})
         )
         self.assertEqual(0.0, single_layer.dropout)
 
@@ -602,29 +695,74 @@ class TrainingRunnerTests(unittest.TestCase):
                 hidden_size=96,
                 num_layers=3,
                 dropout=0.1,
+                learning_rate=0.002,
+                weight_decay=0.0001,
+                huber_delta=0.5,
+                chunk_length=64,
+                output_activation="linear",
+                output_scale=2.0,
+                target_normalization="standard",
+                pd_kp=20.0,
+                pd_kd=0.5,
                 dry_run=True,
             )
         )
-        self.assertEqual(96, resolved.hidden_size)
-        self.assertEqual(3, resolved.num_layers)
-        self.assertEqual(0.1, resolved.dropout)
+        overrides = {
+            "hidden_size": 96,
+            "num_layers": 3,
+            "dropout": 0.1,
+            "learning_rate": 0.002,
+            "weight_decay": 0.0001,
+            "huber_delta": 0.5,
+            "chunk_length": 64,
+            "output_activation": "linear",
+            "output_scale": 2.0,
+            "target_normalization": "standard",
+            "pd_kp": 20.0,
+            "pd_kd": 0.5,
+        }
+        for name, expected in overrides.items():
+            self.assertEqual(expected, getattr(resolved, name))
+            self.assertEqual("cli", resolved.config_sources[name])
         command = build_resolved_train_actuator_command(resolved).command
-        self.assertIn("--hidden-size", command)
-        self.assertIn("--num-layers", command)
-        self.assertIn("--dropout", command)
+        self.assertEqual(command, build_resolved_train_actuator_command(resolved).command)
+        for flag in (
+            "--hidden-size",
+            "--num-layers",
+            "--dropout",
+            "--learning-rate",
+            "--weight-decay",
+            "--huber-delta",
+            "--chunk-length",
+            "--output-activation",
+            "--output-scale",
+            "--target-normalization",
+            "--pd-kp",
+            "--pd-kd",
+        ):
+            self.assertIn(flag, command)
 
         for values, message in (
             ({"hidden_size": 0}, "hidden_size must be >= 1"),
             ({"num_layers": 0}, "num_layers must be >= 1"),
             ({"dropout": 1.0}, "dropout must be >= 0 and < 1"),
             ({"num_layers": 1, "dropout": 0.1}, "dropout must be zero when num_layers is 1"),
+            ({"learning_rate": 0.0}, "learning_rate.*> 0"),
+            ({"weight_decay": -1.0}, "weight_decay must be finite and >= 0"),
+            ({"weight_decay": float("nan")}, "weight_decay must be finite and >= 0"),
+            ({"weight_decay": float("inf")}, "weight_decay must be finite and >= 0"),
+            ({"huber_delta": 0.0}, "huber_delta.*> 0"),
+            ({"chunk_length": 0}, "chunk_length must be >= 1"),
+            ({"output_activation": "sigmoid"}, "output_activation"),
+            ({"output_scale": 0.0}, "output_scale.*> 0"),
+            ({"target_normalization": "minmax"}, "target_normalization"),
         ):
             with self.subTest(values=values), self.assertRaisesRegex(ValueError, message):
                 resolve_train_actuator_run_config(
                     TrainActuatorRunConfig(robot="g1", dry_run=True, **values)
                 )
 
-    def test_optuna_keeps_explicit_architecture_fixed(self):
+    def test_optuna_keeps_explicit_training_hparams_fixed(self):
         from types import SimpleNamespace
         from unittest.mock import patch
 
@@ -667,6 +805,10 @@ class TrainingRunnerTests(unittest.TestCase):
             hidden_size=192,
             num_layers=2,
             dropout=0.225,
+            learning_rate=0.0005,
+            weight_decay=0.000001,
+            huber_delta=0.3,
+            chunk_length=100,
         )
         with (
             patch.dict("sys.modules", {"optuna": optuna}),
@@ -677,8 +819,20 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual(192, selected.hidden_size)
         self.assertEqual(2, selected.num_layers)
         self.assertEqual(0.225, selected.dropout)
+        self.assertEqual(0.0005, selected.learning_rate)
+        self.assertEqual(0.000001, selected.weight_decay)
+        self.assertEqual(0.3, selected.huber_delta)
+        self.assertEqual(100, selected.chunk_length)
         self.assertTrue(
-            {"hidden_size", "num_layers", "dropout"}.isdisjoint(suggested)
+            {
+                "hidden_size",
+                "num_layers",
+                "dropout",
+                "learning_rate",
+                "weight_decay",
+                "huber_delta",
+                "chunk_length",
+            }.isdisjoint(suggested)
         )
 
     def test_training_config_requires_joint_selection(self):
@@ -733,6 +887,34 @@ class TrainingRunnerTests(unittest.TestCase):
             )
 
         self.assertEqual({"right_elbow"}, {call.args[1] for call in read.call_args_list})
+
+    def test_pd_overrides_broadcast_and_follow_slot_order(self):
+        from anchor_bench.training.data import TrainingMapping
+        from anchor_bench.training.runner import _physics_baselines_for_mappings
+
+        mapping = TrainingMapping(
+            ("right_shoulder_pitch", "right_elbow"),
+            ("right_elbow",),
+        )
+        baselines = _physics_baselines_for_mappings(
+            "g1",
+            (mapping,),
+            include_solver_pd=True,
+            include_residual=False,
+            pd_kp=40.0,
+            pd_kd=(0.5, 1.5),
+        )
+
+        self.assertEqual((40.0, 40.0), baselines.kp)
+        self.assertEqual((0.5, 1.5), baselines.kd)
+        with self.assertRaisesRegex(ValueError, "pd_kp.*2 value"):
+            _physics_baselines_for_mappings(
+                "g1",
+                (mapping,),
+                include_solver_pd=True,
+                include_residual=False,
+                pd_kp=(40.0,),
+            )
 
     def test_partial_parameter_maps_fail_instead_of_defaulting(self):
         from anchor_bench.training.runner import _param_for_joint
@@ -842,6 +1024,13 @@ class TrainingRunnerTests(unittest.TestCase):
                     hidden_size=7,
                     num_layers=2,
                     dropout=0.1,
+                    learning_rate=0.0005,
+                    weight_decay=0.000001,
+                    huber_delta=0.3,
+                    chunk_length=4,
+                    output_activation="tanh",
+                    output_scale=15.0,
+                    target_normalization="identity",
                     seed=5,
                     dry_run=False,
                 )
@@ -862,13 +1051,26 @@ class TrainingRunnerTests(unittest.TestCase):
             self.assertEqual(7, hyperparameters["hidden_size"])
             self.assertEqual(2, hyperparameters["num_layers"])
             self.assertEqual(0.1, hyperparameters["dropout"])
+            self.assertEqual(4, hyperparameters["chunk_length"])
+            self.assertEqual("identity", stats["target_normalization"])
+            self.assertEqual(
+                {"activation": "tanh", "scale": 15.0}, stats["output_head"]
+            )
+            self.assertEqual(0.0, stats["normalization"]["targets"]["mean"]["torque"])
+            self.assertEqual(1.0, stats["normalization"]["targets"]["std"]["torque"])
             self.assertIn("network", plan.metadata["artifacts"])
             import torch
             extra_files = {"metadata.json": ""}
-            torch.jit.load(str(network_path), _extra_files=extra_files)
+            network = torch.jit.load(str(network_path), _extra_files=extra_files)
             metadata = json.loads(extra_files["metadata.json"])
             self.assertEqual(3, metadata["schema_version"])
             self.assertEqual(0.002, metadata["sample_dt_s"])
+            self.assertEqual("identity", metadata["target_normalization"])
+            self.assertEqual(
+                {"activation": "tanh", "scale": 15.0}, metadata["output_head"]
+            )
+            output, _ = network(torch.zeros(2, 1, 3), torch.zeros(2, 2, 7))
+            self.assertLessEqual(float(output.detach().abs().max()), 15.0)
 
     @unittest.skipUnless(importlib.util.find_spec("torch"), "TorchScript export test requires torch")
     def test_gru_checkpoint_export_writes_scripted_network_with_gru_attribute(self):
@@ -939,6 +1141,16 @@ class TrainingRunnerTests(unittest.TestCase):
             output, hidden = network(torch.zeros(2, 1, 3), torch.zeros(1, 2, 4))
             self.assertEqual((2, 1, 1), tuple(output.shape))
             self.assertEqual((1, 2, 4), tuple(hidden.shape))
+
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            checkpoint["output_head"] = {"activation": "tanh", "scale": 15.0}
+            checkpoint["runtime_metadata"]["output_head"] = {
+                "activation": "linear",
+                "scale": 1.0,
+            }
+            torch.save(checkpoint, checkpoint_path)
+            with self.assertRaisesRegex(ValueError, "output_head disagrees"):
+                export_gru_checkpoint(checkpoint_path)
 
 
 if __name__ == "__main__":

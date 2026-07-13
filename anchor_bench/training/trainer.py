@@ -78,6 +78,13 @@ class TrainingJob:
     hidden_size: int | None = None
     num_layers: int | None = None
     dropout: float | None = None
+    learning_rate: float | None = None
+    weight_decay: float | None = None
+    huber_delta: float | None = None
+    chunk_length: int | None = None
+    output_activation: str = "linear"
+    output_scale: float = 1.0
+    target_normalization: str = "standard"
 
 
 @dataclass(frozen=True)
@@ -256,6 +263,7 @@ def _normalization_stats(
     input_columns: Sequence[str],
     target_columns: Sequence[str],
     input_widths: Sequence[int],
+    target_normalization: str,
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """Pool per-slot normalization across every training sequence."""
@@ -268,8 +276,14 @@ def _normalization_stats(
         raise ValueError("input feature widths do not match assembled tensors")
     input_mean = inputs.mean(axis=0)
     input_std = np.maximum(inputs.std(axis=0), EPSILON_STD)
-    target_mean = targets.mean(axis=0)
-    target_std = np.maximum(targets.std(axis=0), EPSILON_STD)
+    if target_normalization == "standard":
+        target_mean = targets.mean(axis=0)
+        target_std = np.maximum(targets.std(axis=0), EPSILON_STD)
+    elif target_normalization == "identity":
+        target_mean = np.zeros(targets.shape[1], dtype=np.float32)
+        target_std = np.ones(targets.shape[1], dtype=np.float32)
+    else:
+        raise ValueError("target_normalization must be 'standard' or 'identity'")
     offsets = np.cumsum((0, *input_widths))
     target = target_columns[0]
     stats = {
@@ -375,7 +389,22 @@ def _previous_torque_feedback(
     )
 
 
-def _build_model(torch, input_size: int, output_size: int, hparams: TrainingHyperParameters):
+def _build_model(
+    torch,
+    input_size: int,
+    output_size: int,
+    hparams: TrainingHyperParameters,
+    *,
+    output_activation: str,
+    output_scale: float,
+):
+    """Build the train-time GRU with its configured output head."""
+
+    if output_activation not in {"linear", "tanh"}:
+        raise ValueError("output_activation must be 'linear' or 'tanh'")
+    if not math.isfinite(output_scale) or output_scale <= 0.0:
+        raise ValueError("output_scale must be a positive finite value")
+
     class TorqueGRU(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -388,10 +417,14 @@ def _build_model(torch, input_size: int, output_size: int, hparams: TrainingHype
                 batch_first=True,
             )
             self.head = torch.nn.Linear(hparams.hidden_size, output_size)
+            self.activation = (
+                torch.nn.Tanh() if output_activation == "tanh" else torch.nn.Identity()
+            )
+            self.output_scale = output_scale
 
         def forward(self, x, hidden=None):
             out, hidden = self.gru(x, hidden)
-            return self.head(out), hidden
+            return self.activation(self.head(out)) * self.output_scale, hidden
 
     return TorqueGRU()
 
@@ -518,6 +551,11 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
         "sample_dt_s": sample_dt_s,
         "normalization": stats["normalization"],
         "delay": {"handling": "learned", "external_delay_s": 0.0},
+        "target_normalization": job.target_normalization,
+        "output_head": {
+            "activation": job.output_activation,
+            "scale": float(job.output_scale),
+        },
     }
     if "previous_torque" in job.input_columns:
         metadata["previous_torque_derivation"] = {
@@ -586,7 +624,14 @@ def _fit_once(
     expected_output_size = len(job.mappings[0].output_joints)
     if (input_size, output_size) != (expected_input_size, expected_output_size):
         raise ValueError("assembled GRU tensors do not match configured mapping dimensions")
-    model = _build_model(torch, input_size, output_size, hparams).to(device)
+    model = _build_model(
+        torch,
+        input_size,
+        output_size,
+        hparams,
+        output_activation=job.output_activation,
+        output_scale=job.output_scale,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=hparams.learning_rate, weight_decay=hparams.weight_decay)
     loss_fn = torch.nn.HuberLoss(delta=hparams.huber_delta)
     best_val = math.inf
@@ -649,6 +694,11 @@ def _fit_once(
         "input_columns": job.input_columns,
         "target_columns": job.target_columns,
         "normalization": stats["normalization"],
+        "target_normalization": job.target_normalization,
+        "output_head": {
+            "activation": job.output_activation,
+            "scale": float(job.output_scale),
+        },
         "runtime_metadata": runtime_metadata,
         "hyperparameters": hparams.__dict__,
         "metrics": metrics,
@@ -665,7 +715,7 @@ def _fit_once(
 
 
 def _default_hparams(job: TrainingJob) -> TrainingHyperParameters:
-    """Apply fixed architecture overrides to the benchmark defaults."""
+    """Apply fixed training overrides to the benchmark defaults."""
 
     defaults = TrainingHyperParameters()
     num_layers = job.num_layers if job.num_layers is not None else defaults.num_layers
@@ -674,6 +724,16 @@ def _default_hparams(job: TrainingJob) -> TrainingHyperParameters:
         hidden_size=job.hidden_size if job.hidden_size is not None else defaults.hidden_size,
         num_layers=num_layers,
         dropout=dropout if num_layers > 1 else 0.0,
+        learning_rate=(
+            job.learning_rate if job.learning_rate is not None else defaults.learning_rate
+        ),
+        weight_decay=(
+            job.weight_decay if job.weight_decay is not None else defaults.weight_decay
+        ),
+        huber_delta=job.huber_delta if job.huber_delta is not None else defaults.huber_delta,
+        chunk_length=(
+            job.chunk_length if job.chunk_length is not None else defaults.chunk_length
+        ),
     )
 
 
@@ -712,10 +772,26 @@ def _select_hparams(
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
-            learning_rate=trial.suggest_float("learning_rate", 1.0e-4, 5.0e-3, log=True),
-            weight_decay=trial.suggest_float("weight_decay", 1.0e-7, 1.0e-3, log=True),
-            huber_delta=trial.suggest_float("huber_delta", 0.25, 2.0),
-            chunk_length=trial.suggest_categorical("chunk_length", [16, 32, 64, 100]),
+            learning_rate=(
+                job.learning_rate
+                if job.learning_rate is not None
+                else trial.suggest_float("learning_rate", 1.0e-4, 5.0e-3, log=True)
+            ),
+            weight_decay=(
+                job.weight_decay
+                if job.weight_decay is not None
+                else trial.suggest_float("weight_decay", 1.0e-7, 1.0e-3, log=True)
+            ),
+            huber_delta=(
+                job.huber_delta
+                if job.huber_delta is not None
+                else trial.suggest_float("huber_delta", 0.25, 2.0)
+            ),
+            chunk_length=(
+                job.chunk_length
+                if job.chunk_length is not None
+                else trial.suggest_categorical("chunk_length", [16, 32, 64, 100])
+            ),
         )
         score, _ = _fit_once(
             job, hparams,
@@ -730,7 +806,15 @@ def _select_hparams(
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=job.trials)
     selected = dict(study.best_params)
-    for name in ("hidden_size", "num_layers", "dropout"):
+    for name in (
+        "hidden_size",
+        "num_layers",
+        "dropout",
+        "learning_rate",
+        "weight_decay",
+        "huber_delta",
+        "chunk_length",
+    ):
         override = getattr(job, name)
         if override is not None:
             selected[name] = override
@@ -750,10 +834,16 @@ def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
         input_columns=job.input_columns,
         target_columns=job.target_columns,
         input_widths=input_widths,
+        target_normalization=job.target_normalization,
         metadata={
             **job.metadata,
             "model": job.model,
             "artifact_name": job.artifact_name,
+            "target_normalization": job.target_normalization,
+            "output_head": {
+                "activation": job.output_activation,
+                "scale": float(job.output_scale),
+            },
             "joint_mappings": [
                 {"input_joints": list(mapping.input_joints), "output_joints": list(mapping.output_joints)}
                 for mapping in job.mappings
