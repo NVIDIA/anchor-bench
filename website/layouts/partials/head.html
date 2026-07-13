@@ -1,7 +1,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} · {{ .Site.Title }}{{ end }}</title>
-<meta name="description" content="{{ with .Description }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+{{- $title := .Title -}}
+{{- $desc := .Description -}}
+{{- if and (eq .Section "documentation") (ne .Kind "section") -}}
+  {{- $rel := .RelPermalink -}}
+  {{- range .Site.Data.documentation -}}
+    {{- if eq (.path | relLangURL) $rel -}}
+      {{- if not $title }}{{ $title = .title }}{{ end -}}
+      {{- if not $desc }}{{ $desc = .description }}{{ end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+<title>{{ if .IsHome }}{{ .Site.Title }}{{ else if $title }}{{ $title }} · {{ .Site.Title }}{{ else }}{{ .Site.Title }}{{ end }}</title>
+<meta name="description" content="{{ with $desc }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}">
 <meta name="theme-color" content="#4f46e5">
 <script>
   (function () {

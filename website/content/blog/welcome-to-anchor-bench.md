@@ -11,4 +11,4 @@ Anchor Bench helps teams identify actuator models and measure sim-to-real gap on
 - Compatibility updates when pinned versions change
 - Benchmark results and analysis patterns
 
-For setup and day-to-day commands, start with the [CLI documentation](/docs/cli/).
+For setup and day-to-day commands, start with the [CLI documentation](/documentation/cli/).

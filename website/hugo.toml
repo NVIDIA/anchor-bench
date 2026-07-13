@@ -21,7 +21,7 @@ disableKinds = ["taxonomy"]
   narrow = true
 
 [[cascade]]
-  _target = { path = "/docs/**" }
+  _target = { path = "/documentation/**", kind = "page" }
   narrow = true
 
 [module]
@@ -39,4 +39,4 @@ disableKinds = ["taxonomy"]
     target = "data"
   [[module.mounts]]
     source = "../docs"
-    target = "content/docs"
+    target = "content/documentation"
