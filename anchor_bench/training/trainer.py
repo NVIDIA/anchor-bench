@@ -42,6 +42,17 @@ class TrainingHyperParameters:
 
 
 @dataclass(frozen=True)
+class _PreviousTorqueFeedback:
+    """Normalization values needed for autoregressive torque feedback."""
+
+    input_slice: slice
+    input_mean: np.ndarray
+    input_std: np.ndarray
+    target_mean: np.ndarray
+    target_std: np.ndarray
+
+
+@dataclass(frozen=True)
 class TrainingJob:
     """One shared-weight GRU training job over source/mapping sequences."""
 
@@ -203,6 +214,8 @@ def _load_sequences(
             friction = dry * np.sign(velocity) + viscous * velocity
             target = target - output_pd - friction
 
+        # Shifted targets define stable input normalization only. The epoch
+        # runner replaces every row with the prior raw network prediction.
         previous = np.zeros_like(target)
         previous[1:] = target[:-1]
         blocks: dict[str, np.ndarray | None] = {
@@ -281,6 +294,23 @@ def _normalization_stats(
     return stats
 
 
+def _normalization_vector(
+    values: dict[str, Any],
+    columns: Sequence[str],
+    widths: Sequence[int],
+) -> np.ndarray:
+    """Flatten scalar-or-list statistics in feature-major order."""
+
+    result: list[float] = []
+    for column, width in zip(columns, widths, strict=True):
+        value = values[column]
+        items = value if isinstance(value, list) else [value]
+        if len(items) != width:
+            raise ValueError(f"normalization for {column} must contain {width} value(s)")
+        result.extend(float(item) for item in items)
+    return np.asarray(result, dtype=np.float32)
+
+
 def _normalize_sequences(
     sequences: Sequence[tuple[np.ndarray, np.ndarray]],
     stats: dict[str, Any],
@@ -297,23 +327,49 @@ def _normalize_sequences(
     if len(target_columns) != 1:
         raise ValueError("GRU training requires one target semantic")
 
-    def vector(values: dict[str, Any], columns: Sequence[str], widths: Sequence[int]) -> np.ndarray:
-        """Flatten scalar-or-list statistics in feature-major order."""
-
-        result: list[float] = []
-        for column, width in zip(columns, widths, strict=True):
-            value = values[column]
-            items = value if isinstance(value, list) else [value]
-            if len(items) != width:
-                raise ValueError(f"normalization for {column} must contain {width} value(s)")
-            result.extend(float(item) for item in items)
-        return np.asarray(result, dtype=np.float32)
-
-    input_mean = vector(input_norm["mean"], input_columns, input_widths)
-    input_std = vector(input_norm["std"], input_columns, input_widths)
-    target_mean = vector(target_norm["mean"], target_columns, (target_width,))
-    target_std = vector(target_norm["std"], target_columns, (target_width,))
+    input_mean = _normalization_vector(input_norm["mean"], input_columns, input_widths)
+    input_std = _normalization_vector(input_norm["std"], input_columns, input_widths)
+    target_mean = _normalization_vector(target_norm["mean"], target_columns, (target_width,))
+    target_std = _normalization_vector(target_norm["std"], target_columns, (target_width,))
     return [((inputs - input_mean) / input_std, (targets - target_mean) / target_std) for inputs, targets in sequences]
+
+
+def _previous_torque_feedback(
+    job: TrainingJob,
+    stats: dict[str, Any],
+) -> _PreviousTorqueFeedback | None:
+    """Locate previous torque and return its input/output normalization."""
+
+    if "previous_torque" not in job.input_columns:
+        return None
+    widths = _feature_widths(job)
+    index = job.input_columns.index("previous_torque")
+    offsets = np.cumsum((0, *widths))
+    input_slice = slice(int(offsets[index]), int(offsets[index + 1]))
+    output_width = len(job.mappings[0].output_joints)
+    if input_slice.stop - input_slice.start != output_width:
+        raise ValueError("previous_torque width must match model output width")
+
+    normalization = stats["normalization"]
+    input_mean = _normalization_vector(
+        normalization["inputs"]["mean"], job.input_columns, widths
+    )
+    input_std = _normalization_vector(
+        normalization["inputs"]["std"], job.input_columns, widths
+    )
+    target_mean = _normalization_vector(
+        normalization["targets"]["mean"], job.target_columns, (output_width,)
+    )
+    target_std = _normalization_vector(
+        normalization["targets"]["std"], job.target_columns, (output_width,)
+    )
+    return _PreviousTorqueFeedback(
+        input_slice=input_slice,
+        input_mean=input_mean[input_slice],
+        input_std=input_std[input_slice],
+        target_mean=target_mean,
+        target_std=target_std,
+    )
 
 
 def _build_model(torch, input_size: int, output_size: int, hparams: TrainingHyperParameters):
@@ -337,27 +393,87 @@ def _build_model(torch, input_size: int, output_size: int, hparams: TrainingHype
     return TorqueGRU()
 
 
-def _run_epoch(torch, model, optimizer, loss_fn, sequences, hparams, *, train: bool, device, noise_std: float) -> float:
+def _run_epoch(
+    torch,
+    model,
+    optimizer,
+    loss_fn,
+    sequences,
+    hparams,
+    *,
+    train: bool,
+    device,
+    noise_std: float,
+    previous_torque_feedback: _PreviousTorqueFeedback | None = None,
+) -> float:
+    """Run one epoch with independent sequences and detached TBPTT chunks."""
+
     model.train(train)
     losses: list[float] = []
+    if previous_torque_feedback is not None:
+        feedback = previous_torque_feedback
+        previous_input_mean = torch.as_tensor(
+            feedback.input_mean, dtype=torch.float32, device=device
+        ).reshape(1, 1, -1)
+        previous_input_std = torch.as_tensor(
+            feedback.input_std, dtype=torch.float32, device=device
+        ).reshape(1, 1, -1)
+        target_mean = torch.as_tensor(
+            feedback.target_mean, dtype=torch.float32, device=device
+        ).reshape(1, 1, -1)
+        target_std = torch.as_tensor(
+            feedback.target_std, dtype=torch.float32, device=device
+        ).reshape(1, 1, -1)
+
     grad_context = torch.enable_grad() if train else torch.no_grad()
     with grad_context:
         for features, targets in sequences:
             hidden = None
+            previous_physical = (
+                torch.zeros_like(target_mean)
+                if previous_torque_feedback is not None
+                else None
+            )
             x = torch.as_tensor(features, dtype=torch.float32, device=device)
             y = torch.as_tensor(targets, dtype=torch.float32, device=device)
             for start in range(0, x.shape[0], hparams.chunk_length):
-                xb = x[start:start + hparams.chunk_length].unsqueeze(0)
-                yb = y[start:start + hparams.chunk_length].unsqueeze(0)
-                if train and noise_std > 0.0:
-                    xb = xb + torch.randn_like(xb) * noise_std
-                pred, hidden = model(xb, hidden)
+                end = start + hparams.chunk_length
+                xb = x[start:end].unsqueeze(0)
+                yb = y[start:end].unsqueeze(0)
+                if previous_torque_feedback is None:
+                    if train and noise_std > 0.0:
+                        xb = xb + torch.randn_like(xb) * noise_std
+                    pred, hidden = model(xb, hidden)
+                else:
+                    assert previous_physical is not None
+                    step_predictions = []
+                    for offset in range(xb.shape[1]):
+                        step = xb[:, offset : offset + 1, :]
+                        if train and noise_std > 0.0:
+                            step = step + torch.randn_like(step) * noise_std
+                        normalized_previous = (
+                            previous_physical - previous_input_mean
+                        ) / previous_input_std
+                        step = torch.cat(
+                            (
+                                step[..., : feedback.input_slice.start],
+                                normalized_previous,
+                                step[..., feedback.input_slice.stop :],
+                            ),
+                            dim=-1,
+                        )
+                        step_prediction, hidden = model(step, hidden)
+                        step_predictions.append(step_prediction)
+                        previous_physical = step_prediction * target_std + target_mean
+                    pred = torch.cat(step_predictions, dim=1)
                 loss = loss_fn(pred, yb)
                 if train:
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
                     optimizer.step()
                     hidden = hidden.detach()
+                    if previous_physical is not None:
+                        previous_physical = previous_physical.detach()
                 losses.append(float(loss.detach().cpu()))
     return float(sum(losses) / max(1, len(losses)))
 
@@ -402,7 +518,7 @@ def _runtime_metadata(job: TrainingJob, stats: dict[str, Any]) -> dict[str, Any]
     }
     if "previous_torque" in job.input_columns:
         metadata["previous_torque_derivation"] = {
-            "source": "previous_target",
+            "source": "previous_raw_network_output_pre_clamp",
             "runtime_source": "previous_raw_network_output_pre_clamp",
             "initialization": "physical_zero",
             "reset_boundaries": ["recorded_episode", "joint_mapping"],
@@ -474,14 +590,31 @@ def _fit_once(
     best_state = None
     history: list[dict[str, float]] = []
     eval_sequences = val_sequences or train_sequences
+    previous_feedback = _previous_torque_feedback(job, stats)
     for epoch in range(1, epochs + 1):
         train_loss = _run_epoch(
-            torch, model, optimizer, loss_fn, train_sequences, hparams,
-            train=True, device=device, noise_std=job.noise_std,
+            torch,
+            model,
+            optimizer,
+            loss_fn,
+            train_sequences,
+            hparams,
+            train=True,
+            device=device,
+            noise_std=job.noise_std,
+            previous_torque_feedback=previous_feedback,
         )
         val_loss = _run_epoch(
-            torch, model, optimizer, loss_fn, eval_sequences, hparams,
-            train=False, device=device, noise_std=0.0,
+            torch,
+            model,
+            optimizer,
+            loss_fn,
+            eval_sequences,
+            hparams,
+            train=False,
+            device=device,
+            noise_std=0.0,
+            previous_torque_feedback=previous_feedback,
         )
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
         if val_loss < best_val:

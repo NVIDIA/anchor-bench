@@ -256,7 +256,7 @@ class TrainingTensorTests(unittest.TestCase):
             metadata={"sample_dt_s": 1.0},
         )
 
-    def test_miso_feature_major_order_and_previous_target_shift(self):
+    def test_miso_feature_major_order_and_previous_normalization_shift(self):
         import numpy as np
 
         from anchor_bench.training.data import TrainingMapping
@@ -315,7 +315,98 @@ class TrainingTensorTests(unittest.TestCase):
         self.assertEqual(0.0, float(sequences[1][0][0, 0]))
         self.assertEqual(5.5, stats["normalization"]["inputs"]["mean"]["previous_torque"])
 
-    def test_residual_previous_torque_shifts_final_residual_target(self):
+    @unittest.skipUnless(importlib.util.find_spec("torch"), "autoregressive test requires torch")
+    def test_previous_torque_rolls_predictions_across_chunks_and_resets_sequences(self):
+        """Use model outputs in train/validation and reset feedback per sequence."""
+
+        import numpy as np
+        import torch
+
+        from anchor_bench.training.trainer import (
+            _PreviousTorqueFeedback,
+            TrainingHyperParameters,
+            _run_epoch,
+        )
+
+        class RecordingModel(torch.nn.Module):
+            """Record recurrent inputs and emit one call-indexed prediction."""
+
+            def __init__(self):
+                """Create one parameter so the training path can backpropagate."""
+
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.tensor(0.0))
+                self.inputs = []
+                self.hidden_was_none = []
+                self.input_has_grad = []
+                self.hidden_has_grad = []
+
+            def forward(self, values, hidden):
+                """Record inputs and return a deterministic normalized output."""
+
+                self.inputs.append(values.detach().cpu().numpy().copy())
+                self.hidden_was_none.append(hidden is None)
+                self.input_has_grad.append(values.requires_grad)
+                self.hidden_has_grad.append(None if hidden is None else hidden.requires_grad)
+                call = float(len(self.inputs))
+                prediction = torch.stack((self.anchor * 0.0 + 2 * call - 1, self.anchor * 0.0 + 2 * call))
+                prediction = prediction.reshape(1, 1, 2)
+                next_hidden = (self.anchor * 0.0 + call).reshape(1, 1, 1)
+                return prediction, next_hidden
+
+        feedback = _PreviousTorqueFeedback(
+            input_slice=slice(1, 3),
+            input_mean=np.array([10.0, 20.0], dtype=np.float32),
+            input_std=np.array([2.0, 4.0], dtype=np.float32),
+            target_mean=np.array([100.0, 200.0], dtype=np.float32),
+            target_std=np.array([5.0, 10.0], dtype=np.float32),
+        )
+        sequence = (
+            np.array(
+                [[1.0, 999.0, 999.0, 4.0], [2.0, 888.0, 888.0, 5.0], [3.0, 777.0, 777.0, 6.0]],
+                dtype=np.float32,
+            ),
+            np.zeros((3, 2), dtype=np.float32),
+        )
+
+        for train in (True, False):
+            model = RecordingModel()
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.0)
+            _run_epoch(
+                torch,
+                model,
+                optimizer,
+                torch.nn.MSELoss(),
+                [sequence, sequence],
+                TrainingHyperParameters(chunk_length=2),
+                train=train,
+                device=torch.device("cpu"),
+                noise_std=0.0,
+                previous_torque_feedback=feedback,
+            )
+
+            observed = np.concatenate(model.inputs, axis=1)[0]
+            np.testing.assert_allclose(
+                observed[:, 1:3],
+                [
+                    [-5.0, -5.0],
+                    [47.5, 50.0],
+                    [52.5, 55.0],
+                    [-5.0, -5.0],
+                    [62.5, 65.0],
+                    [67.5, 70.0],
+                ],
+            )
+            np.testing.assert_allclose(
+                observed[:, (0, 3)],
+                np.concatenate((sequence[0][:, (0, 3)], sequence[0][:, (0, 3)])),
+            )
+            self.assertEqual([True, False, False, True, False, False], model.hidden_was_none)
+            if train:
+                self.assertEqual([False, True, False, False, True, False], model.input_has_grad)
+                self.assertEqual([None, True, False, None, True, False], model.hidden_has_grad)
+
+    def test_residual_previous_torque_normalization_uses_residual_target(self):
         import numpy as np
 
         from anchor_bench.training.data import TrainingMapping
@@ -391,6 +482,7 @@ class TrainingTensorTests(unittest.TestCase):
         from anchor_bench.training.trainer import (
             _load_sequences,
             _normalization_stats,
+            _previous_torque_feedback,
             _runtime_metadata,
         )
 
@@ -408,7 +500,10 @@ class TrainingTensorTests(unittest.TestCase):
                 metadata={},
             )
             metadata = _runtime_metadata(job, stats)
+            feedback = _previous_torque_feedback(job, stats)
 
+        self.assertIsNotNone(feedback)
+        self.assertEqual(slice(2, 3), feedback.input_slice)
         self.assertEqual(3, metadata["schema_version"])
         self.assertEqual(1.0, metadata["sample_dt_s"])
         self.assertEqual("miso", metadata["training_topology"])
@@ -416,6 +511,10 @@ class TrainingTensorTests(unittest.TestCase):
         self.assertEqual(1, metadata["output_size"])
         self.assertEqual(2, len(metadata["normalization"]["inputs"]["mean"]["position"]))
         self.assertIsInstance(metadata["normalization"]["inputs"]["mean"]["previous_torque"], float)
+        self.assertEqual(
+            "previous_raw_network_output_pre_clamp",
+            metadata["previous_torque_derivation"]["source"],
+        )
         self.assertEqual(
             "previous_raw_network_output_pre_clamp",
             metadata["previous_torque_derivation"]["runtime_source"],

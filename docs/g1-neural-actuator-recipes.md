@@ -12,10 +12,11 @@ small non-weight metadata under `inputs/actuator_models/g1/`.
 ```
 
 For the four right-arm joints this is a 24-input recurrent model. The actuator
-YAML disables solver PD, so the network predicts total torque. The current
-trainer does not generate this enriched feature set. Keep it as an experimental
-design note until those signals are represented in the canonical SAGE-to-training
-mapping; do not infer the feature contract from checkpoints or statistics alone.
+YAML disables solver PD, so the network predicts total torque. The trainer
+supports all six feature blocks. `previous_torque` is the prior raw,
+denormalized network output before clamping; it starts at physical zero for each
+episode/mapping and is rolled autoregressively during training and validation.
+Shifted targets define only its normalization statistics.
 
 ## Arm Hybrid Residual GRU
 

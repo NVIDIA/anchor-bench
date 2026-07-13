@@ -293,7 +293,7 @@ def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConf
     if "dynamic_bias" in resolved.input_columns:
         notes.append("dynamic_bias is derived from recorded state with Anchor's upstream-Newton MuJoCo adapter")
     if "previous_torque" in resolved.input_columns:
-        notes.append("previous_torque is the preceding final target and resets at every episode and mapping")
+        notes.append("previous_torque is the prior raw network output and resets at every episode and mapping")
     return CommandPlan(
         workflow="train-actuator",
         robot=resolved.robot,

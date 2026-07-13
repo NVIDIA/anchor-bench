@@ -105,8 +105,10 @@ Use `--model gru` for full-torque GRU prediction from
 `[position, position_error, velocity]`. Use `--model hybrid_residual`
 when the native PD/friction actuator remains active and the GRU should
 learn residual torque. `dynamic_bias` derives MuJoCo `qfrc_bias` from the
-recorded state without stepping. `previous_torque` is the previous final
-training target, initialized to zero for every episode and mapping. The single PD
+recorded state without stepping. `previous_torque` is the previous raw,
+denormalized network output before clamping, initialized to physical zero for
+every episode and mapping. Training and validation roll it autoregressively;
+shifted targets are used only for its normalization statistics. The single PD
 baseline follows `input_joints` when `solver_pd` is enabled and
 `output_joints` for residual-only models; friction always follows `output_joints`.
 Shared mappings must have identical values by model slot.
