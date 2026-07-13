@@ -25,19 +25,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          cache: false
 
       - name: Install Hugo
         run: go install github.com/gohugoio/hugo@v0.147.9
 
       - name: Setup Pages
+        id: pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Build site
+        env:
+          HUGO_BASEURL: ${{ steps.pages.outputs.base_url }}
         run: |
           cd website
-          hugo --minify --gc
+          hugo --minify --gc --baseURL "$HUGO_BASEURL"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4

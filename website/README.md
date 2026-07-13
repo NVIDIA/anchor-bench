@@ -1,7 +1,10 @@
 # Anchor Bench website
 
 The public site for Anchor Bench, built with [Hugo](https://gohugo.io/) and
-deployed to GitHub Pages at **https://nvidia-dev.github.io/anchor-bench/**.
+deployed to GitHub Pages. The live URL is shown under **Settings → Pages** and in
+the deploy workflow's output. Public repos publish at
+`https://<owner>.github.io/anchor-bench/`; private/internal repos publish at a
+randomized `https://<random>.pages.github.io/` domain instead.
 
 ## Structure
 
@@ -109,16 +112,23 @@ One-time repository setup:
 
 After that, every push to `main` (or the `ggallagher/github-pages` branch) builds
 and deploys automatically. You can also trigger it manually from the
-**Actions** tab (the workflow supports `workflow_dispatch`). The published URL
-is shown in the workflow's `deploy` step and at
-https://nvidia-dev.github.io/anchor-bench/.
+**Actions** tab (the workflow supports `workflow_dispatch`). The published URL is
+shown in the workflow's `deploy` step.
 
-### Notes on the base URL
+### How the base URL is handled
 
-`baseURL` in `hugo.toml` is set to the project Pages URL
-(`https://nvidia-dev.github.io/anchor-bench/`). If the repository is ever renamed
-or moved to a user/org root or a custom domain, update `baseURL` accordingly so
-asset and page links resolve correctly.
+Page and asset links depend on where the site is served (a subpath like
+`/anchor-bench/` for project Pages, or the root `/` for a `*.pages.github.io`
+domain). To make this work everywhere, the workflow reads the real deployment URL
+from `actions/configure-pages` and passes it to Hugo:
+
+```yaml
+hugo --minify --gc --baseURL "${{ steps.pages.outputs.base_url }}"
+```
+
+So you never have to hardcode the production URL. The `baseURL` in `hugo.toml` is
+only a fallback for plain local `hugo` builds; `hugo server` overrides it
+automatically for local preview.
 
 ## Themes
 
