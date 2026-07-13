@@ -1,0 +1,8 @@
+{{ define "main" }}
+<article class="prose">
+  <nav class="breadcrumb"><a href="{{ (.Site.GetPage "/documentation").RelPermalink }}">← Documentation</a></nav>
+  <div class="prose__content">
+    {{ .Content }}
+  </div>
+</article>
+{{ end }}

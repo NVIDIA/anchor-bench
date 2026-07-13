@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="{{ .Site.LanguageCode }}">
+  <head>
+    {{ partial "head.html" . }}
+  </head>
+  <body>
+    {{ partial "nav.html" . }}
+    <main class="container">
+      <section class="page-head page-head--center">
+        <span class="eyebrow eyebrow--muted">404</span>
+        <h1>Page not found</h1>
+        <p class="lead">The page you requested does not exist or may have moved.</p>
+        <a class="button button--primary" href="{{ .Site.Home.RelPermalink }}">Back to home</a>
+      </section>
+    </main>
+    {{ partial "footer.html" . }}
+  </body>
+</html>

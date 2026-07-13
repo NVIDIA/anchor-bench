@@ -1,0 +1,28 @@
+{{ define "main" }}
+<section class="page-head">
+  <span class="eyebrow eyebrow--muted">Blog</span>
+  <h1>Updates &amp; notes</h1>
+  <p class="lead">Release notes, workflow guides, and benchmark results from the Anchor Bench team.</p>
+</section>
+
+{{ $posts := .Pages.ByDate.Reverse }}
+{{ if $posts }}
+  <section class="section">
+    <div class="section__heading"><h2>Latest post</h2></div>
+    {{ partial "blog-card.html" (dict "page" (index $posts 0) "featured" true) }}
+  </section>
+
+  <section class="section">
+    <div class="section__heading"><h2>All posts</h2></div>
+    <div class="blog-list">
+      {{ range $posts }}
+        {{ partial "blog-card.html" (dict "page" . "featured" false) }}
+      {{ end }}
+    </div>
+  </section>
+{{ else }}
+  <section class="section">
+    <p class="muted">No blog posts yet.</p>
+  </section>
+{{ end }}
+{{ end }}

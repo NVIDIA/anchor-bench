@@ -1,0 +1,37 @@
+<section class="section about" id="about">
+  <div class="section__heading">
+    <div>
+      <span class="eyebrow eyebrow--muted">About</span>
+      <h2>What is Anchor Bench?</h2>
+    </div>
+  </div>
+  <p class="lead">
+    Anchor Bench is a focused system identification (SysID) and sim-to-real benchmark package for robot
+    actuator models on the Isaac Sim, Newton, and Isaac Lab versions pinned in
+    <code>versions/compatibility.toml</code>. It provides robot configs, data loaders, SysID and Newton
+    benchmark command builders, and analysis helpers around the actuator-identification workflow.
+  </p>
+  <div class="feature-grid">
+    <article class="feature-card feature-card--indigo">
+      <span class="feature-card__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5"/><path d="M12 22V12"/></svg>
+      </span>
+      <h3>Declarative robots</h3>
+      <p>Add and configure robot support entirely under <code>configs/robots/</code> — no code changes required.</p>
+    </article>
+    <article class="feature-card feature-card--teal">
+      <span class="feature-card__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="4" height="4"/><rect x="9" y="11" width="4" height="4"/><rect x="15" y="11" width="4" height="4"/><rect x="6" y="7" width="4" height="4"/><rect x="12" y="7" width="4" height="4"/><path d="M2 19h20"/></svg>
+      </span>
+      <h3>Docker-first workflow</h3>
+      <p>A pinned Isaac Lab image keeps every SysID and benchmark run reproducible across machines.</p>
+    </article>
+    <article class="feature-card feature-card--pink">
+      <span class="feature-card__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>
+      </span>
+      <h3>Analysis pipelines</h3>
+      <p>SysID, benchmark, and analysis stages emit SAGE-compatible outputs ready for comparison.</p>
+    </article>
+  </div>
+</section>

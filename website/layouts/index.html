@@ -1,0 +1,48 @@
+{{ define "main" }}
+<section class="hero">
+  <div class="hero__glow" aria-hidden="true"></div>
+  <div class="hero__inner">
+    <span class="eyebrow">Sim-to-real actuator benchmarking</span>
+    <h1 class="hero__title">Anchor&nbsp;Bench</h1>
+    <p class="hero__tagline">{{ .Site.Params.description }}</p>
+    <div class="hero__actions">
+      <a class="button button--primary" href="{{ (.Site.GetPage "/documentation").RelPermalink }}">Explore documentation</a>
+      <a class="button button--ghost" href="{{ (.Site.GetPage "/blog").RelPermalink }}">Read the blog</a>
+    </div>
+    <div class="hero__stack" aria-label="Supported platforms">
+      <span class="chip">Isaac Sim</span>
+      <span class="chip">Newton</span>
+      <span class="chip">Isaac Lab</span>
+    </div>
+  </div>
+</section>
+
+{{ partial "about.html" . }}
+
+<section class="section" id="latest-blog">
+  <div class="section__heading">
+    <div>
+      <span class="eyebrow eyebrow--muted">From the blog</span>
+      <h2>Latest update</h2>
+    </div>
+    <a class="section__link" href="{{ (.Site.GetPage "/blog").RelPermalink }}">View all posts →</a>
+  </div>
+  {{ $posts := where .Site.RegularPages "Section" "blog" }}
+  {{ if $posts }}
+    {{ partial "blog-card.html" (dict "page" (index $posts.ByDate.Reverse 0) "featured" true) }}
+  {{ else }}
+    <p class="muted">No blog posts yet.</p>
+  {{ end }}
+</section>
+
+<section class="section" id="documentation">
+  <div class="cta-card">
+    <div class="cta-card__text">
+      <span class="eyebrow eyebrow--light">Documentation</span>
+      <h2>Everything you need to run the benchmark</h2>
+      <p>Guides for the CLI, repo layout, artifacts, robot plugins, and end-to-end workflows.</p>
+    </div>
+    <a class="button button--light" href="{{ (.Site.GetPage "/documentation").RelPermalink }}">Browse documentation →</a>
+  </div>
+</section>
+{{ end }}

@@ -1,0 +1,42 @@
+baseURL = "https://nvidia-dev.github.io/anchor-bench/"
+languageCode = "en-us"
+title = "Anchor Bench"
+
+disableKinds = ["taxonomy"]
+
+[taxonomies]
+
+[params]
+  description = "System identification and sim-to-real benchmark for robot actuator models"
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.highlight]
+    noClasses = false
+
+[[cascade]]
+  _target = { path = "/blog/*", kind = "page" }
+  narrow = true
+
+[[cascade]]
+  _target = { path = "/docs/**" }
+  narrow = true
+
+[module]
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "data"
+    target = "data"
+  [[module.mounts]]
+    source = "../docs"
+    target = "content/docs"

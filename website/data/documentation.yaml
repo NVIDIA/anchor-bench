@@ -1,0 +1,18 @@
+- title: CLI commands
+  path: docs/cli/
+  description: Full anchor-bench command reference and container workflow.
+- title: Repo structure
+  path: docs/repo-structure/
+  description: What belongs in configs, assets, inputs, outputs, and third_party.
+- title: Artifacts
+  path: docs/artifacts/
+  description: Large files, SO-101 USD handling, and generated output locations.
+- title: Host-safe end-to-end test
+  path: docs/end-to-end-test/
+  description: SysID to benchmark to analysis contract coverage.
+- title: Robot plugins
+  path: docs/robot-plugin/
+  description: Files required to add a new robot.
+- title: G1 neural actuator recipes
+  path: docs/g1-neural-actuator-recipes/
+  description: Supported and experimental G1 training paths.

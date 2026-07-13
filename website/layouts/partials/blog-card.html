@@ -1,0 +1,13 @@
+<article class="blog-card{{ if .featured }} blog-card--featured{{ end }}">
+  <div class="blog-card__meta">
+    <time datetime="{{ .page.Date.Format "2006-01-02" }}">{{ .page.Date.Format "January 2, 2006" }}</time>
+    {{ if .featured }}<span class="badge">Latest</span>{{ end }}
+  </div>
+  <h3 class="blog-card__title"><a href="{{ .page.RelPermalink }}">{{ .page.Title }}</a></h3>
+  {{ if .featured }}
+    <div class="blog-card__excerpt">{{ .page.Summary }}</div>
+  {{ else }}
+    <p class="blog-card__summary">{{ .page.Summary | plainify | truncate 180 }}</p>
+  {{ end }}
+  <a class="blog-card__link" href="{{ .page.RelPermalink }}">Read more <span aria-hidden="true">→</span></a>
+</article>

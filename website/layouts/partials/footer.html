@@ -1,0 +1,15 @@
+<footer class="site-footer">
+  <div class="container site-footer__inner">
+    <div class="site-footer__brand">
+      <span class="site-logo__mark" aria-hidden="true"></span>
+      <span>Anchor Bench</span>
+    </div>
+    <p class="site-footer__note">Sim-to-real actuator benchmarking on Isaac Sim, Newton, and Isaac Lab.</p>
+    <nav class="site-footer__nav" aria-label="Footer">
+      <a href="{{ .Site.Home.RelPermalink }}">Home</a>
+      <a href="{{ (.Site.GetPage "/blog").RelPermalink }}">Blog</a>
+      <a href="{{ (.Site.GetPage "/documentation").RelPermalink }}">Documentation</a>
+    </nav>
+  </div>
+</footer>
+<script src="{{ "js/theme.js" | relLangURL }}" defer></script>

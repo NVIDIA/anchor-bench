@@ -1,0 +1,24 @@
+{{ define "main" }}
+<section class="page-head">
+  <span class="eyebrow eyebrow--muted">Documentation</span>
+  <h1>Guides &amp; reference</h1>
+  <p class="lead">Reference guides for running Anchor Bench, extending robots, and managing artifacts.</p>
+</section>
+
+<section class="section">
+  <ol class="toc-grid" aria-label="Table of contents">
+    {{ range $i, $d := .Site.Data.documentation }}
+      <li>
+        <a class="toc-card" href="{{ $d.path | relLangURL }}">
+          <span class="toc-card__num">{{ printf "%02d" (add $i 1) }}</span>
+          <span class="toc-card__body">
+            <span class="toc-card__title">{{ $d.title }}</span>
+            <span class="toc-card__desc">{{ $d.description }}</span>
+          </span>
+          <span class="toc-card__arrow" aria-hidden="true">→</span>
+        </a>
+      </li>
+    {{ end }}
+  </ol>
+</section>
+{{ end }}

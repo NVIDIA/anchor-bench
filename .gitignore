@@ -1,3 +1,5 @@
+website/public/
+.hugo_build.lock
 
 .venv/
 __pycache__/

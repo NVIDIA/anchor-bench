@@ -1,0 +1,12 @@
+{{ define "main" }}
+<article class="prose">
+  <nav class="breadcrumb"><a href="{{ (.Site.GetPage "/blog").RelPermalink }}">← Back to blog</a></nav>
+  <header class="prose__header">
+    <time datetime="{{ .Date.Format "2006-01-02" }}">{{ .Date.Format "January 2, 2006" }}</time>
+    <h1>{{ .Title }}</h1>
+  </header>
+  <div class="prose__content">
+    {{ .Content }}
+  </div>
+</article>
+{{ end }}
