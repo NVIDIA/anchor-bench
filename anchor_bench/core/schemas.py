@@ -197,6 +197,9 @@ class TrainActuatorRunConfig:
     n_streams: int | None = None
     noise_std: float | None = None
     seed: int | None = None
+    hidden_size: int | None = None
+    num_layers: int | None = None
+    dropout: float | None = None
 
 
 @dataclass(frozen=True)

@@ -575,6 +575,112 @@ class TrainingRunnerTests(unittest.TestCase):
         self.assertEqual(["position", "position_error", "velocity"], resolved.input_columns)
         self.assertEqual("torque", resolved.target_column)
 
+    def test_benchmark_architecture_defaults_and_cli_overrides(self):
+        from types import SimpleNamespace
+
+        from anchor_bench.core.schemas import TrainActuatorRunConfig
+        from anchor_bench.training.runner import (
+            build_resolved_train_actuator_command,
+            resolve_train_actuator_run_config,
+        )
+        from anchor_bench.training.trainer import _default_hparams
+
+        defaults = _default_hparams(
+            SimpleNamespace(hidden_size=None, num_layers=None, dropout=None)
+        )
+        self.assertEqual(192, defaults.hidden_size)
+        self.assertEqual(2, defaults.num_layers)
+        self.assertEqual(0.225, defaults.dropout)
+        single_layer = _default_hparams(
+            SimpleNamespace(hidden_size=None, num_layers=1, dropout=None)
+        )
+        self.assertEqual(0.0, single_layer.dropout)
+
+        resolved = resolve_train_actuator_run_config(
+            TrainActuatorRunConfig(
+                robot="g1",
+                hidden_size=96,
+                num_layers=3,
+                dropout=0.1,
+                dry_run=True,
+            )
+        )
+        self.assertEqual(96, resolved.hidden_size)
+        self.assertEqual(3, resolved.num_layers)
+        self.assertEqual(0.1, resolved.dropout)
+        command = build_resolved_train_actuator_command(resolved).command
+        self.assertIn("--hidden-size", command)
+        self.assertIn("--num-layers", command)
+        self.assertIn("--dropout", command)
+
+        for values, message in (
+            ({"hidden_size": 0}, "hidden_size must be >= 1"),
+            ({"num_layers": 0}, "num_layers must be >= 1"),
+            ({"dropout": 1.0}, "dropout must be >= 0 and < 1"),
+            ({"num_layers": 1, "dropout": 0.1}, "dropout must be zero when num_layers is 1"),
+        ):
+            with self.subTest(values=values), self.assertRaisesRegex(ValueError, message):
+                resolve_train_actuator_run_config(
+                    TrainActuatorRunConfig(robot="g1", dry_run=True, **values)
+                )
+
+    def test_optuna_keeps_explicit_architecture_fixed(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from anchor_bench.training.trainer import _select_hparams
+
+        suggested: list[str] = []
+
+        class Trial:
+            def __init__(self):
+                self.params = {}
+
+            def suggest_categorical(self, name, values):
+                suggested.append(name)
+                self.params[name] = values[0]
+                return values[0]
+
+            def suggest_int(self, name, low, _high):
+                suggested.append(name)
+                self.params[name] = low
+                return low
+
+            def suggest_float(self, name, low, _high, **_kwargs):
+                suggested.append(name)
+                self.params[name] = low
+                return low
+
+        class Study:
+            def optimize(self, objective, n_trials):
+                self.assertions = n_trials
+                trial = Trial()
+                objective(trial)
+                self.best_params = trial.params
+
+        study = Study()
+        optuna = SimpleNamespace(create_study=lambda **_kwargs: study)
+        job = SimpleNamespace(
+            skip_optuna=False,
+            trials=1,
+            trial_epochs=1,
+            hidden_size=192,
+            num_layers=2,
+            dropout=0.225,
+        )
+        with (
+            patch.dict("sys.modules", {"optuna": optuna}),
+            patch("anchor_bench.training.trainer._fit_once", return_value=(0.0, None)),
+        ):
+            selected = _select_hparams(job, (), (), {})
+
+        self.assertEqual(192, selected.hidden_size)
+        self.assertEqual(2, selected.num_layers)
+        self.assertEqual(0.225, selected.dropout)
+        self.assertTrue(
+            {"hidden_size", "num_layers", "dropout"}.isdisjoint(suggested)
+        )
+
     def test_training_config_requires_joint_selection(self):
         from anchor_bench.core.schemas import TrainActuatorRunConfig
         from anchor_bench.training.runner import resolve_train_actuator_run_config
@@ -733,6 +839,9 @@ class TrainingRunnerTests(unittest.TestCase):
                     skip_optuna=True,
                     final_epochs=1,
                     n_streams=1,
+                    hidden_size=7,
+                    num_layers=2,
+                    dropout=0.1,
                     seed=5,
                     dry_run=False,
                 )
@@ -749,6 +858,10 @@ class TrainingRunnerTests(unittest.TestCase):
             stats = json.loads(stats_path.read_text(encoding="utf-8"))
             self.assertEqual("gru", stats["model"])
             self.assertEqual(resolved.artifact_name, stats["artifact_name"])
+            hyperparameters = stats["metrics"]["hyperparameters"]
+            self.assertEqual(7, hyperparameters["hidden_size"])
+            self.assertEqual(2, hyperparameters["num_layers"])
+            self.assertEqual(0.1, hyperparameters["dropout"])
             self.assertIn("network", plan.metadata["artifacts"])
             import torch
             extra_files = {"metadata.json": ""}

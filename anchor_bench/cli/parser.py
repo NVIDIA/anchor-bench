@@ -40,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--final-epochs", type=int)
     train.add_argument("--n-streams", type=int)
     train.add_argument("--noise-std", type=float)
+    train.add_argument("--hidden-size", type=int)
+    train.add_argument("--num-layers", type=int)
+    train.add_argument("--dropout", type=float)
     train.add_argument("--seed", type=int)
     train.add_argument("--dry-run", action="store_true")
 

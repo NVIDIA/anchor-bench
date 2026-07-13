@@ -51,6 +51,9 @@ class ResolvedTrainActuatorRunConfig:
     input_columns: list[str]
     target_column: str
     config_sources: dict[str, str]
+    hidden_size: int | None = None
+    num_layers: int | None = None
+    dropout: float | None = None
 
 
 def _positive_int(name: str, value: Any) -> int:
@@ -64,6 +67,23 @@ def _nonnegative_float(name: str, value: Any) -> float:
     resolved = float(value)
     if resolved < 0.0:
         raise ValueError(f"{name} must be >= 0")
+    return resolved
+
+
+def _optional_positive_int(name: str, value: Any | None) -> int | None:
+    """Validate an optional positive integer CLI override."""
+
+    return None if value is None else _positive_int(name, value)
+
+
+def _optional_dropout(value: Any | None) -> float | None:
+    """Validate an optional GRU dropout probability."""
+
+    if value is None:
+        return None
+    resolved = float(value)
+    if not 0.0 <= resolved < 1.0:
+        raise ValueError("dropout must be >= 0 and < 1")
     return resolved
 
 
@@ -205,6 +225,11 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
     artifact_name, mappings, mapping_source = _resolve_training_mappings(bundle, config)
     sources["joint_selection"] = mapping_source
     input_columns = parse_gru_columns(select("input_columns", config.input_columns, DEFAULT_INPUT_COLUMNS))
+    hidden_size = _optional_positive_int("hidden_size", config.hidden_size)
+    num_layers = _optional_positive_int("num_layers", config.num_layers)
+    dropout = _optional_dropout(config.dropout)
+    if num_layers == 1 and dropout not in (None, 0.0):
+        raise ValueError("dropout must be zero when num_layers is 1")
 
     return ResolvedTrainActuatorRunConfig(
         robot=config.robot,
@@ -220,6 +245,9 @@ def resolve_train_actuator_run_config(config: TrainActuatorRunConfig) -> Resolve
         final_epochs=_positive_int("final_epochs", select("final_epochs", config.final_epochs, 50)),
         n_streams=_positive_int("n_streams", select("n_streams", config.n_streams, 4)),
         noise_std=_nonnegative_float("noise_std", select("noise_std", config.noise_std, 0.0)),
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        dropout=dropout,
         seed=int(select("seed", config.seed, 42)),
         input_columns=input_columns,
         target_column=str(select("target_column", config.target_column, DEFAULT_TARGET_COLUMN)),
@@ -258,6 +286,12 @@ def _command_from_resolved(resolved: ResolvedTrainActuatorRunConfig) -> list[str
         "--target-column",
         resolved.target_column,
     ]
+    if resolved.hidden_size is not None:
+        command.extend(("--hidden-size", str(resolved.hidden_size)))
+    if resolved.num_layers is not None:
+        command.extend(("--num-layers", str(resolved.num_layers)))
+    if resolved.dropout is not None:
+        command.extend(("--dropout", str(resolved.dropout)))
     if len(resolved.mappings) == 1:
         mapping = resolved.mappings[0]
         command.extend(("--input-joints", ",".join(mapping.input_joints)))
@@ -470,6 +504,9 @@ def run_resolved_train_actuator(resolved: ResolvedTrainActuatorRunConfig) -> Com
             skip_optuna=resolved.skip_optuna,
             n_streams=resolved.n_streams,
             noise_std=resolved.noise_std,
+            hidden_size=resolved.hidden_size,
+            num_layers=resolved.num_layers,
+            dropout=resolved.dropout,
             physics_baselines=physics_baselines,
             dynamic_bias_provider=dynamic_bias_provider,
             metadata=metadata,

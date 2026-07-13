@@ -96,6 +96,12 @@ class CliDryRunTests(unittest.TestCase):
                 "--target-column",
                 "torque",
                 "--skip-optuna",
+                "--hidden-size",
+                "96",
+                "--num-layers",
+                "3",
+                "--dropout",
+                "0.1",
                 "--dry-run",
             )
             self.assertIn("workflow: train-actuator", result.stdout)
@@ -104,6 +110,12 @@ class CliDryRunTests(unittest.TestCase):
             self.assertIn("--input-columns", result.stdout)
             self.assertIn("position,position_error,velocity", result.stdout)
             self.assertIn("--target-column", result.stdout)
+            self.assertIn("--hidden-size", result.stdout)
+            self.assertIn("'96'", result.stdout)
+            self.assertIn("--num-layers", result.stdout)
+            self.assertIn("'3'", result.stdout)
+            self.assertIn("--dropout", result.stdout)
+            self.assertIn("'0.1'", result.stdout)
             self.assertIn("outputs/training", result.stdout)
 
             result = run_cli(

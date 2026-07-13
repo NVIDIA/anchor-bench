@@ -94,6 +94,9 @@ def _handle_train(args: argparse.Namespace) -> int:
         final_epochs=args.final_epochs,
         n_streams=args.n_streams,
         noise_std=args.noise_std,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
         seed=args.seed,
     )
     resolved = resolve_train_actuator_run_config(config)

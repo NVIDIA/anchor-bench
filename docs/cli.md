@@ -73,6 +73,9 @@ anchor-bench train-actuator \
   --output outputs/training/so101/rotation \
   --input-columns position,position_error,velocity \
   --target-column torque \
+  --hidden-size 192 \
+  --num-layers 2 \
+  --dropout 0.225 \
   --skip-optuna \
   --dry-run
 ```
@@ -80,6 +83,11 @@ anchor-bench train-actuator \
 Training consumes SAGE motion folders. Command position, measured position,
 velocity, torque, and `position_error` are aligned directly in memory.
 Recorded episodes are split before joint mappings are expanded.
+
+Without Optuna, the default GRU architecture is 192 hidden units, two layers,
+and 0.225 dropout. `--hidden-size`, `--num-layers`, and `--dropout`
+override those values and also hold those dimensions fixed during Optuna.
+Dropout must be zero when explicitly selecting a one-layer GRU.
 
 Use `training.mappings` when one artifact shares weights across more than one
 physical application:

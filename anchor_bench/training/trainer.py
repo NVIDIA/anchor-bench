@@ -32,9 +32,9 @@ class PhysicsBaselines:
 
 @dataclass(frozen=True)
 class TrainingHyperParameters:
-    hidden_size: int = 64
-    num_layers: int = 1
-    dropout: float = 0.0
+    hidden_size: int = 192
+    num_layers: int = 2
+    dropout: float = 0.225
     learning_rate: float = 1.0e-3
     weight_decay: float = 0.0
     huber_delta: float = 1.0
@@ -75,6 +75,9 @@ class TrainingJob:
     physics_baselines: PhysicsBaselines | None = None
     dynamic_bias_provider: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    hidden_size: int | None = None
+    num_layers: int | None = None
+    dropout: float | None = None
 
 
 @dataclass(frozen=True)
@@ -661,8 +664,17 @@ def _fit_once(
     )
 
 
-def _default_hparams() -> TrainingHyperParameters:
-    return TrainingHyperParameters()
+def _default_hparams(job: TrainingJob) -> TrainingHyperParameters:
+    """Apply fixed architecture overrides to the benchmark defaults."""
+
+    defaults = TrainingHyperParameters()
+    num_layers = job.num_layers if job.num_layers is not None else defaults.num_layers
+    dropout = job.dropout if job.dropout is not None else defaults.dropout
+    return TrainingHyperParameters(
+        hidden_size=job.hidden_size if job.hidden_size is not None else defaults.hidden_size,
+        num_layers=num_layers,
+        dropout=dropout if num_layers > 1 else 0.0,
+    )
 
 
 def _select_hparams(
@@ -672,17 +684,34 @@ def _select_hparams(
     stats: dict[str, Any],
 ) -> TrainingHyperParameters:
     if job.skip_optuna:
-        return _default_hparams()
+        return _default_hparams(job)
     try:
         import optuna
     except Exception as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("optuna is required unless --skip-optuna is passed") from exc
 
     def objective(trial):
+        hidden_size = (
+            job.hidden_size
+            if job.hidden_size is not None
+            else trial.suggest_categorical("hidden_size", [32, 64, 128, 256])
+        )
+        num_layers = (
+            job.num_layers
+            if job.num_layers is not None
+            else trial.suggest_int("num_layers", 1, 3)
+        )
+        dropout = (
+            0.0
+            if num_layers == 1
+            else job.dropout
+            if job.dropout is not None
+            else trial.suggest_float("dropout", 0.0, 0.3)
+        )
         hparams = TrainingHyperParameters(
-            hidden_size=trial.suggest_categorical("hidden_size", [32, 64, 128, 256]),
-            num_layers=trial.suggest_int("num_layers", 1, 3),
-            dropout=trial.suggest_float("dropout", 0.0, 0.3),
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
             learning_rate=trial.suggest_float("learning_rate", 1.0e-4, 5.0e-3, log=True),
             weight_decay=trial.suggest_float("weight_decay", 1.0e-7, 1.0e-3, log=True),
             huber_delta=trial.suggest_float("huber_delta", 0.25, 2.0),
@@ -700,7 +729,14 @@ def _select_hparams(
 
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=job.trials)
-    return TrainingHyperParameters(**study.best_params)
+    selected = dict(study.best_params)
+    for name in ("hidden_size", "num_layers", "dropout"):
+        override = getattr(job, name)
+        if override is not None:
+            selected[name] = override
+    if selected["num_layers"] == 1:
+        selected["dropout"] = 0.0
+    return TrainingHyperParameters(**selected)
 
 
 def train_stateful_gru(job: TrainingJob) -> TrainingArtifacts:
