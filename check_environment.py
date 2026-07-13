@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"required python: {versions.python_version}")
     print(f"current python: {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     print(f"required isaac sim: {versions.isaac_sim_version}")
-    print(f"required newton: {versions.newton_version}")
+    print(f"required newton: {versions.newton_version} ({versions.newton_tag})")
     print(f"required isaac lab: {versions.isaac_lab_branch}@{versions.isaac_lab_commit}")
 
     errors: list[str] = []

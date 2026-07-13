@@ -14,7 +14,7 @@ class ExternalVersions:
     newton_version: str
     newton_package: str
     newton_repo: str
-    newton_commit: str
+    newton_tag: str
     isaac_lab_repo: str
     isaac_lab_branch: str
     isaac_lab_commit: str
@@ -29,7 +29,7 @@ def load_external_versions() -> ExternalVersions:
         newton_version=data["newton"]["version"],
         newton_package=data["newton"]["package"],
         newton_repo=data["newton"]["repo"],
-        newton_commit=data["newton"]["commit"],
+        newton_tag=data["newton"]["tag"],
         isaac_lab_repo=data["isaac_lab"]["repo"],
         isaac_lab_branch=data["isaac_lab"]["branch"],
         isaac_lab_commit=data["isaac_lab"]["commit"],

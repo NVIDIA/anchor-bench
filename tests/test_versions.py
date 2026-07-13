@@ -19,7 +19,7 @@ class VersionManifestTests(unittest.TestCase):
         self.assertEqual(versions.newton_version, "1.4.0rc1")
         self.assertEqual(versions.newton_package, "newton")
         self.assertEqual(versions.newton_repo, "https://github.com/newton-physics/newton.git")
-        self.assertEqual(versions.newton_commit, "c1c508ce9304aca6ac67e39a1744c8740c1d9d2a")
+        self.assertEqual(versions.newton_tag, "v1.4.0rc1")
         # Isaac Lab tracks a branch + exact commit, not a semver, so keep these exact.
         self.assertEqual(versions.isaac_lab_branch, "develop")
         self.assertEqual(versions.isaac_lab_commit, "5f2db9902baa724427b7aa654835aa559fce64e8")

@@ -45,7 +45,7 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("--target kitless", result.stdout)
         self.assertIn("anchor-bench:kitless", result.stdout)
         self.assertIn("--build-arg NEWTON_REPO=https://github.com/newton-physics/newton.git", result.stdout)
-        self.assertIn("--build-arg NEWTON_REF=c1c508ce9304aca6ac67e39a1744c8740c1d9d2a", result.stdout)
+        self.assertIn("--build-arg NEWTON_TAG=v1.4.0rc1", result.stdout)
         self.assertIn("--build-arg ISAACSIM_VERSION=6.0.0.0", result.stdout)
         self.assertIn(
             "--build-arg ISAACLAB_REF=5f2db9902baa724427b7aa654835aa559fce64e8",
@@ -196,11 +196,11 @@ class DockerSetupTests(unittest.TestCase):
         self.assertIn("--editable source/isaaclab", dockerfile_text)
         self.assertIn("source/isaaclab_newton", dockerfile_text)
         self.assertIn(
-            "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_REF}",
+            "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_TAG}",
             dockerfile_text,
         )
         self.assertIn("https://github.com/newton-physics/newton.git", dockerfile_text)
-        self.assertIn("c1c508ce9304aca6ac67e39a1744c8740c1d9d2a", dockerfile_text)
+        self.assertIn("ARG NEWTON_TAG=v1.4.0rc1", dockerfile_text)
         self.assertIn("ACCEPT_EULA=Y", dockerfile_text)
         self.assertIn("OMNI_KIT_ACCEPT_EULA=YES", dockerfile_text)
         self.assertIn("libxt6", dockerfile_text)
@@ -209,7 +209,7 @@ class DockerSetupTests(unittest.TestCase):
 
         compose_text = compose.read_text(encoding="utf-8")
         self.assertIn("NEWTON_REPO: https://github.com/newton-physics/newton.git", compose_text)
-        self.assertIn("NEWTON_REF: c1c508ce9304aca6ac67e39a1744c8740c1d9d2a", compose_text)
+        self.assertIn("NEWTON_TAG: v1.4.0rc1", compose_text)
         self.assertIn("/workspace/anchor-bench", compose_text)
         self.assertIn("ACCEPT_EULA: Y", compose_text)
         self.assertIn("OMNI_KIT_ACCEPT_EULA: YES", compose_text)

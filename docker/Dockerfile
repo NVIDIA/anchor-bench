@@ -6,7 +6,7 @@ FROM python:${PYTHON_VERSION}-slim AS kitless
 
 ARG NEWTON_PACKAGE=newton
 ARG NEWTON_REPO=https://github.com/newton-physics/newton.git
-ARG NEWTON_REF=c1c508ce9304aca6ac67e39a1744c8740c1d9d2a
+ARG NEWTON_TAG=v1.4.0rc1
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -33,7 +33,7 @@ COPY versions ./versions
 RUN python -m pip install --upgrade pip setuptools wheel \
     && python -m pip install -e ".[dev]" \
     && python -m pip install \
-         "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_REF}" \
+         "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_TAG}" \
          cmaes matplotlib optuna pandas pyarrow "huggingface_hub>=0.34"
 
 COPY docker/entrypoint.sh /usr/local/bin/anchor-bench-entrypoint
@@ -66,7 +66,7 @@ FROM kitless AS full
 
 ARG NEWTON_PACKAGE=newton
 ARG NEWTON_REPO=https://github.com/newton-physics/newton.git
-ARG NEWTON_REF=c1c508ce9304aca6ac67e39a1744c8740c1d9d2a
+ARG NEWTON_TAG=v1.4.0rc1
 ARG ISAACLAB_REPO=https://github.com/isaac-sim/IsaacLab.git
 ARG ISAACLAB_BRANCH=develop
 ARG ISAACLAB_REF=5f2db9902baa724427b7aa654835aa559fce64e8
@@ -98,7 +98,7 @@ RUN python -m pip install \
       "huggingface_hub>=0.34" \
       matplotlib \
     && python -m pip install --force-reinstall \
-         "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_REF}" \
+         "${NEWTON_PACKAGE} @ git+${NEWTON_REPO}@${NEWTON_TAG}" \
     && git clone --branch "${ISAACLAB_BRANCH}" --single-branch "${ISAACLAB_REPO}" "${ISAACLAB_DIR}" \
     && cd "${ISAACLAB_DIR}" \
     && git fetch origin "${ISAACLAB_REF}" \
@@ -115,7 +115,7 @@ RUN python -m pip install \
          if [ -d "$package" ]; then python -m pip install --no-deps --editable "$package"; fi; \
        done \
     && python -m pip install --force-reinstall \
-         "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_REF}" \
+         "${NEWTON_PACKAGE}[sim] @ git+${NEWTON_REPO}@${NEWTON_TAG}" \
     && python -m pip install --editable /opt/anchor-bench
 
 RUN chown -R anchor:anchor "${ISAACLAB_DIR}" /opt/anchor-bench
