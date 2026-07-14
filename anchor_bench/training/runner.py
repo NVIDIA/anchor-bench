@@ -421,7 +421,7 @@ def build_resolved_train_actuator_command(resolved: ResolvedTrainActuatorRunConf
     if resolved.model == "hybrid_residual":
         notes.append("hybrid_residual trains residual torque after subtracting native PD and friction terms")
     if "dynamic_bias" in resolved.input_columns:
-        notes.append("dynamic_bias is derived from recorded state with Anchor's upstream-Newton MuJoCo adapter")
+        notes.append("dynamic_bias is derived from recorded state with Anchor's batched MuJoCo-Warp evaluator")
     if "previous_torque" in resolved.input_columns:
         notes.append("previous_torque is the prior raw network output and resets at every episode and mapping")
     return CommandPlan(

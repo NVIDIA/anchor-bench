@@ -9,13 +9,14 @@ if TYPE_CHECKING:
     from anchor_bench.robots.registry import RobotBundle
 
 
-def _import_newton_runtime() -> Any:
-    """Import Newton only when dynamic bias is evaluated."""
+def _import_newton_runtime() -> tuple[Any, Any]:
+    """Import Newton and Warp only when dynamic bias is evaluated."""
     try:
         import newton
+        import warp
     except ImportError as exc:  # pragma: no cover - full-runtime dependency
         raise RuntimeError("dynamic_bias training requires Newton 1.4") from exc
-    return newton
+    return newton, warp
 
 
 def _normalized_joint_name(value: str) -> str:
@@ -23,34 +24,38 @@ def _normalized_joint_name(value: str) -> str:
     return str(value).rsplit("/", 1)[-1].removesuffix("_joint")
 
 
-def _evaluate_dynamic_bias(solver: Any, state: Any) -> np.ndarray:
-    """Evaluate bias through the pinned Newton release's MuJoCo bridge."""
-    solver._update_mjc_data(solver.mj_data, solver.model, state)
-    solver._mujoco.mj_forward(solver.mj_model, solver.mj_data)
-    return np.asarray(solver.mj_data.qfrc_bias, dtype=np.float32)
+def _evaluate_dynamic_bias(solver: Any, state: Any, warp: Any) -> np.ndarray:
+    """Evaluate MuJoCo-Warp bias without advancing the solver."""
+    solver._update_mjc_data(solver.mjw_data, solver.model, state)
+    with warp.ScopedDevice(solver.model.device):
+        solver._mujoco_warp.forward(solver.mjw_model, solver.mjw_data)
+    return np.asarray(solver.mjw_data.qfrc_bias.numpy(), dtype=np.float32)
 
 
 class NewtonMuJoCoDynamicBiasProvider:
     """Evaluate Newton MuJoCo dynamic bias without advancing simulation."""
 
-    def __init__(self, bundle: RobotBundle) -> None:
+    def __init__(self, bundle: RobotBundle, *, batch_size: int = 64) -> None:
         """Create a lazy provider for one robot asset."""
+        if isinstance(batch_size, bool) or batch_size < 1:
+            raise ValueError("dynamic-bias batch_size must be >= 1")
         self._bundle = bundle
+        self._batch_size = int(batch_size)
         self._initialized = False
 
     def _initialize(self) -> None:
         """Load one Newton world and allocate reusable state arrays."""
         if self._initialized:
             return
-        newton = _import_newton_runtime()
+        newton, warp = _import_newton_runtime()
         solver_type = newton.solvers.SolverMuJoCo
 
         from anchor_bench.runtime.assets import resolve_runtime_asset
 
         asset = resolve_runtime_asset(self._bundle).resolve(strict=True)
-        builder = newton.ModelBuilder()
-        solver_type.register_custom_attributes(builder)
-        builder.add_usd(
+        template = newton.ModelBuilder()
+        solver_type.register_custom_attributes(template)
+        template.add_usd(
             str(asset),
             floating=not self._bundle.spec.fixed_base,
             collapse_fixed_joints=True,
@@ -58,12 +63,16 @@ class NewtonMuJoCoDynamicBiasProvider:
             load_visual_shapes=False,
             skip_mesh_approximation=True,
         )
-        model = builder.finalize()
-        solver = solver_type(model, use_mujoco_cpu=True, disable_contacts=True)
-        self._newton, self._builder, self._model = newton, builder, model
+        scene = newton.ModelBuilder()
+        scene.replicate(template, self._batch_size)
+        model = scene.finalize()
+        solver = solver_type(model, use_mujoco_cpu=False, disable_contacts=True)
+        self._newton, self._warp, self._builder, self._model = newton, warp, template, model
         self._solver, self._state = solver, model.state()
         self._default_q = np.asarray(model.joint_q.numpy(), dtype=np.float32).copy()
         self._mj_qd_start = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
+        self._coordinates_per_world = int(template.joint_coord_count)
+        self._dofs_per_world = int(template.joint_dof_count)
         self._initialized = True
 
     def _resolve_joint(self, name: str) -> int | None:
@@ -130,11 +139,22 @@ class NewtonMuJoCoDynamicBiasProvider:
         requested_qd = np.asarray([output_index[name] for name in requested], dtype=np.int64)
         q = self._default_q.copy()
         qd = np.zeros(int(self._model.joint_dof_count), dtype=np.float32)
+        q_worlds = q.reshape(self._batch_size, self._coordinates_per_world)
+        qd_worlds = qd.reshape(self._batch_size, self._dofs_per_world)
         values = np.empty((len(positions), len(requested)), dtype=np.float32)
-        for row in range(len(positions)):
-            q[q_indices] = positions[row, columns]
-            qd[qd_indices] = velocities[row, columns]
+        for start in range(0, len(positions), self._batch_size):
+            end = min(start + self._batch_size, len(positions))
+            active = end - start
+            np.copyto(q, self._default_q)
+            qd.fill(0.0)
+            q_worlds[:active, q_indices] = positions[start:end, columns]
+            qd_worlds[:active, qd_indices] = velocities[start:end, columns]
             self._state.joint_q.assign(q)
             self._state.joint_qd.assign(qd)
-            values[row] = _evaluate_dynamic_bias(self._solver, self._state)[requested_qd]
+            bias = _evaluate_dynamic_bias(self._solver, self._state, self._warp)
+            if bias.ndim != 2 or bias.shape[0] != self._batch_size:
+                raise RuntimeError("MuJoCo-Warp returned an unexpected dynamic-bias shape")
+            values[start:end] = bias[:active, requested_qd]
+        if not np.all(np.isfinite(values)):
+            raise ValueError("MuJoCo-Warp produced non-finite dynamic_bias values")
         return values
