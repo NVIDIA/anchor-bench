@@ -1,0 +1,53 @@
+name,version,type,purl,licenses,bom-ref,source
+absl-py,2.5.0,library,pkg:pypi/absl-py@2.5.0,Apache-2.0,absl-py==2.5.0,installed-runtime-env
+alembic,1.18.5,library,pkg:pypi/alembic@1.18.5,MIT,alembic==1.18.5,installed-runtime-env
+annotated-types,0.8.0,library,pkg:pypi/annotated-types@0.8.0,MIT,annotated-types==0.8.0,installed-runtime-env
+anyio,4.14.2,library,pkg:pypi/anyio@4.14.2,MIT,anyio==4.14.2,installed-runtime-env
+certifi,2026.7.22,library,pkg:pypi/certifi@2026.7.22,MPL-2.0;License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0),certifi==2026.7.22,installed-runtime-env
+click,8.4.2,library,pkg:pypi/click@8.4.2,BSD-3-Clause,click==8.4.2,installed-runtime-env
+cmaes,0.13.0,library,pkg:pypi/cmaes@0.13.0,MIT,cmaes==0.13.0,installed-runtime-env
+colorlog,6.12.0,library,pkg:pypi/colorlog@6.12.0,MIT,colorlog==6.12.0,installed-runtime-env
+contourpy,1.3.3,library,pkg:pypi/contourpy@1.3.3,License :: OSI Approved :: BSD License,contourpy==1.3.3,installed-runtime-env
+cycler,0.12.1,library,pkg:pypi/cycler@0.12.1,License :: OSI Approved :: BSD License,cycler==0.12.1,installed-runtime-env
+etils,1.14.0,library,pkg:pypi/etils@1.14.0,License :: OSI Approved :: Apache Software License,etils==1.14.0,installed-runtime-env
+filelock,3.32.0,library,pkg:pypi/filelock@3.32.0,MIT,filelock==3.32.0,installed-runtime-env
+fonttools,4.63.0,library,pkg:pypi/fonttools@4.63.0,MIT,fonttools==4.63.0,installed-runtime-env
+fsspec,2026.7.0,library,pkg:pypi/fsspec@2026.7.0,BSD-3-Clause,fsspec==2026.7.0,installed-runtime-env
+glfw,2.10.2,library,pkg:pypi/glfw@2.10.2,MIT,glfw==2.10.2,installed-runtime-env
+h11,0.16.0,library,pkg:pypi/h11@0.16.0,MIT,h11==0.16.0,installed-runtime-env
+hf-xet,1.5.2,library,pkg:pypi/hf-xet@1.5.2,Apache-2.0,hf-xet==1.5.2,installed-runtime-env
+httpcore,1.0.9,library,pkg:pypi/httpcore@1.0.9,BSD-3-Clause,httpcore==1.0.9,installed-runtime-env
+httpx,0.28.1,library,pkg:pypi/httpx@0.28.1,BSD-3-Clause;License :: OSI Approved :: BSD License,httpx==0.28.1,installed-runtime-env
+huggingface_hub,1.25.1,library,pkg:pypi/huggingface-hub@1.25.1,Apache-2.0;License :: OSI Approved :: Apache Software License,huggingface_hub==1.25.1,installed-runtime-env
+idna,3.18,library,pkg:pypi/idna@3.18,BSD-3-Clause,idna==3.18,installed-runtime-env
+kiwisolver,1.5.0,library,pkg:pypi/kiwisolver@1.5.0,License :: OSI Approved :: BSD License,kiwisolver==1.5.0,installed-runtime-env
+Mako,1.3.12,library,pkg:pypi/mako@1.3.12,MIT,Mako==1.3.12,installed-runtime-env
+MarkupSafe,3.0.3,library,pkg:pypi/markupsafe@3.0.3,BSD-3-Clause,MarkupSafe==3.0.3,installed-runtime-env
+matplotlib,3.11.1,library,pkg:pypi/matplotlib@3.11.1,Python-2.0,matplotlib==3.11.1,installed-runtime-env
+mujoco,3.11.0,library,pkg:pypi/mujoco@3.11.0,Apache-2.0,mujoco==3.11.0,installed-runtime-env
+numpy,2.5.1,library,pkg:pypi/numpy@2.5.1,,numpy==2.5.1,installed-runtime-env
+optuna,4.9.0,library,pkg:pypi/optuna@4.9.0,MIT,optuna==4.9.0,installed-runtime-env
+packaging,26.2,library,pkg:pypi/packaging@26.2,,packaging==26.2,installed-runtime-env
+pandas,3.0.5,library,pkg:pypi/pandas@3.0.5,License :: OSI Approved :: BSD License,pandas==3.0.5,installed-runtime-env
+pillow,12.3.0,library,pkg:pypi/pillow@12.3.0,MIT-CMU,pillow==12.3.0,installed-runtime-env
+pip,26.1.2,library,pkg:pypi/pip@26.1.2,MIT,pip==26.1.2,installed-runtime-env
+pyarrow,25.0.0,library,pkg:pypi/pyarrow@25.0.0,Apache-2.0,pyarrow==25.0.0,installed-runtime-env
+pydantic,2.13.4,library,pkg:pypi/pydantic@2.13.4,MIT,pydantic==2.13.4,installed-runtime-env
+pydantic_core,2.46.4,library,pkg:pypi/pydantic-core@2.46.4,MIT,pydantic_core==2.46.4,installed-runtime-env
+PyOpenGL,3.1.10,library,pkg:pypi/pyopengl@3.1.10,License :: OSI Approved :: BSD License,PyOpenGL==3.1.10,installed-runtime-env
+pyparsing,3.3.2,library,pkg:pypi/pyparsing@3.3.2,MIT,pyparsing==3.3.2,installed-runtime-env
+python-dateutil,2.9.0.post0,library,pkg:pypi/python-dateutil@2.9.0.post0,License :: OSI Approved :: Apache Software License;License :: OSI Approved :: BSD License,python-dateutil==2.9.0.post0,installed-runtime-env
+PyYAML,6.0.3,library,pkg:pypi/pyyaml@6.0.3,MIT,PyYAML==6.0.3,installed-runtime-env
+scipy,1.18.0,library,pkg:pypi/scipy@1.18.0,License :: OSI Approved :: BSD License,scipy==1.18.0,installed-runtime-env
+setuptools,83.0.0,library,pkg:pypi/setuptools@83.0.0,MIT,setuptools==83.0.0,installed-runtime-env
+six,1.17.0,library,pkg:pypi/six@1.17.0,MIT,six==1.17.0,installed-runtime-env
+SQLAlchemy,2.0.51,library,pkg:pypi/sqlalchemy@2.0.51,MIT,SQLAlchemy==2.0.51,installed-runtime-env
+tqdm,4.70.0,library,pkg:pypi/tqdm@4.70.0,,tqdm==4.70.0,installed-runtime-env
+typing-inspection,0.4.2,library,pkg:pypi/typing-inspection@0.4.2,MIT,typing-inspection==0.4.2,installed-runtime-env
+typing_extensions,4.16.0,library,pkg:pypi/typing-extensions@4.16.0,PSF-2.0,typing_extensions==4.16.0,installed-runtime-env
+wheel,0.47.0,library,pkg:pypi/wheel@0.47.0,MIT,wheel==0.47.0,installed-runtime-env
+zipp,4.1.0,library,pkg:pypi/zipp@4.1.0,MIT,zipp==4.1.0,installed-runtime-env
+isaacsim,6.0.0.0,library,pkg:pypi/isaacsim@6.0.0.0,,,full extra; host SBOM env could not install
+newton,1.2.0,library,pkg:pypi/newton@1.2.0,,,full extra; host SBOM env could not install
+mujoco-warp,>=3.5.0,library,pkg:pypi/mujoco-warp,,,full extra; host SBOM env could not install
+IsaacLab,482d21c936b863e323f0a135c8e8e8e8a9c166b2,library,pkg:github/isaac-sim/IsaacLab@482d21c936b863e323f0a135c8e8e8e8a9c166b2,,,pinned in versions/compatibility.toml; Docker full image

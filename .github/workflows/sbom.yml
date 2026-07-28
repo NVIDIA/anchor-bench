@@ -1,0 +1,31 @@
+name: sbom
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - versions/compatibility.toml
+      - scripts/generate_sbom.sh
+      - .github/workflows/sbom.yml
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Generate CycloneDX SBOM
+        run: ./scripts/generate_sbom.sh
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-bench-sbom
+          path: |
+            sbom/*.cdx.json
+            sbom/*.csv
+            sbom/requirements-freeze.txt
+            sbom/README.md
