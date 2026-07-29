@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anchor-bench"
+version = "0.1.0"
+description = "Configuration-driven task runner for Anchor Bench."
+requires-python = ">=3.9"
+dependencies = [
+  "pydantic>=2.7,<3",
+  "PyYAML>=6.0,<7",
+]
+
+[project.scripts]
+anchor-bench = "anchor_bench.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["anchor_bench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
