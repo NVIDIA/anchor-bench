@@ -5,15 +5,16 @@ from __future__ import annotations
 from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
+from typing_extensions import TypeAlias
 
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
 
-JsonNumber = Union[StrictInt, StrictFloat]
-NonEmptyString = Annotated[str, Field(min_length=1)]
-PositiveInteger = Annotated[StrictInt, Field(ge=1)]
-NonNegativeInteger = Annotated[StrictInt, Field(ge=0)]
-PositiveNumber = Annotated[JsonNumber, Field(gt=0.0)]
-NonNegativeNumber = Annotated[JsonNumber, Field(ge=0.0)]
+JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
+NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
+PositiveInteger: TypeAlias = Annotated[StrictInt, Field(ge=1)]
+NonNegativeInteger: TypeAlias = Annotated[StrictInt, Field(ge=0)]
+PositiveNumber: TypeAlias = Annotated[JsonNumber, Field(gt=0.0)]
+NonNegativeNumber: TypeAlias = Annotated[JsonNumber, Field(ge=0.0)]
 
 
 class DatasetReference(StrictBaseModel):
@@ -44,7 +45,7 @@ class Bound(StrictBaseModel):
     initial: Optional[JsonNumber] = None
 
     @model_validator(mode="after")
-    def validate_interval(self) -> "Bound":
+    def validate_interval(self) -> Bound:
         if self.lower > self.upper:
             raise ValueError("lower must be less than or equal to upper")
         if self.initial is not None and not self.lower <= self.initial <= self.upper:
@@ -95,7 +96,7 @@ class NewtonSimulationConfig(StrictBaseModel):
 
 
 class ActuatorSysIdConfig(BaseConfig):
-    type: Literal["actuator_sys_id"]
+    type: Literal["actuator_sys_id"]  # pyright: ignore[reportIncompatibleVariableOverride]
     joint_parameters: Annotated[List[JointParameterGroup], Field(min_length=1)]
     optimizer: CmaesOptimizerConfig
     simulation: NewtonSimulationConfig

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional, Type
+from collections.abc import Mapping
+from typing import Any, Dict, Optional, Type
 
 from anchor_bench.errors import TaskNotFoundError
 from anchor_bench.schema.parse import parse
 from anchor_bench.sysid.task import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
-
 
 TASKS: Dict[str, Type[BaseTask[Any]]] = {
     ActuatorSysIdTask.name(): ActuatorSysIdTask,

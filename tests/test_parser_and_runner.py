@@ -8,7 +8,6 @@ from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.base_task import BaseTask
 
-
 VALID_YAML = """\
 type: actuator_sys_id
 joint_parameters:
