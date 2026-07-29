@@ -1,3 +1,0 @@
-simulation: {physics_freq: 500, control_freq: 500, render_freq: 500, integrator: implicitfast, solver_iterations: 10, line_search_iterations: 10}
-benchmark: {fix_root: true, buffer_time: 5.0, output_folder: outputs/sim2real_benchmark}
-sysid: {output_dir: outputs/sysid/ur10e, num_envs: 64, buffer_time: 2.0, cmaes: {sigma: 0.5, max_iterations: 200, epsilon: 0.01}}

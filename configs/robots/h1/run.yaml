@@ -1,5 +1,0 @@
-
-simulation: {physics_freq: 500, control_freq: 500, render_freq: 500, integrator: implicitfast, solver_iterations: 10, line_search_iterations: 10}
-benchmark: {fix_root: true, buffer_time: 2.0, motion_files: inputs/motion_files/h1/arm_march2026/elbow, motion_name: arm_march2026, output_folder: outputs/sim2real_benchmark}
-analysis: {output_dir: outputs/sim2real_analysis, sample_dt: 0.005, motion_names: "*elbow*"}
-sysid: {output_dir: outputs/sysid/h1/elbow, real_data_dir: inputs/sysid_data/h1/arm_march2026/elbow, joints: [elbow], num_envs: 64, buffer_time: 2.0, cmaes: {sigma: 0.5, max_iterations: 200, epsilon: 0.01}}
