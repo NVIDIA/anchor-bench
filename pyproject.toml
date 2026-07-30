@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anchor-bench"
+version = "0.1.0"
+description = "Configuration-driven task runner for Anchor Bench."
+requires-python = ">=3.9"
+dependencies = [
+  "pydantic>=2.7,<3",
+  "PyYAML>=6.0,<7",
+  "typing-extensions>=4.10; python_version < '3.10'",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyright>=1.1,<2",
+  "pytest>=8,<9",
+  "pytest-cov>=5,<8",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+anchor-bench = "anchor_bench.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["anchor_bench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint]
+# Keep annotations evaluable on the project's minimum supported Python.
+ignore = ["UP006", "UP007", "UP035", "UP045"]
+
+[tool.pyright]
+exclude = ["build", "**/__pycache__"]
+pythonVersion = "3.9"
