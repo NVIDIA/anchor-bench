@@ -11,13 +11,18 @@ reviews:
   auto_review:
     enabled: true
     drafts: true
+    base_branches: 
+      - ".*"
   tools:
     github-checks:
       timeout_ms: 900000
   path_instructions:
     - path: "**"
       instructions: |
-        Check for typos and outdated documentation. Also check for missing documentaiton for user facing changes.
+        Check for typos and outdated documentation. 
+        Check for missing documentation on user facing changes.
+        Check for consistent naming in documentation, throughout the code, scripts and folders.
+        Make sure that newly added folders with scripts are also added in the CI so the get the formatting checked and tested.
     - path: "**/*.py"
       instructions: |
         Flag inline code comments (not docstrings) that are verbose or
