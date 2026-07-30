@@ -65,6 +65,11 @@ class ParquetTrainingDatasetConfig(StrictBaseModel):
     resampling: ResamplingConfig
 
 
+class SimulationConfig(StrictBaseModel):
+    backend: Literal["newton"]
+    usd_path: NonEmptyString
+
+
 class NetworkMappingConfig(StrictBaseModel):
     inputs: Annotated[List[NonEmptyString], Field(min_length=1)]
     outputs: Annotated[List[NonEmptyString], Field(min_length=1)]
@@ -231,6 +236,7 @@ class TrainingConfig(BaseConfig):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     dataset: ParquetTrainingDatasetConfig
+    simulation: Optional[SimulationConfig] = None
     input_features: Annotated[
         Dict[str, Optional[str]],
         Field(min_length=1),
@@ -247,7 +253,7 @@ class TrainingConfig(BaseConfig):
 
     @model_validator(mode="after")
     def reject_explicit_null_optional_fields(self) -> TrainingConfig:
-        for field_name in ("description", "tags", "search"):
+        for field_name in ("description", "tags", "simulation", "search"):
             if (
                 field_name in self.model_fields_set
                 and getattr(self, field_name) is None

@@ -27,6 +27,10 @@ def valid_config_data():
                 "dt": 0.02,
             },
         },
+        "simulation": {
+            "backend": "newton",
+            "usd_path": "assets/robots/so101.usd",
+        },
         "input_features": {
             "position": "joint_position",
             "velocity": "joint_velocity",
@@ -122,6 +126,9 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.type == "training"
     assert config.dataset.resampling.dt == 0.02
     assert config.dataset.resampling.time_range == "intersection"
+    assert config.simulation is not None
+    assert config.simulation.backend == "newton"
+    assert config.simulation.usd_path == "assets/robots/so101.usd"
     assert isinstance(config.model, GruModelConfig)
     assert isinstance(config.training.loss, HuberLossConfig)
     assert config.search is not None
@@ -140,20 +147,25 @@ def test_parser_selects_training_model(valid_config_data, tmp_path: Path):
     assert isinstance(config, TrainingConfig)
 
 
-def test_optional_metadata_and_search_can_be_omitted(valid_config_data):
+def test_optional_metadata_simulation_and_search_can_be_omitted(valid_config_data):
     data = deepcopy(valid_config_data)
     data.pop("description")
     data.pop("tags")
+    data.pop("simulation")
     data.pop("search")
 
     config = TrainingConfig.model_validate(data)
 
     assert config.description is None
     assert config.tags is None
+    assert config.simulation is None
     assert config.search is None
 
 
-@pytest.mark.parametrize("field_name", ["description", "tags", "search"])
+@pytest.mark.parametrize(
+    "field_name",
+    ["description", "tags", "simulation", "search"],
+)
 def test_optional_fields_reject_explicit_null(valid_config_data, field_name):
     data = deepcopy(valid_config_data)
     data[field_name] = None
@@ -173,6 +185,14 @@ def test_model_rejects_old_gru_task_discriminator(valid_config_data):
 def test_resampling_rejects_non_positive_dt(valid_config_data):
     data = deepcopy(valid_config_data)
     data["dataset"]["resampling"]["dt"] = 0.0
+
+    with pytest.raises(ValidationError):
+        TrainingConfig.model_validate(data)
+
+
+def test_simulation_rejects_unsupported_backend(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["simulation"]["backend"] = "mujoco"
 
     with pytest.raises(ValidationError):
         TrainingConfig.model_validate(data)
