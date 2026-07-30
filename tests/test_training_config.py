@@ -23,6 +23,9 @@ def valid_config_data():
         "dataset": {
             "type": "parquet",
             "path": "datasets/actuator.parquet",
+            "resampling": {
+                "dt": 0.02,
+            },
         },
         "input_features": {
             "position": "joint_position",
@@ -117,6 +120,8 @@ def test_model_matches_general_training_schema(valid_config_data):
     config = TrainingConfig.model_validate(valid_config_data)
 
     assert config.type == "training"
+    assert config.dataset.resampling.dt == 0.02
+    assert config.dataset.resampling.time_range == "intersection"
     assert isinstance(config.model, GruModelConfig)
     assert isinstance(config.training.loss, HuberLossConfig)
     assert config.search is not None
@@ -160,6 +165,14 @@ def test_optional_fields_reject_explicit_null(valid_config_data, field_name):
 def test_model_rejects_old_gru_task_discriminator(valid_config_data):
     data = deepcopy(valid_config_data)
     data["type"] = "gru"
+
+    with pytest.raises(ValidationError):
+        TrainingConfig.model_validate(data)
+
+
+def test_resampling_rejects_non_positive_dt(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["dataset"]["resampling"]["dt"] = 0.0
 
     with pytest.raises(ValidationError):
         TrainingConfig.model_validate(data)

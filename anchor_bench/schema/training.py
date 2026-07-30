@@ -54,9 +54,15 @@ def _duplicate_values(values: List[CategoricalValue]) -> bool:
     return False
 
 
+class ResamplingConfig(StrictBaseModel):
+    dt: PositiveNumber
+    time_range: Literal["intersection"] = "intersection"
+
+
 class ParquetTrainingDatasetConfig(StrictBaseModel):
     type: Literal["parquet"]
     path: NonEmptyString
+    resampling: ResamplingConfig
 
 
 class NetworkMappingConfig(StrictBaseModel):
