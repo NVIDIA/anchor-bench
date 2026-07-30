@@ -1,8 +1,10 @@
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+import anchor_bench.data.loader as loader_module
 from anchor_bench.data import DatasetLoader
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
 
@@ -21,13 +23,20 @@ def _rows(field, timestamps, values):
     ]
 
 
+def _write_dataset(tmp_path: Path, dataset: pd.DataFrame) -> Path:
+    """Write a test dataset to Parquet and return its path."""
+
+    source = tmp_path / "dataset.parquet"
+    dataset.to_parquet(source, index=False)
+    return source
+
+
 def test_loads_and_aligns_local_parquet_file(tmp_path: Path) -> None:
     dataset = pd.DataFrame(
         _rows("actual_q", [0, 20_000_000], [1.0, 2.0])
         + _rows("command_q", [0, 20_000_000], [2.0, 4.0])
     )
-    source = tmp_path / "dataset.parquet"
-    dataset.to_parquet(source, index=False)
+    source = _write_dataset(tmp_path, dataset)
 
     result = DatasetLoader.load(str(source), reference_field="actual_q")
 
@@ -37,23 +46,50 @@ def test_loads_and_aligns_local_parquet_file(tmp_path: Path) -> None:
 
 def test_loads_direct_http_url(monkeypatch) -> None:
     dataset = pd.DataFrame(_rows("actual_q", [0], [1.0]))
+    payload = BytesIO()
+    dataset.to_parquet(payload, index=False)
     seen = []
 
-    def read_parquet(source):
-        """Record the URL passed to Pandas."""
+    def open_url(source, *, timeout):
+        """Return remote Parquet bytes and record the configured timeout."""
 
-        seen.append(source)
-        return dataset
+        seen.append((source, timeout))
+        return BytesIO(payload.getvalue())
 
-    monkeypatch.setattr(pd, "read_parquet", read_parquet)
+    monkeypatch.setattr(loader_module, "urlopen", open_url)
 
     result = DatasetLoader.load(
         "https://example.com/dataset.parquet",
         reference_field="actual_q",
+        http_timeout_seconds=2.5,
     )
 
     assert result["actual_q"].tolist() == [1.0]
-    assert seen == ["https://example.com/dataset.parquet"]
+    assert seen == [("https://example.com/dataset.parquet", 2.5)]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        r"C:\Users\alice\dataset.parquet",
+        "C:/Users/alice/dataset.parquet",
+    ],
+)
+def test_treats_windows_drive_paths_as_local(monkeypatch, source: str) -> None:
+    dataset = pd.DataFrame(_rows("actual_q", [0], [1.0]))
+    seen = []
+
+    def local_path(candidate):
+        seen.append(candidate)
+        return Path("dataset.parquet")
+
+    monkeypatch.setattr(DatasetLoader, "_local_path", local_path)
+    monkeypatch.setattr(pd, "read_parquet", lambda _: dataset)
+
+    result = DatasetLoader.load(source, reference_field="actual_q")
+
+    assert result["actual_q"].tolist() == [1.0]
+    assert seen == [source]
 
 
 def test_rejects_missing_local_file(tmp_path: Path) -> None:
@@ -63,10 +99,17 @@ def test_rejects_missing_local_file(tmp_path: Path) -> None:
         DatasetLoader.load(str(source), reference_field="actual_q")
 
 
-def test_rejects_unsupported_url_scheme() -> None:
+@pytest.mark.parametrize(
+    "source",
+    [
+        "s3://bucket/dataset.parquet",
+        "x://host/dataset.parquet",
+    ],
+)
+def test_rejects_unsupported_url_scheme(source: str) -> None:
     with pytest.raises(DatasetLoadError, match="Unsupported dataset URL scheme"):
         DatasetLoader.load(
-            "s3://bucket/dataset.parquet",
+            source,
             reference_field="actual_q",
         )
 
@@ -87,8 +130,7 @@ def test_aligns_every_signal_to_recorded_position_timestamps(
         + _rows("dq", [0, 20_000_000], [0.0, 1.0])
         + _rows("command_q", [0, 20_000_000], [2.0, 4.0])
     )
-    source = tmp_path / "dataset.parquet"
-    dataset.to_parquet(source, index=False)
+    source = _write_dataset(tmp_path, dataset)
 
     result = DatasetLoader.load(str(source), reference_field="actual_q")
 
@@ -107,8 +149,7 @@ def test_accepts_matching_joint_reference_clocks(tmp_path: Path) -> None:
         _rows("elbow/actual_q", [0, 10_000_000], [1.0, 1.5])
         + _rows("shoulder/actual_q", [0, 10_000_000], [2.0, 2.5])
     )
-    source = tmp_path / "dataset.parquet"
-    dataset.to_parquet(source, index=False)
+    source = _write_dataset(tmp_path, dataset)
 
     result = DatasetLoader.load(str(source), reference_field="actual_q")
 
@@ -123,8 +164,7 @@ def test_rejects_mismatched_joint_reference_clocks(tmp_path: Path) -> None:
         _rows("elbow/actual_q", [0, 10_000_000], [1.0, 1.5])
         + _rows("shoulder/actual_q", [0, 11_000_000], [2.0, 2.5])
     )
-    source = tmp_path / "dataset.parquet"
-    dataset.to_parquet(source, index=False)
+    source = _write_dataset(tmp_path, dataset)
 
     with pytest.raises(DatasetAlignmentError, match="do not share"):
         DatasetLoader.load(str(source), reference_field="actual_q")
@@ -141,8 +181,7 @@ def test_crops_reference_timestamps_to_signal_intersection(
         )
         + _rows("command_q", [10_000_000, 20_000_000], [3.0, 4.0])
     )
-    source = tmp_path / "dataset.parquet"
-    dataset.to_parquet(source, index=False)
+    source = _write_dataset(tmp_path, dataset)
 
     result = DatasetLoader.load(str(source), reference_field="actual_q")
 

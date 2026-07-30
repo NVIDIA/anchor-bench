@@ -2,40 +2,54 @@
 
 from __future__ import annotations
 
+import re
+from io import BytesIO
 from pathlib import Path
-from typing import Dict, List
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import numpy as np
 import pandas as pd
 
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
 
+DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
 REQUIRED_COLUMNS = {"time_ns", "experiment", "field", "value"}
+WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/](?![\\/])")
 
 
 class DatasetLoader:
     """Load a Parquet dataset and align its signals."""
 
     @staticmethod
-    def load(source: str, *, reference_field: str) -> pd.DataFrame:
+    def load(
+        source: str,
+        *,
+        reference_field: str,
+        http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+    ) -> pd.DataFrame:
         """Load a dataset and align it to its recorded reference clock.
 
         Remote URLs must return Parquet bytes directly.
         """
 
         scheme = urlparse(source).scheme
-        if scheme in ("http", "https"):
-            read_source = source
-        elif scheme:
+        is_remote = scheme in ("http", "https")
+        is_windows_path = WINDOWS_DRIVE_PATH.match(source) is not None
+        if scheme and not is_remote and not is_windows_path:
             raise DatasetLoadError(
                 f"Unsupported dataset URL scheme {scheme!r}: {source}."
             )
-        else:
-            read_source = DatasetLoader._local_path(source)
 
         try:
+            if is_remote:
+                with urlopen(source, timeout=http_timeout_seconds) as response:
+                    read_source = BytesIO(response.read())
+            else:
+                read_source = DatasetLoader._local_path(source)
             dataset = pd.read_parquet(read_source)
+        except DatasetLoadError:
+            raise
         except Exception as error:
             raise DatasetLoadError(
                 f"Could not load Parquet dataset from {source}: {error}."
@@ -59,7 +73,7 @@ class DatasetLoader:
         """Align every experiment to its recorded reference clock."""
 
         DatasetLoader._validate_alignment(dataset, reference_field)
-        aligned_experiments: List[pd.DataFrame] = []
+        aligned_experiments: list[pd.DataFrame] = []
 
         for experiment, episode in dataset.groupby("experiment", sort=False):
             aligned_experiments.append(
@@ -154,7 +168,7 @@ class DatasetLoader:
 
         origin_ns = start
         target_offset = (target_time - origin_ns).astype(np.float64)
-        aligned_values: Dict[str, np.ndarray] = {}
+        aligned_values: dict[str, np.ndarray] = {}
 
         for field, signal in signals.items():
             source_time = signal["time_ns"].to_numpy(dtype=np.int64)
