@@ -3,7 +3,9 @@ name: quality
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: 
+      - "main"
+      - "refactor-main"
 
 concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
