@@ -173,11 +173,11 @@ def test_model_rejects_extra_nested_properties(valid_config_data):
         TrainingConfig.model_validate(data)
 
 
-def test_mapping_rejects_duplicate_feature_names(valid_config_data):
+def test_mapping_rejects_duplicate_joint_names(valid_config_data):
     data = deepcopy(valid_config_data)
     data["mapping"]["actuator"]["inputs"] = ["position", "position"]
 
-    with pytest.raises(ValidationError, match="feature names must be unique"):
+    with pytest.raises(ValidationError, match="joint names must be unique"):
         TrainingConfig.model_validate(data)
 
 

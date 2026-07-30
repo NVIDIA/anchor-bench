@@ -59,15 +59,15 @@ class ParquetTrainingDatasetConfig(StrictBaseModel):
     path: NonEmptyString
 
 
-class FeatureMappingConfig(StrictBaseModel):
+class NetworkMappingConfig(StrictBaseModel):
     inputs: Annotated[List[NonEmptyString], Field(min_length=1)]
     outputs: Annotated[List[NonEmptyString], Field(min_length=1)]
 
     @field_validator("inputs", "outputs")
     @classmethod
-    def feature_names_must_be_unique(cls, names: List[str]) -> List[str]:
+    def joint_names_must_be_unique(cls, names: List[str]) -> List[str]:
         if len(names) != len(set(names)):
-            raise ValueError("feature names must be unique")
+            raise ValueError("joint names must be unique")
         return names
 
 
@@ -231,7 +231,7 @@ class TrainingConfig(BaseConfig):
     ]
     output_features: NonEmptyString
     mapping: Annotated[
-        Dict[str, FeatureMappingConfig],
+        Dict[str, NetworkMappingConfig],
         Field(min_length=1),
     ]
     model: GruModelConfig
