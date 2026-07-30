@@ -63,6 +63,11 @@ def test_base_preprocessor_cannot_be_instantiated(dataset: pd.DataFrame) -> None
         BasePreprocessor(dataset)  # pyright: ignore[reportAbstractUsage]
 
 
+def test_simulation_context_cannot_be_instantiated() -> None:
+    with pytest.raises(TypeError):
+        SimulationContext()  # pyright: ignore[reportAbstractUsage]
+
+
 def test_sim_preprocessor_loads_usd_asset(dataset: pd.DataFrame) -> None:
     context = RecordingSimulationContext()
 
