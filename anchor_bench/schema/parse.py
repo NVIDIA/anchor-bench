@@ -24,9 +24,7 @@ def parse(config_file: Union[str, Path]) -> BaseConfig:
     try:
         raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
-        raise ConfigParseError(
-            f"Config file does not exist: {config_path}."
-        ) from error
+        raise ConfigParseError(f"Config file does not exist: {config_path}.") from error
     except OSError as error:
         raise ConfigParseError(
             f"Could not read config file {config_path}: {error}."
