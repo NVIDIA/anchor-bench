@@ -48,7 +48,7 @@ def test_loads_newton_model_and_initial_state(
     source.write_text("#usda 1.0", encoding="utf-8")
     fake_newton = SimpleNamespace(ModelBuilder=FakeModelBuilder)
     monkeypatch.setattr(
-        "anchor_bench.core.simulation.import_module",
+        "anchor_bench.core.simulation.newton.import_module",
         lambda name: fake_newton,
     )
 
