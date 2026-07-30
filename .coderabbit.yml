@@ -18,7 +18,8 @@ reviews:
     - path: "**"
       instructions: |
         Check for typos and outdated documentation. 
-        Also check for missing documentation for user facing changes and consistent naming.
+        Check for missing documentation on user facing changes.
+        Check for consistent naming in documentation, throughout the code, scripts and folders.
     - path: "**/*.py"
       instructions: |
         Flag inline code comments (not docstrings) that are verbose or
