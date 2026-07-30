@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: true
+  tools:
+    github-checks:
+      timeout_ms: 900000
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Check for typos and outdated documentation. Also check for missing documentaiton for user facing changes.
+    - path: "**/*.py"
+      instructions: |
+        Flag inline code comments (not docstrings) that are verbose or
+        redundant: comments that restate what the code already shows, repeat
+        the same point in multiple places, or narrate obvious steps. Comments
+        should be brief and reserved for non-obvious code, explaining why
+        rather than what.
+        Flag duplicated code that could be reused and refactored into utility functionality.
+chat:
+  auto_reply: true
+issue_enrichment:
+  auto_enrich:
+    enabled: false
