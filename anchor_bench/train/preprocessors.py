@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 import pandas as pd
+
+from anchor_bench.core.simulation import SimulationContext
 
 
 class BasePreprocessor(ABC):
@@ -27,7 +28,7 @@ class SimPreprocessor(BasePreprocessor):
         self,
         dataset: pd.DataFrame,
         usd_path: str,
-        simulation_context: Any,
+        simulation_context: SimulationContext,
     ) -> None:
         super().__init__(dataset)
         self.model, self.state = simulation_context.load(usd_path)

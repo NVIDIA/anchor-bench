@@ -5,6 +5,7 @@ from typing import Any, Optional, Tuple
 import pandas as pd
 import pytest
 
+from anchor_bench.core import SimulationContext
 from anchor_bench.train import BasePreprocessor, SimPreprocessor
 
 
@@ -16,7 +17,7 @@ class DifferencePreprocessor(BasePreprocessor):
         )
 
 
-class RecordingSimulationContext:
+class RecordingSimulationContext(SimulationContext):
     def __init__(self) -> None:
         self.loaded_path: Optional[str] = None
 
