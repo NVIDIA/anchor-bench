@@ -3,17 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Protocol, Tuple
 
 import pandas as pd
 
-
-class SimulationContext(Protocol):
-    """Minimum simulation interface required by a simulation preprocessor."""
-
-    def load(self, usd_path: str) -> Tuple[Any, Any]:
-        """Load a USD asset and return its model and initial state."""
-        ...
+from anchor_bench.core.simulation import SimulationContext
 
 
 class BasePreprocessor(ABC):

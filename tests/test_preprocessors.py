@@ -5,6 +5,7 @@ from typing import Any, Optional, Tuple
 import pandas as pd
 import pytest
 
+from anchor_bench.core import SimulationContext
 from anchor_bench.train import BasePreprocessor, SimPreprocessor
 
 
@@ -63,7 +64,7 @@ def test_base_preprocessor_cannot_be_instantiated(dataset: pd.DataFrame) -> None
 
 
 def test_sim_preprocessor_loads_usd_asset(dataset: pd.DataFrame) -> None:
-    context = RecordingSimulationContext()
+    context: SimulationContext = RecordingSimulationContext()
 
     preprocessor = SimulatedFeaturePreprocessor(
         dataset,
