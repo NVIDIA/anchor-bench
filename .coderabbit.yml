@@ -17,7 +17,8 @@ reviews:
   path_instructions:
     - path: "**"
       instructions: |
-        Check for typos and outdated documentation. Also check for missing documentaiton for user facing changes.
+        Check for typos and outdated documentation. 
+        Also check for missing documentation for user facing changes and consistent naming.
     - path: "**/*.py"
       instructions: |
         Flag inline code comments (not docstrings) that are verbose or
