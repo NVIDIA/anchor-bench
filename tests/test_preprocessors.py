@@ -7,6 +7,11 @@ import pytest
 
 from anchor_bench.core import SimulationContext
 from anchor_bench.train import BasePreprocessor, SimPreprocessor
+from anchor_bench.train.gru import (
+    PositionErrorPreprocessor,
+    ResidualTorquePreprocessor,
+    SolverPDPreprocessor,
+)
 
 
 class DifferencePreprocessor(BasePreprocessor):
@@ -80,3 +85,78 @@ def test_sim_preprocessor_loads_usd_asset(dataset: pd.DataFrame) -> None:
     assert context.loaded_path == "assets/robots/so101.usd"
     assert preprocessor.model == "model"
     assert preprocessor.state == "state"
+
+
+def test_position_error_preprocessor_handles_multiple_entities() -> None:
+    dataset = pd.DataFrame(
+        {
+            "shoulder/command_q": [2.0, 1.0],
+            "shoulder/actual_q": [1.0, 1.5],
+            "elbow/command_q": [3.0, 4.0],
+            "elbow/actual_q": [2.5, 3.0],
+        },
+        index=pd.Index(["sample-a", "sample-b"]),
+    )
+
+    result = PositionErrorPreprocessor(dataset).process()
+
+    assert result.columns.tolist() == [
+        "shoulder/position_error",
+        "elbow/position_error",
+    ]
+    assert result["shoulder/position_error"].tolist() == [1.0, -0.5]
+    assert result["elbow/position_error"].tolist() == [0.5, 1.0]
+    assert result.index.equals(dataset.index)
+
+
+def test_solver_pd_preprocessor_uses_entity_gains() -> None:
+    dataset = pd.DataFrame(
+        {
+            "shoulder/position_error": [1.0, -0.5],
+            "shoulder/actual_dq": [2.0, -2.0],
+            "elbow/position_error": [0.5, 1.0],
+            "elbow/actual_dq": [1.0, 0.0],
+        },
+        index=pd.Index(["sample-a", "sample-b"]),
+    )
+
+    result = SolverPDPreprocessor(
+        dataset,
+        kp={"shoulder": 2.0, "elbow": 4.0},
+        kd={"shoulder": 0.5, "elbow": 1.0},
+    ).process()
+
+    assert result["shoulder/solver_pd"].tolist() == [1.0, 0.0]
+    assert result["elbow/solver_pd"].tolist() == [1.0, 4.0]
+    assert result.index.equals(dataset.index)
+
+
+def test_residual_torque_preprocessor_subtracts_baselines() -> None:
+    dataset = pd.DataFrame(
+        {
+            "elbow/position_error": [0.5, 1.0, 0.0],
+            "elbow/actual_dq": [1.0, -2.0, 0.0],
+            "elbow/actual_effort": [10.0, 10.0, 10.0],
+        },
+        index=pd.Index(["sample-a", "sample-b", "sample-c"]),
+    )
+
+    result = ResidualTorquePreprocessor(
+        dataset,
+        kp={"elbow": 4.0},
+        kd={"elbow": 1.0},
+        dry_friction={"elbow": 0.25},
+        viscous_friction={"elbow": 0.1},
+    ).process()
+
+    assert result["elbow/torque_residual"].tolist() == pytest.approx([8.65, 4.45, 10.0])
+    assert result.index.equals(dataset.index)
+
+
+def test_preprocessor_parameters_require_matching_entities() -> None:
+    with pytest.raises(ValueError, match="kd entities must match kp entities"):
+        SolverPDPreprocessor(
+            pd.DataFrame(),
+            kp={"shoulder": 2.0},
+            kd={"elbow": 1.0},
+        )
