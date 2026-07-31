@@ -31,6 +31,10 @@ anchor-bench = "anchor_bench.cli:main"
 include = ["anchor_bench*"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+  "integration: downloads external data and exercises an end-to-end workflow",
+]
 testpaths = ["tests"]
 
 [tool.ruff]
