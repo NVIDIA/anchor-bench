@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+simulation = [
+  "newton[importers,sim] @ git+https://github.com/newton-physics/newton.git@v1.4.0",
+]
 dev = [
   "pyright>=1.1,<2",
   "pytest>=8,<9",
