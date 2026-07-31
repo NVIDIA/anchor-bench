@@ -1,8 +1,9 @@
-"""Load and align tabular datasets from local and remote sources."""
+"""Load and resample tabular datasets from local and remote sources."""
 
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,21 +15,22 @@ import pandas as pd
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
 
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
+NANOSECONDS_PER_SECOND = 1_000_000_000
 REQUIRED_COLUMNS = {"time_ns", "experiment", "field", "value"}
 WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/](?![\\/])")
 
 
 class DatasetLoader:
-    """Load a Parquet dataset and align its signals."""
+    """Load a Parquet dataset and resample its signals."""
 
     @staticmethod
     def load(
         source: str,
         *,
-        reference_field: str,
+        dt: float,
         http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     ) -> pd.DataFrame:
-        """Load a dataset and align it to its recorded reference clock.
+        """Load a dataset and resample it to a uniform interval.
 
         Remote URLs must return Parquet bytes directly.
         """
@@ -55,7 +57,7 @@ class DatasetLoader:
                 f"Could not load Parquet dataset from {source}: {error}."
             ) from error
 
-        return DatasetLoader._align(dataset, reference_field)
+        return DatasetLoader._resample(dataset, dt)
 
     @staticmethod
     def _local_path(source: str) -> Path:
@@ -69,31 +71,31 @@ class DatasetLoader:
         return expanded_path
 
     @staticmethod
-    def _align(dataset: pd.DataFrame, reference_field: str) -> pd.DataFrame:
-        """Align every experiment to its recorded reference clock."""
+    def _resample(dataset: pd.DataFrame, dt: float) -> pd.DataFrame:
+        """Resample every experiment onto its own uniform time grid."""
 
-        DatasetLoader._validate_alignment(dataset, reference_field)
-        aligned_experiments: list[pd.DataFrame] = []
+        dt_ns = DatasetLoader._validate_resampling(dataset, dt)
+        resampled_experiments: list[pd.DataFrame] = []
 
         for experiment, episode in dataset.groupby("experiment", sort=False):
-            aligned_experiments.append(
-                DatasetLoader._align_experiment(
+            resampled_experiments.append(
+                DatasetLoader._resample_experiment(
                     episode,
                     experiment,
-                    reference_field,
+                    dt_ns,
                 )
             )
 
-        if not aligned_experiments:
+        if not resampled_experiments:
             raise DatasetAlignmentError("Dataset does not contain any experiments.")
 
-        return pd.concat(aligned_experiments)
+        return pd.concat(resampled_experiments)
 
     @staticmethod
-    def _validate_alignment(
+    def _validate_resampling(
         dataset: pd.DataFrame,
-        reference_field: str,
-    ) -> None:
+        dt: float,
+    ) -> int:
         """Validate the data required for safe interpolation."""
 
         missing_columns = REQUIRED_COLUMNS.difference(dataset.columns)
@@ -106,32 +108,41 @@ class DatasetLoader:
             raise DatasetAlignmentError(
                 "Dataset alignment columns cannot contain nulls."
             )
-        if not reference_field:
-            raise DatasetAlignmentError("reference_field cannot be empty.")
         if not pd.api.types.is_integer_dtype(dataset["time_ns"]):
             raise DatasetAlignmentError("time_ns must contain integer nanoseconds.")
         if not pd.api.types.is_numeric_dtype(dataset["value"]):
             raise DatasetAlignmentError("value must contain numeric samples.")
 
+        return DatasetLoader._dt_nanoseconds(dt)
+
     @staticmethod
-    def _align_experiment(
+    def _dt_nanoseconds(dt: float) -> int:
+        """Convert a positive interval in seconds to whole nanoseconds."""
+
+        try:
+            dt_ns = Decimal(str(dt)) * NANOSECONDS_PER_SECOND
+        except (InvalidOperation, ValueError) as error:
+            raise DatasetAlignmentError(
+                "dt must be a positive number of seconds."
+            ) from error
+
+        if not dt_ns.is_finite() or dt_ns <= 0:
+            raise DatasetAlignmentError("dt must be a positive number of seconds.")
+        if dt_ns != dt_ns.to_integral_value():
+            raise DatasetAlignmentError(
+                "dt must resolve to a whole number of nanoseconds."
+            )
+        return int(dt_ns)
+
+    @staticmethod
+    def _resample_experiment(
         episode: pd.DataFrame,
         experiment: object,
-        reference_field: str,
+        dt_ns: int,
     ) -> pd.DataFrame:
-        """Align one experiment to its recorded reference timestamps."""
+        """Resample one experiment over the intersection of all signals."""
 
         fields = list(dict.fromkeys(episode["field"].tolist()))
-        reference_fields = [
-            field
-            for field in fields
-            if field == reference_field or field.endswith(f"/{reference_field}")
-        ]
-        if not reference_fields:
-            raise DatasetAlignmentError(
-                f"Experiment {experiment!r} has no reference field "
-                f"matching {reference_field!r}."
-            )
         if episode.duplicated(subset=["time_ns", "field"]).any():
             raise DatasetAlignmentError(
                 f"Experiment {experiment!r} contains duplicate field timestamps."
@@ -145,47 +156,30 @@ class DatasetLoader:
             ]
             signals[field] = signal.sort_values(by="time_ns")
 
-        reference_time = signals[reference_fields[0]]["time_ns"].to_numpy(
-            dtype=np.int64
-        )
-        for field in reference_fields[1:]:
-            timestamps = signals[field]["time_ns"].to_numpy(dtype=np.int64)
-            if not np.array_equal(timestamps, reference_time):
-                raise DatasetAlignmentError(
-                    f"Experiment {experiment!r} reference fields do not share "
-                    "the same timestamps."
-                )
-
         start = max(int(signal["time_ns"].iloc[0]) for signal in signals.values())
         end = min(int(signal["time_ns"].iloc[-1]) for signal in signals.values())
-        target_time = reference_time[
-            (reference_time >= start) & (reference_time <= end)
-        ]
-        if not len(target_time):
+        if start > end:
             raise DatasetAlignmentError(
                 f"Experiment {experiment!r} has no overlapping signal range."
             )
 
-        origin_ns = start
-        target_offset = (target_time - origin_ns).astype(np.float64)
-        aligned_values: dict[str, np.ndarray] = {}
+        sample_count = ((end - start) // dt_ns) + 1
+        target_time = start + np.arange(sample_count, dtype=np.int64) * dt_ns
+        target_offset = (target_time - start).astype(np.float64)
+        resampled_values: dict[str, np.ndarray] = {}
 
         for field, signal in signals.items():
             source_time = signal["time_ns"].to_numpy(dtype=np.int64)
             source_value = signal["value"].to_numpy(dtype=np.float64)
-            if field in reference_fields:
-                indexed_values = pd.Series(source_value, index=source_time)
-                aligned_values[field] = indexed_values.loc[target_time].to_numpy()
-            else:
-                source_offset = (source_time - origin_ns).astype(np.float64)
-                aligned_values[field] = np.interp(
-                    target_offset,
-                    source_offset,
-                    source_value,
-                )
+            source_offset = (source_time - start).astype(np.float64)
+            resampled_values[field] = np.interp(
+                target_offset,
+                source_offset,
+                source_value,
+            )
 
         index = pd.MultiIndex.from_arrays(
             [[experiment] * len(target_time), target_time],
             names=["experiment", "time_ns"],
         )
-        return pd.DataFrame(aligned_values, index=index)
+        return pd.DataFrame(resampled_values, index=index)
