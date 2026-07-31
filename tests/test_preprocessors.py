@@ -6,11 +6,10 @@ import pandas as pd
 import pytest
 
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import (
-    BasePreprocessor,
+from anchor_bench.train import BasePreprocessor, SimPreprocessor
+from anchor_bench.train.gru import (
     PositionErrorPreprocessor,
     ResidualTorquePreprocessor,
-    SimPreprocessor,
     SolverPDPreprocessor,
 )
 
