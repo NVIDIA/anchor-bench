@@ -160,3 +160,37 @@ def test_preprocessor_parameters_require_matching_entities() -> None:
             kp={"shoulder": 2.0},
             kd={"elbow": 1.0},
         )
+
+
+def test_residual_torque_parameters_require_matching_entities() -> None:
+    with pytest.raises(
+        ValueError,
+        match="dry_friction entities must match kp entities",
+    ):
+        ResidualTorquePreprocessor(
+            pd.DataFrame(),
+            kp={"shoulder": 2.0},
+            kd={"shoulder": 1.0},
+            dry_friction={"elbow": 0.25},
+            viscous_friction={"shoulder": 0.1},
+        )
+
+
+def test_residual_torque_requires_actual_effort_column() -> None:
+    dataset = pd.DataFrame(
+        {
+            "elbow/position_error": [0.5],
+            "elbow/actual_dq": [1.0],
+        }
+    )
+
+    preprocessor = ResidualTorquePreprocessor(
+        dataset,
+        kp={"elbow": 4.0},
+        kd={"elbow": 1.0},
+        dry_friction={"elbow": 0.25},
+        viscous_friction={"elbow": 0.1},
+    )
+
+    with pytest.raises(ValueError, match="elbow/actual_effort"):
+        preprocessor.process()

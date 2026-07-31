@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List, Mapping
 
+import numpy as np
 import pandas as pd
 
 from anchor_bench.train.preprocessors import BasePreprocessor
@@ -41,6 +42,16 @@ def _entity_columns(entities: List[str], features: List[str]) -> List[str]:
     return [f"{entity}/{feature}" for entity in entities for feature in features]
 
 
+def _require_entity_columns(
+    dataset: pd.DataFrame,
+    entities: List[str],
+    features: List[str],
+) -> None:
+    """Require entity-qualified source columns."""
+
+    _require_columns(dataset, _entity_columns(entities, features))
+
+
 def _solver_pd(
     dataset: pd.DataFrame,
     entity: str,
@@ -70,8 +81,11 @@ class PositionErrorPreprocessor(BasePreprocessor):
         if not entities:
             raise ValueError("Dataset does not contain any command_q columns.")
 
-        required = _entity_columns(entities, ["command_q", "actual_q"])
-        _require_columns(self.dataset, required)
+        _require_entity_columns(
+            self.dataset,
+            entities,
+            ["command_q", "actual_q"],
+        )
 
         return pd.DataFrame(
             {
@@ -86,7 +100,10 @@ class PositionErrorPreprocessor(BasePreprocessor):
 
 
 class SolverPDPreprocessor(BasePreprocessor):
-    """Generate the solver PD torque for configured robot entities."""
+    """Generate solver PD torque from precomputed position-error columns.
+
+    The dataset must first be processed by :class:`PositionErrorPreprocessor`.
+    """
 
     def __init__(
         self,
@@ -105,11 +122,11 @@ class SolverPDPreprocessor(BasePreprocessor):
     def process(self) -> pd.DataFrame:
         """Return ``kp * position_error - kd * actual_dq`` per entity."""
 
-        required = _entity_columns(
+        _require_entity_columns(
+            self.dataset,
             self.entities,
             ["position_error", "actual_dq"],
         )
-        _require_columns(self.dataset, required)
 
         return pd.DataFrame(
             {
@@ -126,7 +143,10 @@ class SolverPDPreprocessor(BasePreprocessor):
 
 
 class ResidualTorquePreprocessor(BasePreprocessor):
-    """Generate measured torque after subtracting PD and friction baselines."""
+    """Generate residual torque from precomputed position-error columns.
+
+    The dataset must first be processed by :class:`PositionErrorPreprocessor`.
+    """
 
     def __init__(
         self,
@@ -156,16 +176,16 @@ class ResidualTorquePreprocessor(BasePreprocessor):
     def process(self) -> pd.DataFrame:
         """Return measured effort minus PD, dry, and viscous torque."""
 
-        required = _entity_columns(
+        _require_entity_columns(
+            self.dataset,
             self.entities,
             ["position_error", "actual_dq", "actual_effort"],
         )
-        _require_columns(self.dataset, required)
 
         residuals = {}
         for entity in self.entities:
             velocity = self.dataset[f"{entity}/actual_dq"]
-            direction = (velocity > 0).astype(float) - (velocity < 0).astype(float)
+            direction = np.sign(velocity)
             solver_pd = _solver_pd(
                 self.dataset,
                 entity,
