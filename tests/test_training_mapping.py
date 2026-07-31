@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from anchor_bench.train.task import TrainingTask
+from anchor_bench.train.task import EntityMapping, TrainingTask
 
 
 @pytest.fixture
@@ -25,31 +25,125 @@ def dataset() -> pd.DataFrame:
     )
 
 
-def test_maps_features_across_robot_entities(
-    dataset: pd.DataFrame,
-) -> None:
-    """Map inputs feature-first and targets in output-entity order."""
+def test_prepares_siso_mapping(dataset: pd.DataFrame) -> None:
+    """Prepare one scalar input/output sequence."""
 
-    inputs, targets = TrainingTask._map_features(
+    sequences = TrainingTask._map_features(
         dataset,
         input_features=["actual_q", "position_error"],
         output_feature="actual_effort",
-        input_entities=["shoulder", "elbow"],
-        output_entities=["elbow", "shoulder"],
+        mappings={
+            "shoulder": EntityMapping(
+                inputs=["shoulder"],
+                outputs=["shoulder"],
+            )
+        },
     )
 
-    assert inputs.columns.tolist() == [
+    assert [(sequence.experiment, sequence.name) for sequence in sequences] == [
+        ("wave", "shoulder")
+    ]
+    assert sequences[0].inputs.columns.tolist() == [
+        "shoulder/actual_q",
+        "shoulder/position_error",
+    ]
+    assert sequences[0].targets.columns.tolist() == ["shoulder/actual_effort"]
+    assert sequences[0].inputs.index.equals(dataset.index)
+    assert sequences[0].targets.index.equals(dataset.index)
+
+
+def test_prepares_mimo_mapping_in_feature_major_order(
+    dataset: pd.DataFrame,
+) -> None:
+    """Prepare one multi-entity sequence without changing configured order."""
+
+    sequences = TrainingTask._map_features(
+        dataset,
+        input_features=["actual_q", "position_error"],
+        output_feature="actual_effort",
+        mappings={
+            "arm": EntityMapping(
+                inputs=["shoulder", "elbow"],
+                outputs=["elbow", "shoulder"],
+            )
+        },
+    )
+
+    assert sequences[0].inputs.columns.tolist() == [
         "shoulder/actual_q",
         "elbow/actual_q",
         "shoulder/position_error",
         "elbow/position_error",
     ]
-    assert targets.columns.tolist() == [
+    assert sequences[0].targets.columns.tolist() == [
         "elbow/actual_effort",
         "shoulder/actual_effort",
     ]
-    assert inputs.index.equals(dataset.index)
-    assert targets.index.equals(dataset.index)
+
+
+def test_prepares_shared_siso_as_separate_ordered_sequences(
+    dataset: pd.DataFrame,
+) -> None:
+    """Keep shared SISO mappings separate and in YAML declaration order."""
+
+    sequences = TrainingTask._map_features(
+        dataset,
+        input_features=["actual_q", "position_error"],
+        output_feature="actual_effort",
+        mappings={
+            "elbow": EntityMapping(inputs=["elbow"], outputs=["elbow"]),
+            "shoulder": EntityMapping(
+                inputs=["shoulder"],
+                outputs=["shoulder"],
+            ),
+        },
+    )
+
+    assert [sequence.name for sequence in sequences] == ["elbow", "shoulder"]
+    assert [sequence.inputs.columns.tolist() for sequence in sequences] == [
+        ["elbow/actual_q", "elbow/position_error"],
+        ["shoulder/actual_q", "shoulder/position_error"],
+    ]
+    assert [sequence.targets.columns.tolist() for sequence in sequences] == [
+        ["elbow/actual_effort"],
+        ["shoulder/actual_effort"],
+    ]
+
+
+def test_orders_sequences_by_experiment_then_mapping(
+    dataset: pd.DataFrame,
+) -> None:
+    """Preserve recurrent boundaries and deterministic shared mapping order."""
+
+    second_experiment = dataset.copy()
+    second_experiment.index = pd.MultiIndex.from_tuples(
+        [("step", 0), ("step", 20_000_000)],
+        names=["experiment", "time_ns"],
+    )
+
+    sequences = TrainingTask._map_features(
+        pd.concat([dataset, second_experiment]),
+        input_features=["actual_q"],
+        output_feature="actual_effort",
+        mappings={
+            "elbow": EntityMapping(inputs=["elbow"], outputs=["elbow"]),
+            "shoulder": EntityMapping(
+                inputs=["shoulder"],
+                outputs=["shoulder"],
+            ),
+        },
+    )
+
+    assert [(sequence.experiment, sequence.name) for sequence in sequences] == [
+        ("wave", "elbow"),
+        ("wave", "shoulder"),
+        ("step", "elbow"),
+        ("step", "shoulder"),
+    ]
+    assert [
+        sequence.inputs.index.get_level_values("experiment").unique().item()
+        for sequence in sequences
+    ] == ["wave", "wave", "step", "step"]
 
 
 def test_rejects_missing_mapped_columns(dataset: pd.DataFrame) -> None:
@@ -65,6 +159,36 @@ def test_rejects_missing_mapped_columns(dataset: pd.DataFrame) -> None:
             dataset,
             input_features=["actual_q", "command_q"],
             output_feature="actual_effort",
-            input_entities=["shoulder", "wrist"],
-            output_entities=["wrist"],
+            mappings={
+                "arm": EntityMapping(
+                    inputs=["shoulder", "wrist"],
+                    outputs=["wrist"],
+                )
+            },
+        )
+
+
+def test_rejects_different_shared_mapping_widths(
+    dataset: pd.DataFrame,
+) -> None:
+    """Require every shared-weight sequence to have the same tensor shape."""
+
+    with pytest.raises(
+        ValueError,
+        match="mapping .arm. has shape 2->1, expected 1->1",
+    ):
+        TrainingTask._map_features(
+            dataset,
+            input_features=["actual_q"],
+            output_feature="actual_effort",
+            mappings={
+                "shoulder": EntityMapping(
+                    inputs=["shoulder"],
+                    outputs=["shoulder"],
+                ),
+                "arm": EntityMapping(
+                    inputs=["shoulder", "elbow"],
+                    outputs=["elbow"],
+                ),
+            },
         )
