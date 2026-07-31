@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Configuration-driven task runner for Anchor Bench."
 requires-python = ">=3.9"
 dependencies = [
+  "numpy>=1.23,<3",
   "pandas>=2.1,<3",
+  "pyarrow>=14,<26",
   "pydantic>=2.7,<3",
   "PyYAML>=6.0,<7",
   "typing-extensions>=4.10; python_version < '3.10'",
@@ -29,6 +31,10 @@ anchor-bench = "anchor_bench.cli:main"
 include = ["anchor_bench*"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+  "integration: downloads external data and exercises an end-to-end workflow",
+]
 testpaths = ["tests"]
 
 [tool.ruff]

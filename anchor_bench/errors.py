@@ -15,3 +15,11 @@ class UnknownConfigTypeError(ConfigParseError):
 
 class TaskNotFoundError(AnchorBenchError):
     """Raised when no task implementation is registered for a config type."""
+
+
+class DatasetLoadError(AnchorBenchError):
+    """Raised when a dataset source cannot be loaded."""
+
+
+class DatasetAlignmentError(AnchorBenchError):
+    """Raised when dataset signals cannot be aligned."""
