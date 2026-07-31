@@ -35,6 +35,26 @@ def _parameter_entities(
     return entities
 
 
+def _entity_columns(entities: List[str], features: List[str]) -> List[str]:
+    """Build entity-qualified columns for the requested features."""
+
+    return [f"{entity}/{feature}" for entity in entities for feature in features]
+
+
+def _solver_pd(
+    dataset: pd.DataFrame,
+    entity: str,
+    kp: Mapping[str, float],
+    kd: Mapping[str, float],
+) -> pd.Series:
+    """Calculate solver PD torque for one robot entity."""
+
+    return (
+        kp[entity] * dataset[f"{entity}/position_error"]
+        - kd[entity] * dataset[f"{entity}/actual_dq"]
+    )
+
+
 class PositionErrorPreprocessor(BasePreprocessor):
     """Generate commanded-minus-measured position for every commanded entity."""
 
@@ -50,11 +70,7 @@ class PositionErrorPreprocessor(BasePreprocessor):
         if not entities:
             raise ValueError("Dataset does not contain any command_q columns.")
 
-        required = [
-            column
-            for entity in entities
-            for column in (f"{entity}/command_q", f"{entity}/actual_q")
-        ]
+        required = _entity_columns(entities, ["command_q", "actual_q"])
         _require_columns(self.dataset, required)
 
         return pd.DataFrame(
@@ -89,21 +105,19 @@ class SolverPDPreprocessor(BasePreprocessor):
     def process(self) -> pd.DataFrame:
         """Return ``kp * position_error - kd * actual_dq`` per entity."""
 
-        required = [
-            column
-            for entity in self.entities
-            for column in (
-                f"{entity}/position_error",
-                f"{entity}/actual_dq",
-            )
-        ]
+        required = _entity_columns(
+            self.entities,
+            ["position_error", "actual_dq"],
+        )
         _require_columns(self.dataset, required)
 
         return pd.DataFrame(
             {
-                f"{entity}/solver_pd": (
-                    self.kp[entity] * self.dataset[f"{entity}/position_error"]
-                    - self.kd[entity] * self.dataset[f"{entity}/actual_dq"]
+                f"{entity}/solver_pd": _solver_pd(
+                    self.dataset,
+                    entity,
+                    self.kp,
+                    self.kd,
                 )
                 for entity in self.entities
             },
@@ -142,24 +156,21 @@ class ResidualTorquePreprocessor(BasePreprocessor):
     def process(self) -> pd.DataFrame:
         """Return measured effort minus PD, dry, and viscous torque."""
 
-        required = [
-            column
-            for entity in self.entities
-            for column in (
-                f"{entity}/position_error",
-                f"{entity}/actual_dq",
-                f"{entity}/actual_effort",
-            )
-        ]
+        required = _entity_columns(
+            self.entities,
+            ["position_error", "actual_dq", "actual_effort"],
+        )
         _require_columns(self.dataset, required)
 
         residuals = {}
         for entity in self.entities:
             velocity = self.dataset[f"{entity}/actual_dq"]
             direction = (velocity > 0).astype(float) - (velocity < 0).astype(float)
-            solver_pd = (
-                self.kp[entity] * self.dataset[f"{entity}/position_error"]
-                - self.kd[entity] * velocity
+            solver_pd = _solver_pd(
+                self.dataset,
+                entity,
+                self.kp,
+                self.kd,
             )
             friction = (
                 self.dry_friction[entity] * direction

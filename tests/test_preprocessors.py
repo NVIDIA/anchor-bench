@@ -94,7 +94,8 @@ def test_position_error_preprocessor_handles_multiple_entities() -> None:
             "shoulder/actual_q": [1.0, 1.5],
             "elbow/command_q": [3.0, 4.0],
             "elbow/actual_q": [2.5, 3.0],
-        }
+        },
+        index=pd.Index(["sample-a", "sample-b"]),
     )
 
     result = PositionErrorPreprocessor(dataset).process()
@@ -115,7 +116,8 @@ def test_solver_pd_preprocessor_uses_entity_gains() -> None:
             "shoulder/actual_dq": [2.0, -2.0],
             "elbow/position_error": [0.5, 1.0],
             "elbow/actual_dq": [1.0, 0.0],
-        }
+        },
+        index=pd.Index(["sample-a", "sample-b"]),
     )
 
     result = SolverPDPreprocessor(
@@ -126,6 +128,7 @@ def test_solver_pd_preprocessor_uses_entity_gains() -> None:
 
     assert result["shoulder/solver_pd"].tolist() == [1.0, 0.0]
     assert result["elbow/solver_pd"].tolist() == [1.0, 4.0]
+    assert result.index.equals(dataset.index)
 
 
 def test_residual_torque_preprocessor_subtracts_baselines() -> None:
@@ -134,7 +137,8 @@ def test_residual_torque_preprocessor_subtracts_baselines() -> None:
             "elbow/position_error": [0.5, 1.0, 0.0],
             "elbow/actual_dq": [1.0, -2.0, 0.0],
             "elbow/actual_effort": [10.0, 10.0, 10.0],
-        }
+        },
+        index=pd.Index(["sample-a", "sample-b", "sample-c"]),
     )
 
     result = ResidualTorquePreprocessor(
@@ -146,6 +150,7 @@ def test_residual_torque_preprocessor_subtracts_baselines() -> None:
     ).process()
 
     assert result["elbow/torque_residual"].tolist() == pytest.approx([8.65, 4.45, 10.0])
+    assert result.index.equals(dataset.index)
 
 
 def test_preprocessor_parameters_require_matching_entities() -> None:
