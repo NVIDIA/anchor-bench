@@ -6,19 +6,18 @@ build-backend = "setuptools.build_meta"
 name = "anchor-bench"
 version = "0.1.0"
 description = "Configuration-driven task runner for Anchor Bench."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.23,<3",
   "pandas>=2.1,<3",
   "pyarrow>=14,<26",
   "pydantic>=2.7,<3",
   "PyYAML>=6.0,<7",
-  "typing-extensions>=4.10; python_version < '3.10'",
 ]
 
 [project.optional-dependencies]
 simulation = [
-  "newton[importers,sim] @ git+https://github.com/newton-physics/newton.git@v1.4.0",
+  "newton[importers,sim]==1.4.0",
 ]
 dev = [
   "pyright>=1.1,<2",
@@ -41,7 +40,7 @@ markers = [
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 # Keep annotations evaluable on the project's minimum supported Python.
@@ -49,4 +48,4 @@ ignore = ["UP006", "UP007", "UP035", "UP045"]
 
 [tool.pyright]
 exclude = ["build", "**/__pycache__"]
-pythonVersion = "3.9"
+pythonVersion = "3.10"

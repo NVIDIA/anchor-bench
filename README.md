@@ -22,9 +22,14 @@ result artifacts.
 
 ## Installation
 
-Anchor Bench requires Python 3.9 or newer and uses
-[uv](https://docs.astral.sh/uv/) for environment and dependency management.
-From the repository root, create the environment and install the package:
+Anchor Bench requires Python 3.10 or newer because Newton requires Python
+3.10+. Python 3.12 is recommended because it matches Isaac Lab's recommended
+Python version. The repository's `.python-version` configures uv to use Python
+3.12 by default.
+
+Anchor Bench uses [uv](https://docs.astral.sh/uv/) for environment and
+dependency management. From the repository root, create the environment and
+install the package:
 
 ```bash
 uv sync
