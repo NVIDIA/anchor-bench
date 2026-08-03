@@ -40,6 +40,7 @@ def valid_config_data():
         },
         "simulation": {
             "type": "newton",
+            "usd_path": "assets/robots/test.usd",
             "physics_freq": 1000,
             "control_freq": 200,
             "render_freq": 60,
