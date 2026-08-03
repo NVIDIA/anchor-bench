@@ -15,9 +15,17 @@ ConfigT = TypeVar("ConfigT", bound=BaseConfig)
 class BaseTask(ABC, Generic[ConfigT]):
     """A task constructed from a validated configuration model."""
 
-    @abstractmethod
     def __init__(self, config: ConfigT) -> None:
         """Initialize the task with a validated configuration."""
+
+        self.config = config
+
+    def __init_subclass__(cls) -> None:
+        """Require every concrete task to inherit directly and only from BaseTask."""
+
+        super().__init_subclass__()
+        if cls.__bases__ != (BaseTask,):
+            raise TypeError(f"{cls.__name__} must directly inherit only from BaseTask")
 
     @classmethod
     def name(cls) -> str:

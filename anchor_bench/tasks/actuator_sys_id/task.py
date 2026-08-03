@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from anchor_bench.core.artifacts import get_or_create_output_folder
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.base_task import BaseTask
@@ -13,17 +12,7 @@ from anchor_bench.tasks.base_task import BaseTask
 class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
     """Fit actuator parameters by replaying recorded commands in Newton."""
 
-    def __init__(self, config: ActuatorSysIdConfig) -> None:
-        self.config = config
-
     def run(self) -> Path:
-        output_dir, already_existed = get_or_create_output_folder(
-            self.config,
-            output_root=self.config.output_dir,
-        )
-        if already_existed:
-            return output_dir
-
         joint_names = [
             joint for group in self.config.joint_parameters for joint in group.names
         ]

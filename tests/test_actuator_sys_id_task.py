@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -128,25 +126,6 @@ def test_task_stops_at_unimplemented_optimization(tmp_path, monkeypatch):
         "joint_names": ["hip"],
         "control_dt": 0.005,
     }
-    output_directories = list(Path(config.output_dir).iterdir())
-    assert len(output_directories) == 1
-    assert (output_directories[0] / "config.yaml").is_file()
-
-
-def test_task_returns_existing_output_before_loading_data(tmp_path, monkeypatch):
-    config = _config(tmp_path)
-    output_dir, already_existed = task_module.get_or_create_output_folder(
-        config,
-        output_root=config.output_dir,
-    )
-    assert already_existed is False
-
-    def unexpected_load(*args, **kwargs):
-        pytest.fail("an existing output must return before loading data")
-
-    monkeypatch.setattr(task_module, "load_trajectories", unexpected_load)
-
-    assert ActuatorSysIdTask(config).run() == output_dir
 
 
 def test_writes_fitted_parameters_and_generation_history(tmp_path):

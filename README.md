@@ -50,6 +50,14 @@ The command-line interface accepts one YAML configuration file:
 uv run anchor-bench --config path/to/config.yaml
 ```
 
+Successful tasks write a `.completed` marker in their output directory. A
+later invocation with the same configuration skips the task while that marker
+is present. Pass `--force` to run it again:
+
+```bash
+uv run anchor-bench --config path/to/config.yaml --force
+```
+
 Use `--help` to display the available option:
 
 ```bash

@@ -9,13 +9,15 @@ from typing import Any, Optional, Tuple, Union
 import yaml
 from pydantic import BaseModel
 
+COMPLETION_MARKER = ".completed"
+
 
 def get_or_create_output_folder(
     config: BaseModel,
     *,
     output_root: Optional[Union[str, Path]] = None,
 ) -> Tuple[Path, bool]:
-    """Get a config-addressed output folder or create and initialize it."""
+    """Get or initialize an output folder and report whether it is complete."""
 
     output_root = output_root or resolve_repo_root() / "output"
     folder_name = _hash_name(config)
@@ -24,7 +26,7 @@ def get_or_create_output_folder(
         output_folder.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
         if output_folder.is_dir():
-            return output_folder, True
+            return output_folder, (output_folder / COMPLETION_MARKER).is_file()
         raise
     _write_yaml(
         output_folder / "config.yaml",

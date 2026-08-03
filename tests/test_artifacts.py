@@ -14,12 +14,12 @@ from anchor_bench.schema.base import BaseConfig
 def test_get_or_create_output_folder_writes_config(tmp_path: Path):
     config = BaseConfig(type="example")
 
-    output_folder, already_existed = get_or_create_output_folder(
+    output_folder, already_completed = get_or_create_output_folder(
         config,
         output_root=tmp_path,
     )
 
-    assert already_existed is False
+    assert already_completed is False
     assert output_folder.parent == tmp_path
     assert len(output_folder.name) == 8
     int(output_folder.name, 16)
@@ -28,7 +28,7 @@ def test_get_or_create_output_folder_writes_config(tmp_path: Path):
     }
 
 
-def test_get_or_create_output_folder_returns_existing_run_without_writing(
+def test_get_or_create_output_folder_reports_completion_marker_without_writing(
     tmp_path: Path,
 ):
     config = BaseConfig(type="example")
@@ -37,15 +37,22 @@ def test_get_or_create_output_folder_returns_existing_run_without_writing(
         "config": config,
     }
 
-    output_folder, already_existed = get_or_create_output_folder(**arguments)
-    assert already_existed is False
+    output_folder, already_completed = get_or_create_output_folder(**arguments)
+    assert already_completed is False
     config_path = output_folder / "config.yaml"
     config_path.write_text("existing content")
 
-    existing_folder, already_existed = get_or_create_output_folder(**arguments)
+    existing_folder, already_completed = get_or_create_output_folder(**arguments)
 
     assert existing_folder == output_folder
-    assert already_existed is True
+    assert already_completed is False
+    assert config_path.read_text() == "existing content"
+
+    (output_folder / ".completed").touch()
+    completed_folder, already_completed = get_or_create_output_folder(**arguments)
+
+    assert completed_folder == output_folder
+    assert already_completed is True
     assert config_path.read_text() == "existing content"
 
 
@@ -55,11 +62,11 @@ def test_get_or_create_output_folder_uses_repository_output_by_default(
 ):
     monkeypatch.setattr(artifacts, "resolve_repo_root", lambda: tmp_path)
 
-    output_folder, already_existed = get_or_create_output_folder(
+    output_folder, already_completed = get_or_create_output_folder(
         BaseConfig(type="example"),
     )
 
-    assert already_existed is False
+    assert already_completed is False
     assert output_folder.parent == tmp_path / "output"
 
 

@@ -22,6 +22,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to the task's YAML configuration file.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run the task even when its output is already complete.",
+    )
     return parser
 
 
@@ -30,7 +35,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        TaskRunner().run(args.config)
+        TaskRunner().run(args.config, force=args.force)
     except (AnchorBenchError, ValidationError) as error:
         parser.error(str(error))
 

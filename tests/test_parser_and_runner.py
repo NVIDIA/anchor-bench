@@ -48,7 +48,10 @@ dataset:
 @pytest.fixture
 def config_path(tmp_path: Path) -> Path:
     path = tmp_path / "config.yaml"
-    path.write_text(VALID_YAML, encoding="utf-8")
+    path.write_text(
+        f"{VALID_YAML}\noutput_dir: {tmp_path / 'output'}\n",
+        encoding="utf-8",
+    )
     return path
 
 
@@ -75,16 +78,83 @@ def test_runner_constructs_and_runs_registered_task(config_path):
     seen = []
 
     class RecordingTask(BaseTask[ActuatorSysIdConfig]):
-        def __init__(self, config: ActuatorSysIdConfig) -> None:
-            self.config = config
-
         def run(self) -> Path:
             seen.append(self.config)
-            return config_path.parent / "output"
+            return Path(self.config.output_dir)
 
     assert RecordingTask.name() == "actuator_sys_id"
     result = TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))
 
-    assert result == config_path.parent / "output"
+    assert result.parent == config_path.parent / "output"
+    assert (result / "config.yaml").is_file()
+    assert (result / ".completed").is_file()
     assert len(seen) == 1
     assert isinstance(seen[0], ActuatorSysIdConfig)
+
+
+def test_runner_skips_completed_task_unless_forced(config_path):
+    run_count = 0
+
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self) -> Path:
+            nonlocal run_count
+            run_count += 1
+            return Path(self.config.output_dir)
+
+    runner = TaskRunner({"actuator_sys_id": RecordingTask})
+    first_output = runner.run(str(config_path))
+    second_output = runner.run(str(config_path))
+
+    assert second_output == first_output
+    assert run_count == 1
+
+    forced_output = runner.run(str(config_path), force=True)
+
+    assert forced_output == first_output
+    assert run_count == 2
+    assert (forced_output / ".completed").is_file()
+
+
+def test_forced_failure_removes_previous_completion_marker(config_path):
+    should_fail = False
+
+    class FailableTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self) -> Path:
+            if should_fail:
+                raise RuntimeError("task failed")
+            return Path(self.config.output_dir)
+
+    runner = TaskRunner({"actuator_sys_id": FailableTask})
+    output_directory = runner.run(str(config_path))
+    assert (output_directory / ".completed").is_file()
+
+    should_fail = True
+    with pytest.raises(RuntimeError, match="task failed"):
+        runner.run(str(config_path), force=True)
+
+    assert not (output_directory / ".completed").exists()
+
+
+def test_base_task_rejects_multiple_inheritance():
+    class TaskMixin:
+        pass
+
+    with pytest.raises(TypeError, match="directly inherit only from BaseTask"):
+
+        class MultipleInheritanceTask(
+            BaseTask[ActuatorSysIdConfig],
+            TaskMixin,
+        ):
+            def run(self) -> Path:
+                return Path("output")
+
+
+def test_base_task_rejects_indirect_inheritance():
+    class DirectTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self) -> Path:
+            return Path("output")
+
+    with pytest.raises(TypeError, match="directly inherit only from BaseTask"):
+
+        class IndirectTask(DirectTask):
+            pass
