@@ -1,3 +1,7 @@
+> **Outdated:** This guide describes artifact locations and workflows from an
+> earlier architecture. See the [project README](../README.md) and current source
+> tree for implemented behavior.
+
 Large datasets, SO-101 benchmark outputs, neural weights, FMUs, third-party checkouts, and generated plots are local artifacts. Keep only manifests, placeholders, and small synthetic examples in git.
 
 ## Third-Party Artifacts

@@ -11,4 +11,5 @@ class SimulationContext(ABC):
 
     @abstractmethod
     def load(self, usd_path: str) -> Tuple[Any, Any]:
+        """Load a simulation model and its initial state from a USD file."""
         raise NotImplementedError

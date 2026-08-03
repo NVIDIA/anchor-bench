@@ -11,6 +11,9 @@ concurrency:
   group: quality-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   python-quality:
     name: Lint, format, type-check, and test
@@ -27,4 +30,62 @@ jobs:
       - run: python -m ruff check anchor_bench tests
       - run: python -m ruff format --check anchor_bench tests
       - run: python -m pyright
-      - run: python -m pytest --cov=anchor_bench --cov-report=term-missing
+      - run: python -m pytest --cov=anchor_bench --cov-report=term-missing --cov-report=json:coverage.json
+      - name: Generate badges
+        # Any file generated under badges/ is published to the badges branch.
+        run: |
+          python .github/scripts/render_badge.py \
+            --label coverage \
+            --json-file coverage.json \
+            --json-path totals.percent_covered_display \
+            --suffix "%" \
+            --color "#e05d44" \
+            --color-threshold "80:#dfb317" \
+            --color-threshold "90:#4c1" \
+            --output badges/coverage.svg
+      - name: Upload badges
+        uses: actions/upload-artifact@v7
+        with:
+          name: badges
+          path: badges/
+          retention-days: 1
+
+  publish-badges:
+    name: Publish badges
+    if: github.event_name == 'push' && github.ref == 'refs/heads/refactor-main'
+    needs: python-quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Download badges
+        uses: actions/download-artifact@v8
+        with:
+          name: badges
+          path: ${{ runner.temp }}/generated-badges
+      - name: Publish badge files
+        env:
+          BADGE_SOURCE: ${{ runner.temp }}/generated-badges
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin badges; then
+            git switch --force-create badges origin/badges
+          else
+            git switch --orphan badges
+          fi
+
+          mkdir -p badges
+          cp -R "$BADGE_SOURCE"/. badges/
+          git add badges
+
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          git commit -m "Update generated badges"
+          git push origin badges

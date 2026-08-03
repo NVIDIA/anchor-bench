@@ -1,5 +1,9 @@
 # Anchor Bench CLI
 
+> **Outdated:** This guide describes an earlier architecture and commands that
+> are not implemented by the current package. See the
+> [project README](../README.md) for the supported command-line interface.
+
 Run these commands inside the full container shell opened by `./setup.sh --shell`.
 From the host, prefix commands with `./setup.sh --shell`; for example,
 `./setup.sh --shell anchor-bench robots list`.

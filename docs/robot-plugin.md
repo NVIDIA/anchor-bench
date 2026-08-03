@@ -1,5 +1,9 @@
 # Adding a Robot
 
+> **Outdated:** The robot plugin system described here is not implemented by the
+> current package. See the [project README](../README.md) for current
+> functionality.
+
 Anchor Bench robot support starts as declarative configuration. A new robot
 should be understandable from `configs/robots/<robot>/`, with measured run data
 under `inputs/`, assets under `assets/` or `ANCHOR_BENCH_ASSET_DIR`, and generated

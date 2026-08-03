@@ -1,5 +1,9 @@
 # Repository Structure
 
+> **Outdated:** This guide describes directories and workflows from an earlier
+> architecture. See the [project README](../README.md) and the current source
+> tree for the implemented repository structure.
+
 Anchor Bench separates robot definitions, runtime assets, run inputs, generated
 outputs, and third-party dependencies. Keeping those boundaries clear makes runs
 reproducible and keeps generated or private files out of robot config.
