@@ -1,5 +1,9 @@
 # End-to-End Pipeline Tests
 
+> **Outdated:** This guide describes an earlier architecture and tests that are
+> not present in the current package. See the [project README](../README.md) for
+> the currently supported test commands.
+
 Anchor Bench has two end-to-end pipeline layers:
 
 - `tests/test_pipeline_contract.py` is the default, host-safe contract test for

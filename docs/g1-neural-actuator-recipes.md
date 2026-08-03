@@ -1,5 +1,9 @@
 # G1 Neural Actuator Recipes
 
+> **Outdated:** This guide describes a training workflow that is not implemented
+> by the current package. See the [project README](../README.md) for current
+> functionality.
+
 Anchor Bench keeps G1 neural actuator support declarative and artifact-light.
 Do not commit G1 `.pt`, `.pth`, `.onnx`, raw datasets, or generated benchmark
 outputs. Store generated runs under `outputs/training/g1/...`; promote only
