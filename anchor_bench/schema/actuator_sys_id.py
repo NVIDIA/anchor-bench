@@ -89,10 +89,17 @@ class WarpMujocoSolverConfig(StrictBaseModel):
 
 class NewtonSimulationConfig(StrictBaseModel):
     type: Literal["newton"]
+    usd_path: NonEmptyString
     physics_freq: PositiveInteger
     control_freq: PositiveInteger
     render_freq: PositiveInteger
     solver: WarpMujocoSolverConfig
+
+    @model_validator(mode="after")
+    def validate_frequencies(self) -> NewtonSimulationConfig:
+        if self.physics_freq % self.control_freq != 0:
+            raise ValueError("physics_freq must be divisible by control_freq")
+        return self
 
 
 class ActuatorSysIdConfig(BaseConfig):
@@ -102,4 +109,17 @@ class ActuatorSysIdConfig(BaseConfig):
     simulation: NewtonSimulationConfig
     num_envs: PositiveInteger = 64
     buffer_time: NonNegativeNumber = 0.0
+    seed: NonNegativeInteger = 0
+    output_dir: NonEmptyString = "outputs/actuator_sys_id"
     dataset: ParquetDatasetConfig
+
+    @model_validator(mode="after")
+    def joint_names_must_be_globally_unique(self) -> ActuatorSysIdConfig:
+        names = [
+            name
+            for parameter_group in self.joint_parameters
+            for name in parameter_group.names
+        ]
+        if len(names) != len(set(names)):
+            raise ValueError("joint names must be unique across parameter groups")
+        return self
