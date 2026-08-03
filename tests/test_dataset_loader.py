@@ -1,4 +1,3 @@
-from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -38,34 +37,39 @@ def test_loads_and_resamples_local_parquet_file(tmp_path: Path) -> None:
     )
     source = _write_dataset(tmp_path, dataset)
 
-    result = DatasetLoader.load(str(source), dt=0.02)
+    result = DatasetLoader.load(source, dt=0.02)
 
     assert result.columns.tolist() == ["actual_q", "command_q"]
     assert result.index.get_level_values("time_ns").tolist() == [0, 20_000_000]
 
 
-def test_loads_direct_http_url(monkeypatch) -> None:
+def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
     dataset = pd.DataFrame(_rows("actual_q", [0], [1.0]))
-    payload = BytesIO()
-    dataset.to_parquet(payload, index=False)
     seen = []
 
-    def open_url(source, *, timeout):
-        """Return remote Parquet bytes and record the configured timeout."""
+    def download(source, output_folder, *, http_timeout_seconds):
+        """Write remote Parquet data and record the downloader arguments."""
 
-        seen.append((source, timeout))
-        return BytesIO(payload.getvalue())
+        output_folder = Path(output_folder)
+        destination = output_folder / "dataset.parquet"
+        dataset.to_parquet(destination, index=False)
+        seen.append((source, output_folder, http_timeout_seconds))
+        return destination
 
-    monkeypatch.setattr(loader_module, "urlopen", open_url)
+    monkeypatch.setattr(loader_module, "download_from_huggingface", download)
 
     result = DatasetLoader.load(
-        "https://example.com/dataset.parquet",
+        "https://huggingface.co/datasets/example/resolve/main/dataset.parquet",
         dt=0.02,
         http_timeout_seconds=2.5,
     )
 
     assert result["actual_q"].tolist() == [1.0]
-    assert seen == [("https://example.com/dataset.parquet", 2.5)]
+    assert seen[0][0] == (
+        "https://huggingface.co/datasets/example/resolve/main/dataset.parquet"
+    )
+    assert seen[0][2] == 2.5
+    assert not seen[0][1].exists()
 
 
 @pytest.mark.parametrize(
@@ -106,8 +110,8 @@ def test_rejects_missing_local_file(tmp_path: Path) -> None:
         "x://host/dataset.parquet",
     ],
 )
-def test_rejects_unsupported_url_scheme(source: str) -> None:
-    with pytest.raises(DatasetLoadError, match="Unsupported dataset URL scheme"):
+def test_non_http_source_is_treated_as_local_path(source: str) -> None:
+    with pytest.raises(DatasetLoadError, match="does not exist or is not a file"):
         DatasetLoader.load(
             source,
             dt=0.02,
