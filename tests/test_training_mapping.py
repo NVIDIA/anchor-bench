@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from anchor_bench.train.task import EntityMapping, TrainingTask
+from anchor_bench.tasks.train import EntityMapping, TrainingTask
 
 
 @pytest.fixture
@@ -50,6 +50,12 @@ def test_prepares_siso_mapping(dataset: pd.DataFrame) -> None:
     assert sequences[0].targets.columns.tolist() == ["shoulder/actual_effort"]
     assert sequences[0].inputs.index.equals(dataset.index)
     assert sequences[0].targets.index.equals(dataset.index)
+
+    sequences[0].inputs.iloc[0, 0] = -1.0
+    sequences[0].targets.iloc[0, 0] = -1.0
+
+    assert dataset.loc[("wave", 0), "shoulder/actual_q"] == 1.0
+    assert dataset.loc[("wave", 0), "shoulder/actual_effort"] == 3.0
 
 
 def test_prepares_mimo_mapping_in_feature_major_order(
@@ -166,6 +172,25 @@ def test_rejects_missing_mapped_columns(dataset: pd.DataFrame) -> None:
                 )
             },
         )
+
+
+def test_reports_shared_missing_column_once(dataset: pd.DataFrame) -> None:
+    """Deduplicate a column used as both input and target."""
+
+    with pytest.raises(ValueError) as error:
+        TrainingTask._map_features(
+            dataset,
+            input_features=["actual_effort"],
+            output_feature="actual_effort",
+            mappings={
+                "wrist": EntityMapping(
+                    inputs=["wrist"],
+                    outputs=["wrist"],
+                )
+            },
+        )
+
+    assert str(error.value).count("wrist/actual_effort") == 1
 
 
 def test_rejects_different_shared_mapping_widths(
