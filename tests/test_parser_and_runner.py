@@ -78,16 +78,13 @@ def test_runner_constructs_and_runs_registered_task(config_path):
         def __init__(self, config: ActuatorSysIdConfig) -> None:
             self.config = config
 
-        @classmethod
-        def name(cls) -> str:
-            return "actuator_sys_id"
-
-        def run(self):
+        def run(self) -> Path:
             seen.append(self.config)
-            return "complete"
+            return config_path.parent / "output"
 
+    assert RecordingTask.name() == "actuator_sys_id"
     result = TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))
 
-    assert result == "complete"
+    assert result == config_path.parent / "output"
     assert len(seen) == 1
     assert isinstance(seen[0], ActuatorSysIdConfig)

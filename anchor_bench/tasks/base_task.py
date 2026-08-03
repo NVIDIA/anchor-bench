@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from pathlib import Path
+from typing import Generic, Type, TypeVar, get_args, get_origin
 
 from anchor_bench.schema.base import BaseConfig
+from anchor_bench.schema.helpers import _config_type
 
 ConfigT = TypeVar("ConfigT", bound=BaseConfig)
 
@@ -18,10 +20,28 @@ class BaseTask(ABC, Generic[ConfigT]):
         """Initialize the task with a validated configuration."""
 
     @classmethod
-    @abstractmethod
     def name(cls) -> str:
-        """Return the config discriminator handled by this task."""
+        """Return the string Literal declared by the task's config type."""
+
+        return _config_type(cls._config_class())
+
+    @classmethod
+    def _config_class(cls) -> Type[BaseConfig]:
+        """Return the concrete config bound through ``BaseTask[ConfigT]``."""
+
+        for base in getattr(cls, "__orig_bases__", ()):
+            if get_origin(base) is not BaseTask:
+                continue
+            arguments = get_args(base)
+            if len(arguments) != 1:
+                continue
+            config_class = arguments[0]
+            if isinstance(config_class, type) and issubclass(config_class, BaseConfig):
+                return config_class
+        raise TypeError(
+            f"{cls.__name__} must bind a concrete config as BaseTask[ConfigType]"
+        )
 
     @abstractmethod
-    def run(self) -> Any:
-        """Execute the task."""
+    def run(self) -> Path:
+        """Execute the task and return its output directory."""
