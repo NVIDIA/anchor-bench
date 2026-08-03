@@ -5,31 +5,36 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Hashable, Mapping
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Tuple, Union
 
 import yaml
 from pydantic import BaseModel
 
 
-def create_output_folder(
+def get_or_create_output_folder(
     hash_input: Hashable,
     *,
     config: BaseModel,
     input_data: Mapping[str, Any],
     output_root: Optional[Union[str, Path]] = None,
-) -> Path:
-    """Create a content-addressed output folder and record its run inputs."""
+) -> Tuple[Path, bool]:
+    """Get an output folder or create it and record its run inputs."""
 
     output_root = output_root or resolve_repo_root() / "output"
     folder_name = _hash_name(hash_input)
     output_folder = Path(output_root).expanduser() / folder_name
-    output_folder.mkdir(parents=True, exist_ok=False)
+    try:
+        output_folder.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        if output_folder.is_dir():
+            return output_folder, True
+        raise
     _write_yaml(
         output_folder / "config.yaml",
         config.model_dump(mode="json"),
     )
     _write_yaml(output_folder / "input_data.yaml", dict(input_data))
-    return output_folder
+    return output_folder, False
 
 
 def resolve_repo_root() -> Path:
