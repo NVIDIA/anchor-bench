@@ -31,6 +31,8 @@ jobs:
       - run: python -m ruff format --check anchor_bench tests
       - run: python -m pyright
       - run: python -m pytest --cov=anchor_bench --cov-report=term-missing --cov-report=json:coverage.json
+      - name: Run integration tests
+        run: python -m pytest -m integration
       - name: Generate badges
         # Any file generated under badges/ is published to the badges branch.
         run: |

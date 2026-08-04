@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-import re
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
-from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Iterator, Union
 from urllib.parse import urlparse
-from urllib.request import urlopen
 
 import numpy as np
 import pandas as pd
 
+from anchor_bench.data.datasets import download_from_huggingface
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
 
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
 NANOSECONDS_PER_SECOND = 1_000_000_000
 REQUIRED_COLUMNS = {"time_ns", "experiment", "field", "value"}
-WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/](?![\\/])")
 
 
 class DatasetLoader:
@@ -25,42 +25,58 @@ class DatasetLoader:
 
     @staticmethod
     def load(
-        source: str,
+        source: Union[str, Path],
         *,
         dt: float,
         http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     ) -> pd.DataFrame:
-        """Load a dataset and resample it to a uniform interval.
+        """Acquire a local Parquet file, read it, and resample its signals."""
 
-        Remote URLs must return Parquet bytes directly.
-        """
+        with DatasetLoader._get_file(
+            source,
+            http_timeout_seconds=http_timeout_seconds,
+        ) as dataset_file:
+            dataset = DatasetLoader._read_file(dataset_file, source)
+        return DatasetLoader._resample(dataset, dt)
 
-        scheme = urlparse(source).scheme
-        is_remote = scheme in ("http", "https")
-        is_windows_path = WINDOWS_DRIVE_PATH.match(source) is not None
-        if scheme and not is_remote and not is_windows_path:
-            raise DatasetLoadError(
-                f"Unsupported dataset URL scheme {scheme!r}: {source}."
-            )
+    @staticmethod
+    @contextmanager
+    def _get_file(
+        source: Union[str, Path],
+        *,
+        http_timeout_seconds: float,
+    ) -> Iterator[Path]:
+        """Yield a validated local file, downloading remote data when needed."""
+
+        source_text = str(source)
+        scheme = urlparse(source_text).scheme
+        if scheme in ("http", "https"):
+            # TODO: We should also cache these downloads at some point.
+            with TemporaryDirectory(prefix="anchor-bench-dataset-") as folder:
+                yield download_from_huggingface(
+                    source_text,
+                    folder,
+                    http_timeout_seconds=http_timeout_seconds,
+                )
+            return
+        yield DatasetLoader._local_path(source)
+
+    @staticmethod
+    def _read_file(
+        dataset_file: Path,
+        source: Union[str, Path],
+    ) -> pd.DataFrame:
+        """Read a local Parquet file into memory."""
 
         try:
-            if is_remote:
-                with urlopen(source, timeout=http_timeout_seconds) as response:
-                    read_source = BytesIO(response.read())
-            else:
-                read_source = DatasetLoader._local_path(source)
-            dataset = pd.read_parquet(read_source)
-        except DatasetLoadError:
-            raise
+            return pd.read_parquet(dataset_file)
         except Exception as error:
             raise DatasetLoadError(
                 f"Could not load Parquet dataset from {source}: {error}."
             ) from error
 
-        return DatasetLoader._resample(dataset, dt)
-
     @staticmethod
-    def _local_path(source: str) -> Path:
+    def _local_path(source: Union[str, Path]) -> Path:
         """Validate and expand a local dataset path."""
 
         expanded_path = Path(source).expanduser()
