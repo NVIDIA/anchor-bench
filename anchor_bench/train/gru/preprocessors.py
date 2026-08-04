@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Mapping
+from typing import Any, Dict, List, Mapping
 
 import numpy as np
 import pandas as pd
@@ -19,21 +19,49 @@ def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:
         raise ValueError(f"Dataset is missing preprocessor columns: {names}.")
 
 
-def _parameter_entities(
-    parameters: Mapping[str, Mapping[str, float]],
-) -> List[str]:
-    """Validate entity keys shared by related parameter mappings."""
+def _feature_entities(dataset: pd.DataFrame, feature: str) -> List[str]:
+    """Return entities that expose the requested feature column."""
 
-    first_name, first_values = next(iter(parameters.items()))
-    entities = list(first_values)
+    suffix = f"/{feature}"
+    entities = [
+        column[: -len(suffix)]
+        for column in dataset.columns
+        if isinstance(column, str) and column.endswith(suffix)
+    ]
     if not entities:
-        raise ValueError(f"{first_name} must contain at least one entity.")
-
-    expected = set(entities)
-    for name, values in parameters.items():
-        if set(values) != expected:
-            raise ValueError(f"{name} entities must match {first_name} entities.")
+        raise ValueError(f"Dataset does not contain any {feature} columns.")
     return entities
+
+
+def _joint_parameters(
+    model: Any,
+    entities: List[str],
+    field: str,
+) -> Dict[str, float]:
+    """Read one per-DOF model field for dataset entities."""
+
+    labels = model.joint_label
+    dof_starts = model.joint_qd_start.numpy()
+    model_values = getattr(model, field, None)
+    if model_values is None:
+        raise ValueError(f"USD model does not define {field}.")
+    values = model_values.numpy()
+
+    parameters = {}
+    for entity in entities:
+        if entity not in labels:
+            raise ValueError(f"USD model does not contain joint {entity!r}.")
+
+        joint_index = labels.index(entity)
+        dof_start = int(dof_starts[joint_index])
+        dof_end = int(dof_starts[joint_index + 1])
+        if dof_end - dof_start != 1:
+            raise ValueError(
+                f"USD joint {entity!r} must have exactly one degree of freedom."
+            )
+
+        parameters[entity] = float(values[dof_start])
+    return parameters
 
 
 def _entity_columns(entities: List[str], features: List[str]) -> List[str]:
@@ -105,19 +133,14 @@ class SolverPDPreprocessor(BasePreprocessor):
     The dataset must first be processed by :class:`PositionErrorPreprocessor`.
     """
 
-    def __init__(
-        self,
-        dataset: pd.DataFrame,
-        *,
-        kp: Mapping[str, float],
-        kd: Mapping[str, float],
-    ) -> None:
-        """Store entity-keyed proportional and derivative gains."""
+    def __init__(self, dataset: pd.DataFrame) -> None:
+        """Load PD gains for dataset entities from the USD model."""
 
         super().__init__(dataset)
-        self.kp = dict(kp)
-        self.kd = dict(kd)
-        self.entities = _parameter_entities({"kp": self.kp, "kd": self.kd})
+        self.entities = _feature_entities(dataset, "position_error")
+        model = self.simulation_context.model
+        self.kp = _joint_parameters(model, self.entities, "joint_target_ke")
+        self.kd = _joint_parameters(model, self.entities, "joint_target_kd")
 
     def process(self) -> pd.DataFrame:
         """Return ``kp * position_error - kd * actual_dq`` per entity."""
@@ -148,29 +171,23 @@ class ResidualTorquePreprocessor(BasePreprocessor):
     The dataset must first be processed by :class:`PositionErrorPreprocessor`.
     """
 
-    def __init__(
-        self,
-        dataset: pd.DataFrame,
-        *,
-        kp: Mapping[str, float],
-        kd: Mapping[str, float],
-        dry_friction: Mapping[str, float],
-        viscous_friction: Mapping[str, float],
-    ) -> None:
-        """Store entity-keyed PD and friction parameters."""
+    def __init__(self, dataset: pd.DataFrame) -> None:
+        """Load PD and friction parameters from the USD model."""
 
         super().__init__(dataset)
-        self.kp = dict(kp)
-        self.kd = dict(kd)
-        self.dry_friction = dict(dry_friction)
-        self.viscous_friction = dict(viscous_friction)
-        self.entities = _parameter_entities(
-            {
-                "kp": self.kp,
-                "kd": self.kd,
-                "dry_friction": self.dry_friction,
-                "viscous_friction": self.viscous_friction,
-            }
+        self.entities = _feature_entities(dataset, "position_error")
+        model = self.simulation_context.model
+        self.kp = _joint_parameters(model, self.entities, "joint_target_ke")
+        self.kd = _joint_parameters(model, self.entities, "joint_target_kd")
+        self.dry_friction = _joint_parameters(
+            model,
+            self.entities,
+            "joint_friction",
+        )
+        self.viscous_friction = _joint_parameters(
+            model,
+            self.entities,
+            "joint_damping",
         )
 
     def process(self) -> pd.DataFrame:

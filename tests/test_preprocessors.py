@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -13,6 +15,20 @@ from anchor_bench.train.gru import (
     ResidualTorquePreprocessor,
     SolverPDPreprocessor,
 )
+
+
+class FakeNewtonArray:
+    """Expose Newton-style host conversion for test values."""
+
+    def __init__(self, values: list[float]) -> None:
+        """Store values returned by the fake device array."""
+
+        self.values = values
+
+    def numpy(self) -> np.ndarray:
+        """Return values as a NumPy array."""
+
+        return np.asarray(self.values)
 
 
 class DifferencePreprocessor(BasePreprocessor):
@@ -30,7 +46,14 @@ class RecordingSimulationContext(SimulationContext):
         """Record the USD selected by the current context."""
 
         self.loaded_path = str(usd_path)
-        return "model", "state"
+        return SimpleNamespace(
+            joint_label=["shoulder", "elbow"],
+            joint_qd_start=FakeNewtonArray([0, 1, 2]),
+            joint_target_ke=FakeNewtonArray([2.0, 4.0]),
+            joint_target_kd=FakeNewtonArray([0.5, 1.0]),
+            joint_friction=FakeNewtonArray([0.2, 0.25]),
+            joint_damping=FakeNewtonArray([0.05, 0.1]),
+        ), "state"
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +121,10 @@ def test_base_preprocessor_uses_current_context(
     preprocessor = DifferencePreprocessor(dataset)
 
     assert preprocessor.simulation_context is simulation_context
-    assert preprocessor.simulation_context.model == "model"
+    assert preprocessor.simulation_context.model.joint_label == [
+        "shoulder",
+        "elbow",
+    ]
     assert preprocessor.simulation_context.state == "state"
 
 
@@ -135,11 +161,7 @@ def test_solver_pd_preprocessor_uses_entity_gains() -> None:
         index=pd.Index(["sample-a", "sample-b"]),
     )
 
-    result = SolverPDPreprocessor(
-        dataset,
-        kp={"shoulder": 2.0, "elbow": 4.0},
-        kd={"shoulder": 0.5, "elbow": 1.0},
-    ).process()
+    result = SolverPDPreprocessor(dataset).process()
 
     assert result["shoulder/solver_pd"].tolist() == [1.0, 0.0]
     assert result["elbow/solver_pd"].tolist() == [1.0, 4.0]
@@ -156,39 +178,27 @@ def test_residual_torque_preprocessor_subtracts_baselines() -> None:
         index=pd.Index(["sample-a", "sample-b", "sample-c"]),
     )
 
-    result = ResidualTorquePreprocessor(
-        dataset,
-        kp={"elbow": 4.0},
-        kd={"elbow": 1.0},
-        dry_friction={"elbow": 0.25},
-        viscous_friction={"elbow": 0.1},
-    ).process()
+    result = ResidualTorquePreprocessor(dataset).process()
 
     assert result["elbow/torque_residual"].tolist() == pytest.approx([8.65, 4.45, 10.0])
     assert result.index.equals(dataset.index)
 
 
-def test_preprocessor_parameters_require_matching_entities() -> None:
-    with pytest.raises(ValueError, match="kd entities must match kp entities"):
-        SolverPDPreprocessor(
-            pd.DataFrame(),
-            kp={"shoulder": 2.0},
-            kd={"elbow": 1.0},
-        )
+def test_preprocessor_entity_must_match_usd_joint() -> None:
+    """Reject dataset entities that do not identify a USD joint."""
 
+    dataset = pd.DataFrame(
+        {
+            "wrist/position_error": [0.5],
+            "wrist/actual_dq": [1.0],
+        }
+    )
 
-def test_residual_torque_parameters_require_matching_entities() -> None:
     with pytest.raises(
         ValueError,
-        match="dry_friction entities must match kp entities",
+        match="USD model does not contain joint .wrist.",
     ):
-        ResidualTorquePreprocessor(
-            pd.DataFrame(),
-            kp={"shoulder": 2.0},
-            kd={"shoulder": 1.0},
-            dry_friction={"elbow": 0.25},
-            viscous_friction={"shoulder": 0.1},
-        )
+        SolverPDPreprocessor(dataset).process()
 
 
 def test_residual_torque_requires_actual_effort_column() -> None:
@@ -199,13 +209,7 @@ def test_residual_torque_requires_actual_effort_column() -> None:
         }
     )
 
-    preprocessor = ResidualTorquePreprocessor(
-        dataset,
-        kp={"elbow": 4.0},
-        kd={"elbow": 1.0},
-        dry_friction={"elbow": 0.25},
-        viscous_friction={"elbow": 0.1},
-    )
+    preprocessor = ResidualTorquePreprocessor(dataset)
 
     with pytest.raises(ValueError, match="elbow/actual_effort"):
         preprocessor.process()
