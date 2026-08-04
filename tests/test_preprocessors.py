@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BasePreprocessor, SimPreprocessor
+from anchor_bench.train import BasePreprocessor
 from anchor_bench.train.gru import (
     PositionErrorPreprocessor,
     ResidualTorquePreprocessor,
@@ -33,23 +33,21 @@ class RecordingSimulationContext(SimulationContext):
         return "model", "state"
 
 
-class SimulatedFeaturePreprocessor(SimPreprocessor):
-    def process(self) -> pd.DataFrame:
-        return pd.DataFrame(
-            {"simulated": self.dataset["command"]},
-            index=self.dataset.index,
-        )
-
-
 @pytest.fixture(autouse=True)
-def reset_simulation_context(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Isolate the process-wide context between tests."""
+def simulation_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> RecordingSimulationContext:
+    """Create one process-wide context for every preprocessor test."""
 
     monkeypatch.setattr(
         SimulationContext,
         "_instance",
         None,
     )
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    return RecordingSimulationContext(str(source))
 
 
 @pytest.fixture
@@ -81,25 +79,25 @@ def test_base_preprocessor_cannot_be_instantiated(dataset: pd.DataFrame) -> None
         BasePreprocessor(dataset)  # pyright: ignore[reportAbstractUsage]
 
 
-def test_simulation_context_cannot_be_instantiated(tmp_path: Path) -> None:
+def test_simulation_context_cannot_be_instantiated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = tmp_path / "robot.usda"
     source.write_text("#usda 1.0", encoding="utf-8")
+    monkeypatch.setattr(SimulationContext, "_instance", None)
 
     with pytest.raises(TypeError):
         SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
 
 
-def test_sim_preprocessor_uses_current_context(
+def test_base_preprocessor_uses_current_context(
     dataset: pd.DataFrame,
-    tmp_path: Path,
+    simulation_context: RecordingSimulationContext,
 ) -> None:
-    source = tmp_path / "robot.usda"
-    source.write_text("#usda 1.0", encoding="utf-8")
-    context = RecordingSimulationContext(str(source))
+    preprocessor = DifferencePreprocessor(dataset)
 
-    preprocessor = SimulatedFeaturePreprocessor(dataset)
-
-    assert context.loaded_path == str(source)
+    assert preprocessor.simulation_context is simulation_context
     assert preprocessor.model == "model"
     assert preprocessor.state == "state"
 

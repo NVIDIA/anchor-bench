@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from threading import RLock
 from typing import Any, ClassVar, Optional, Tuple
 
 from typing_extensions import Self
@@ -14,7 +13,6 @@ class SimulationContext(ABC):
     """Own the single lazily loaded simulation model and state."""
 
     _instance: ClassVar[Optional[SimulationContext]] = None
-    _lock: ClassVar[RLock] = RLock()
     _usd_path: Path
     _model: Any
     _state: Any
@@ -23,28 +21,27 @@ class SimulationContext(ABC):
         """Create or return the process-wide simulation context."""
 
         source = Path(usd_path).expanduser().resolve()
-        with SimulationContext._lock:
-            current = SimulationContext._instance
-            if current is not None:
-                if type(current) is not cls:
-                    raise RuntimeError(
-                        "Only one simulation backend can be used per process."
-                    )
-                if current.usd_path != source:
-                    raise RuntimeError(
-                        f"Simulation context already uses {current.usd_path}."
-                    )
-                return current
+        current = SimulationContext._instance
+        if current is not None:
+            if type(current) is not cls:
+                raise RuntimeError(
+                    "Only one simulation backend can be used per process."
+                )
+            if current.usd_path != source:
+                raise RuntimeError(
+                    f"Simulation context already uses {current.usd_path}."
+                )
+            return current
 
-            if not source.is_file():
-                raise FileNotFoundError(f"USD file does not exist: {source}.")
+        if not source.is_file():
+            raise FileNotFoundError(f"USD file does not exist: {source}.")
 
-            instance = super().__new__(cls)
-            instance._usd_path = source
-            instance._model = None
-            instance._state = None
-            SimulationContext._instance = instance
-            return instance
+        instance = super().__new__(cls)
+        instance._usd_path = source
+        instance._model = None
+        instance._state = None
+        SimulationContext._instance = instance
+        return instance
 
     def __init__(self, usd_path: str) -> None:
         """Accept the mandatory USD path handled during construction."""
@@ -67,12 +64,11 @@ class SimulationContext(ABC):
     def load(self) -> Tuple[Any, Any]:
         """Load and cache the model and state on first use."""
 
-        with SimulationContext._lock:
-            if self._model is None:
-                model, state = self._load(self._usd_path)
-                self._model = model
-                self._state = state
-            return self._model, self._state
+        if self._model is None:
+            model, state = self._load(self._usd_path)
+            self._model = model
+            self._state = state
+        return self._model, self._state
 
     @property
     def model(self) -> Any:
