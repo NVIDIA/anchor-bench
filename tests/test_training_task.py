@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 import pytest
@@ -9,7 +9,7 @@ import yaml
 
 from anchor_bench.core.task_runner import TASKS, TaskRunner
 from anchor_bench.schema.training import TrainingConfig
-from anchor_bench.tasks.train import TrainingTask
+from anchor_bench.tasks.train import MappedTrainingSequence, TrainingTask
 
 
 def _config_data(source: str) -> dict[str, Any]:
@@ -144,6 +144,27 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         )
         return result
 
+    prepared: list[MappedTrainingSequence] = []
+
+    class StubTrainer:
+        """Record data passed through the trainer boundary."""
+
+        def __init__(
+            self,
+            training_config: TrainingConfig,
+            dataset: Sequence[MappedTrainingSequence],
+        ) -> None:
+            """Retain the prepared sequences."""
+
+            assert training_config is config
+            prepared.extend(dataset)
+
+        def train(self) -> str:
+            """Record training execution."""
+
+            events.append("train")
+            return "trained"
+
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
         load,
@@ -156,6 +177,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "anchor_bench.tasks.train.task.PreprocessorRunner.run",
         preprocess,
     )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.trainer.Trainer",
+        StubTrainer,
+    )
 
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
@@ -164,6 +189,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "load:dataset.parquet:0.02",
         f"simulation:newton:{usd_path}",
         "preprocess",
+        "train",
     ]
     assert output_directory.parent == tmp_path / "outputs"
     assert trajectories["experiment"].drop_duplicates().tolist() == ["wave", "step"]
@@ -183,6 +209,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
     assert wave_targets["feature"].drop_duplicates().tolist() == [
         "elbow/actual_effort",
         "shoulder/actual_effort",
+    ]
+    assert [(sequence.experiment, sequence.name) for sequence in prepared] == [
+        ("wave", "arm"),
+        ("step", "arm"),
     ]
 
 
@@ -206,6 +236,22 @@ def test_training_task_skips_simulation_for_existing_features(
         lambda backend, path: pytest.fail("simulation context should not be created"),
     )
 
+    class StubTrainer:
+        """Avoid running PyTorch in the simulation-bypass test."""
+
+        def __init__(self, config: object, dataset: object) -> None:
+            """Accept the prepared training inputs."""
+
+        def train(self) -> str:
+            """Return an inert training result."""
+
+            return "trained"
+
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.trainer.Trainer",
+        StubTrainer,
+    )
+
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
@@ -217,17 +263,14 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
 
     assert TASKS["training"] is TrainingTask
 
+    timestamps = [index * 20_000_000 for index in range(12)]
     dataset = pd.DataFrame(
         {
-            "experiment": ["wave"] * 4,
-            "time_ns": [0, 20_000_000] * 2,
-            "field": [
-                "shoulder/actual_q",
-                "shoulder/actual_q",
-                "shoulder/actual_effort",
-                "shoulder/actual_effort",
-            ],
-            "value": [1.0, 1.1, 5.0, 5.1],
+            "experiment": ["wave"] * 24,
+            "time_ns": timestamps * 2,
+            "field": ["shoulder/actual_q"] * 12 + ["shoulder/actual_effort"] * 12,
+            "value": [float(value) for value in range(12)]
+            + [float(value + 1) for value in range(12)],
         }
     )
     dataset_path = tmp_path / "training.parquet"
@@ -253,7 +296,4 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     assert trajectories.loc[
         trajectories["kind"] == "target", "feature"
     ].drop_duplicates().tolist() == ["shoulder/actual_effort"]
-    assert trajectories["time_ns"].drop_duplicates().tolist() == [
-        0,
-        20_000_000,
-    ]
+    assert trajectories["time_ns"].drop_duplicates().tolist() == timestamps

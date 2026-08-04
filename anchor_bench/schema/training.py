@@ -87,16 +87,22 @@ class GruModelConfig(StrictBaseModel):
     output: ModelOutputConfig
 
 
+ModelConfig: TypeAlias = GruModelConfig
+
+
 class SequenceConfig(StrictBaseModel):
     length: PositiveInteger
     stride: PositiveInteger
-    hidden_state: Literal["reset", "carry"]
+    hidden_state: Literal["reset"]
 
 
 class AdamwOptimizerConfig(StrictBaseModel):
     type: Literal["adamw"]
     learning_rate: PositiveNumber
     weight_decay: NonNegativeNumber
+
+
+OptimizerConfig: TypeAlias = AdamwOptimizerConfig
 
 
 class MseLossConfig(StrictBaseModel):
@@ -134,7 +140,7 @@ class TrainingParametersConfig(StrictBaseModel):
     seed: NonNegativeInteger
     validation_ratio: Annotated[JsonNumber, Field(ge=0.0, lt=1.0)]
     sequence: SequenceConfig
-    optimizer: AdamwOptimizerConfig
+    optimizer: OptimizerConfig
     loss: LossConfig
     gradient: GradientConfig
     augmentation: AugmentationConfig
@@ -257,7 +263,7 @@ class TrainingConfig(BaseConfig):
         Dict[str, NetworkMappingConfig],
         Field(min_length=1),
     ]
-    model: GruModelConfig
+    model: ModelConfig
     training: TrainingParametersConfig
     search: Optional[SearchConfig] = None
     validation: TrainingValidationConfig

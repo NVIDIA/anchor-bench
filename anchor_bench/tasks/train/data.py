@@ -66,6 +66,7 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
             )
 
         self._window_length = window_length
+        self.input_size, self.output_size = expected_shape or (0, 0)
 
     def __len__(self) -> int:
         """Return the number of complete sequence windows."""

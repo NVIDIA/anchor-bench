@@ -36,7 +36,7 @@ class MappedTrainingSequence:
 
 
 class TrainingTask(BaseTask[TrainingConfig]):
-    """Prepare aligned datasets for network training."""
+    """Prepare data, train the configured network, and persist trajectories."""
 
     @classmethod
     def name(cls) -> str:
@@ -45,7 +45,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         return "training"
 
     def run(self) -> Path:
-        """Prepare mapped training trajectories and persist them as Parquet."""
+        """Train the network and persist its mapped trajectories."""
 
         dataset = DatasetLoader.load(
             self.config.dataset.source,
@@ -67,6 +67,9 @@ class TrainingTask(BaseTask[TrainingConfig]):
             output_feature=self.config.output_features,
             mappings=mappings,
         )
+        from anchor_bench.tasks.train.trainer import Trainer
+
+        Trainer(self.config, sequences).train()
         self._write_trajectories(
             sequences,
             self.output_directory / TRAJECTORIES_FILENAME,
