@@ -24,11 +24,8 @@ class BasePreprocessor(ABC):
 class SimPreprocessor(BasePreprocessor):
     """Base class for preprocessors that derive features through simulation."""
 
-    def __init__(
-        self,
-        dataset: pd.DataFrame,
-        usd_path: str,
-        simulation_context: SimulationContext,
-    ) -> None:
+    def __init__(self, dataset: pd.DataFrame) -> None:
         super().__init__(dataset)
-        self.model, self.state = simulation_context.load(usd_path)
+        simulation_context = SimulationContext.current()
+        self.model = simulation_context.model
+        self.state = simulation_context.state

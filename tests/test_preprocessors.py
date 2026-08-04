@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional, Tuple
 
 import pandas as pd
@@ -23,11 +24,12 @@ class DifferencePreprocessor(BasePreprocessor):
 
 
 class RecordingSimulationContext(SimulationContext):
-    def __init__(self) -> None:
-        self.loaded_path: Optional[str] = None
+    loaded_path: Optional[str] = None
 
-    def load(self, usd_path: str) -> Tuple[Any, Any]:
-        self.loaded_path = usd_path
+    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
+        """Record the USD selected by the current context."""
+
+        self.loaded_path = str(usd_path)
         return "model", "state"
 
 
@@ -37,6 +39,17 @@ class SimulatedFeaturePreprocessor(SimPreprocessor):
             {"simulated": self.dataset["command"]},
             index=self.dataset.index,
         )
+
+
+@pytest.fixture(autouse=True)
+def reset_simulation_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the process-wide context between tests."""
+
+    monkeypatch.setattr(
+        SimulationContext,
+        "_instance",
+        None,
+    )
 
 
 @pytest.fixture
@@ -68,21 +81,25 @@ def test_base_preprocessor_cannot_be_instantiated(dataset: pd.DataFrame) -> None
         BasePreprocessor(dataset)  # pyright: ignore[reportAbstractUsage]
 
 
-def test_simulation_context_cannot_be_instantiated() -> None:
+def test_simulation_context_cannot_be_instantiated(tmp_path: Path) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+
     with pytest.raises(TypeError):
-        SimulationContext()  # pyright: ignore[reportAbstractUsage]
+        SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
 
 
-def test_sim_preprocessor_loads_usd_asset(dataset: pd.DataFrame) -> None:
-    context = RecordingSimulationContext()
+def test_sim_preprocessor_uses_current_context(
+    dataset: pd.DataFrame,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    context = RecordingSimulationContext(str(source))
 
-    preprocessor = SimulatedFeaturePreprocessor(
-        dataset,
-        "assets/robots/so101.usd",
-        context,
-    )
+    preprocessor = SimulatedFeaturePreprocessor(dataset)
 
-    assert context.loaded_path == "assets/robots/so101.usd"
+    assert context.loaded_path == str(source)
     assert preprocessor.model == "model"
     assert preprocessor.state == "state"
 
