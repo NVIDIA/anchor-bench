@@ -142,7 +142,6 @@ def test_rejects_registered_non_validator(
         ValidatorRunner.instantiate([config])
 
 
-
 def test_runs_validators_in_configuration_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
