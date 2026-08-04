@@ -8,6 +8,7 @@ from pydantic import Field, StrictFloat, StrictInt, field_validator, model_valid
 from typing_extensions import TypeAlias
 
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
+from anchor_bench.schema.dataset import ParquetDatasetConfig
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
@@ -15,16 +16,6 @@ PositiveInteger: TypeAlias = Annotated[StrictInt, Field(ge=1)]
 NonNegativeInteger: TypeAlias = Annotated[StrictInt, Field(ge=0)]
 PositiveNumber: TypeAlias = Annotated[JsonNumber, Field(gt=0.0)]
 NonNegativeNumber: TypeAlias = Annotated[JsonNumber, Field(ge=0.0)]
-
-
-class DatasetReference(StrictBaseModel):
-    path: NonEmptyString
-
-
-class ParquetDatasetConfig(StrictBaseModel):
-    type: Literal["parquet"]
-    commanded_state: DatasetReference
-    measured_state: DatasetReference
 
 
 class CmaesOptimizerConfig(StrictBaseModel):
