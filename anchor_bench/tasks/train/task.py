@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 import pandas as pd
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.data import DatasetLoader
-from anchor_bench.schema.training import TrainingConfig
+from anchor_bench.schema.training import SimulationConfig, TrainingConfig
 from anchor_bench.tasks.base_task import BaseTask
 from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
 
@@ -55,8 +55,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         )
 
         if any(self.config.input_features.values()):
-            simulation = self.config.simulation
-            assert simulation is not None  # Enforced by TrainingConfig.
+            simulation = cast(SimulationConfig, self.config.simulation)
             NewtonSimulationContext(simulation.usd_path)
 
         dataset = PreprocessorRunner.run(dataset, self.config.input_features)
