@@ -14,21 +14,9 @@ class BasePreprocessor(ABC):
 
     def __init__(self, dataset: pd.DataFrame) -> None:
         self.dataset = dataset
+        self.simulation_context = SimulationContext.current()
 
     @abstractmethod
     def process(self) -> pd.DataFrame:
         """Return generated feature columns aligned to the dataset index."""
         raise NotImplementedError
-
-
-class SimPreprocessor(BasePreprocessor):
-    """Base class for preprocessors that derive features through simulation."""
-
-    def __init__(
-        self,
-        dataset: pd.DataFrame,
-        usd_path: str,
-        simulation_context: SimulationContext,
-    ) -> None:
-        super().__init__(dataset)
-        self.model, self.state = simulation_context.load(usd_path)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional, Tuple
 
 import pandas as pd
 import pytest
 
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BasePreprocessor, SimPreprocessor
+from anchor_bench.train import BasePreprocessor
 from anchor_bench.train.gru import (
     PositionErrorPreprocessor,
     ResidualTorquePreprocessor,
@@ -23,20 +24,30 @@ class DifferencePreprocessor(BasePreprocessor):
 
 
 class RecordingSimulationContext(SimulationContext):
-    def __init__(self) -> None:
-        self.loaded_path: Optional[str] = None
+    loaded_path: Optional[str] = None
 
-    def load(self, usd_path: str) -> Tuple[Any, Any]:
-        self.loaded_path = usd_path
+    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
+        """Record the USD selected by the current context."""
+
+        self.loaded_path = str(usd_path)
         return "model", "state"
 
 
-class SimulatedFeaturePreprocessor(SimPreprocessor):
-    def process(self) -> pd.DataFrame:
-        return pd.DataFrame(
-            {"simulated": self.dataset["command"]},
-            index=self.dataset.index,
-        )
+@pytest.fixture(autouse=True)
+def simulation_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> RecordingSimulationContext:
+    """Create one process-wide context for every preprocessor test."""
+
+    monkeypatch.setattr(
+        SimulationContext,
+        "_instance",
+        None,
+    )
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    return RecordingSimulationContext(str(source))
 
 
 @pytest.fixture
@@ -68,23 +79,27 @@ def test_base_preprocessor_cannot_be_instantiated(dataset: pd.DataFrame) -> None
         BasePreprocessor(dataset)  # pyright: ignore[reportAbstractUsage]
 
 
-def test_simulation_context_cannot_be_instantiated() -> None:
+def test_simulation_context_cannot_be_instantiated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    monkeypatch.setattr(SimulationContext, "_instance", None)
+
     with pytest.raises(TypeError):
-        SimulationContext()  # pyright: ignore[reportAbstractUsage]
+        SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
 
 
-def test_sim_preprocessor_loads_usd_asset(dataset: pd.DataFrame) -> None:
-    context = RecordingSimulationContext()
+def test_base_preprocessor_uses_current_context(
+    dataset: pd.DataFrame,
+    simulation_context: RecordingSimulationContext,
+) -> None:
+    preprocessor = DifferencePreprocessor(dataset)
 
-    preprocessor = SimulatedFeaturePreprocessor(
-        dataset,
-        "assets/robots/so101.usd",
-        context,
-    )
-
-    assert context.loaded_path == "assets/robots/so101.usd"
-    assert preprocessor.model == "model"
-    assert preprocessor.state == "state"
+    assert preprocessor.simulation_context is simulation_context
+    assert preprocessor.simulation_context.model == "model"
+    assert preprocessor.simulation_context.state == "state"
 
 
 def test_position_error_preprocessor_handles_multiple_entities() -> None:
