@@ -161,6 +161,7 @@ def test_optional_metadata_simulation_and_search_can_be_omitted(valid_config_dat
     data.pop("tags")
     data.pop("simulation")
     data.pop("search")
+    data["input_features"] = {"actual_q": None}
 
     config = TrainingConfig.model_validate(data)
 
@@ -168,6 +169,27 @@ def test_optional_metadata_simulation_and_search_can_be_omitted(valid_config_dat
     assert config.tags is None
     assert config.simulation is None
     assert config.search is None
+
+
+def test_simulation_defaults_to_newton(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["simulation"].pop("backend")
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.simulation is not None
+    assert config.simulation.backend == "newton"
+
+
+def test_preprocessors_require_simulation(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data.pop("simulation")
+
+    with pytest.raises(
+        ValidationError,
+        match="simulation is required when preprocessors are configured",
+    ):
+        TrainingConfig.model_validate(data)
 
 
 @pytest.mark.parametrize(

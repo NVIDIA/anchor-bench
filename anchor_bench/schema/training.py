@@ -56,7 +56,7 @@ def _duplicate_values(values: List[CategoricalValue]) -> bool:
 
 
 class SimulationConfig(StrictBaseModel):
-    backend: Literal["newton"]
+    backend: Literal["newton"] = "newton"
     usd_path: NonEmptyString
 
 
@@ -269,4 +269,10 @@ class TrainingConfig(BaseConfig):
                 and getattr(self, field_name) is None
             ):
                 raise ValueError(f"{field_name} cannot be null")
+        return self
+
+    @model_validator(mode="after")
+    def require_simulation_for_preprocessors(self) -> TrainingConfig:
+        if any(self.input_features.values()) and self.simulation is None:
+            raise ValueError("simulation is required when preprocessors are configured")
         return self

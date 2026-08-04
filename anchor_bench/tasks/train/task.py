@@ -55,11 +55,9 @@ class TrainingTask(BaseTask[TrainingConfig]):
         )
 
         if any(self.config.input_features.values()):
-            if self.config.simulation is None:
-                raise ValueError(
-                    "Training preprocessors require a simulation configuration."
-                )
-            NewtonSimulationContext(self.config.simulation.usd_path)
+            simulation = self.config.simulation
+            assert simulation is not None  # Enforced by TrainingConfig.
+            NewtonSimulationContext(simulation.usd_path)
 
         dataset = PreprocessorRunner.run(dataset, self.config.input_features)
         mappings = {

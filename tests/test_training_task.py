@@ -198,24 +198,6 @@ def test_training_task_skips_simulation_for_existing_features(
     assert len(sequences) == 2
 
 
-def test_training_task_requires_simulation_for_preprocessors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Report a missing context before constructing a preprocessor."""
-
-    config = TrainingConfig.model_validate(_config_data("dataset.parquet"))
-    monkeypatch.setattr(
-        "anchor_bench.tasks.train.task.DatasetLoader.load",
-        lambda source, *, dt: _aligned_dataset(),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="preprocessors require a simulation configuration",
-    ):
-        TrainingTask(config).run()
-
-
 def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     """Run the prepared-sequence pipeline through a parsed YAML config."""
 
