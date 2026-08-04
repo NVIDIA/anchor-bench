@@ -11,6 +11,7 @@ from anchor_bench.tasks.train.task import (
     MappedTrainingSequence,
     TrainingTask,
 )
+from anchor_bench.tasks.train.validator_runner import ValidatorRunner
 
 __all__ = [
     "EntityMapping",
@@ -19,5 +20,6 @@ __all__ = [
     "SequenceDataset",
     "TrainingDataLoaders",
     "TrainingTask",
+    "ValidatorRunner",
     "create_data_loaders",
 ]
