@@ -7,6 +7,12 @@ from typing import Mapping, Sequence
 
 import pandas as pd
 
+from anchor_bench.core.simulation.registry import create_simulation_context
+from anchor_bench.data import DatasetLoader
+from anchor_bench.schema.training import TrainingConfig
+from anchor_bench.tasks.base_task import BaseTask
+from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
+
 
 @dataclass(frozen=True)
 class EntityMapping:
@@ -26,8 +32,43 @@ class MappedTrainingSequence:
     targets: pd.DataFrame
 
 
-class TrainingTask:
+class TrainingTask(BaseTask[TrainingConfig]):
     """Prepare aligned datasets for network training."""
+
+    def __init__(self, config: TrainingConfig) -> None:
+        """Initialize training-data preparation from validated configuration."""
+
+        self.config = config
+
+    @classmethod
+    def name(cls) -> str:
+        """Return the training configuration discriminator."""
+
+        return "training"
+
+    def run(self) -> list[MappedTrainingSequence]:
+        """Load, preprocess, and map configured training sequences."""
+
+        dataset = DatasetLoader.load(
+            self.config.dataset.source,
+            dt=float(self.config.dataset.resampling.dt),
+        )
+
+        if any(self.config.input_features.values()):
+            simulation = self.config.simulation
+            create_simulation_context(simulation.backend, simulation.usd_path)
+
+        dataset = PreprocessorRunner.run(dataset, self.config.input_features)
+        mappings = {
+            name: EntityMapping(inputs=mapping.inputs, outputs=mapping.outputs)
+            for name, mapping in self.config.mapping.items()
+        }
+        return self._map_features(
+            dataset,
+            input_features=list(self.config.input_features),
+            output_feature=self.config.output_features,
+            mappings=mappings,
+        )
 
     @staticmethod
     def _map_features(

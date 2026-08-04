@@ -56,7 +56,7 @@ def _duplicate_values(values: List[CategoricalValue]) -> bool:
 
 
 class SimulationConfig(StrictBaseModel):
-    backend: Literal["newton"]
+    backend: Literal["newton"] = "newton"
     usd_path: NonEmptyString
 
 
@@ -246,9 +246,9 @@ class TrainingConfig(BaseConfig):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     dataset: ParquetDatasetConfig
-    simulation: Optional[SimulationConfig] = None
+    simulation: SimulationConfig
     input_features: Annotated[
-        Dict[str, Optional[str]],
+        Dict[str, Optional[NonEmptyString]],
         Field(min_length=1),
     ]
     output_features: NonEmptyString
@@ -263,7 +263,7 @@ class TrainingConfig(BaseConfig):
 
     @model_validator(mode="after")
     def reject_explicit_null_optional_fields(self) -> TrainingConfig:
-        for field_name in ("description", "tags", "simulation", "search"):
+        for field_name in ("description", "tags", "search"):
             if (
                 field_name in self.model_fields_set
                 and getattr(self, field_name) is None

@@ -6,8 +6,6 @@ from typing import Mapping, Optional
 
 import pandas as pd
 
-import anchor_bench.train.preprocessors as preprocessor_registry
-
 
 class PreprocessorRunner:
     """Execute configured built-in preprocessors in declaration order."""
@@ -18,6 +16,8 @@ class PreprocessorRunner:
         preprocessors: Mapping[str, Optional[str]],
     ) -> pd.DataFrame:
         """Return a shallow dataset copy with generated features appended."""
+
+        import anchor_bench.train.preprocessors as preprocessor_registry
 
         result = dataset.copy(deep=False)
         for feature, preprocessor_name in preprocessors.items():

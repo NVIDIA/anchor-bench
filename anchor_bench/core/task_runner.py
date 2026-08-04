@@ -9,9 +9,11 @@ from anchor_bench.errors import TaskNotFoundError
 from anchor_bench.schema.parse import parse
 from anchor_bench.sysid.task import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
+from anchor_bench.tasks.train.task import TrainingTask
 
 TASKS: Dict[str, Type[BaseTask[Any]]] = {
     ActuatorSysIdTask.name(): ActuatorSysIdTask,
+    TrainingTask.name(): TrainingTask,
 }
 
 
