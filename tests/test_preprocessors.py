@@ -98,8 +98,8 @@ def test_base_preprocessor_uses_current_context(
     preprocessor = DifferencePreprocessor(dataset)
 
     assert preprocessor.simulation_context is simulation_context
-    assert preprocessor.model == "model"
-    assert preprocessor.state == "state"
+    assert preprocessor.simulation_context.model == "model"
+    assert preprocessor.simulation_context.state == "state"
 
 
 def test_position_error_preprocessor_handles_multiple_entities() -> None:
