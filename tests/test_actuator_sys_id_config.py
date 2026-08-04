@@ -7,6 +7,7 @@ from anchor_bench.schema.actuator_sys_id import (
     ActuatorSysIdConfig,
     PdControllerConfig,
 )
+from anchor_bench.schema.dataset import ParquetDatasetConfig
 
 
 @pytest.fixture
@@ -52,8 +53,11 @@ def valid_config_data():
         },
         "dataset": {
             "type": "parquet",
-            "commanded_state": {"path": "runs/commanded"},
-            "measured_state": {"path": "runs/measured"},
+            "source": "runs/actuator.parquet",
+            "resampling": {
+                "type": "uniform",
+                "dt": 0.002,
+            },
         },
     }
 
@@ -64,6 +68,9 @@ def test_model_matches_schema_and_applies_defaults(valid_config_data):
     assert config.type == "actuator_sys_id"
     assert config.num_envs == 64
     assert config.buffer_time == 0.0
+    assert isinstance(config.dataset, ParquetDatasetConfig)
+    assert config.dataset.source == "runs/actuator.parquet"
+    assert config.dataset.resampling.dt == 0.002
     assert isinstance(config.joint_parameters[0].controller, PdControllerConfig)
     assert config.joint_parameters[0].controller.delay_duration_ms == 0
     assert config.simulation.solver.integrator == "implicitfast"
