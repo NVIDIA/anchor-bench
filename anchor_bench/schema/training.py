@@ -246,7 +246,7 @@ class TrainingConfig(BaseConfig):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     dataset: ParquetDatasetConfig
-    simulation: Optional[SimulationConfig] = None
+    simulation: SimulationConfig
     input_features: Annotated[
         Dict[str, Optional[NonEmptyString]],
         Field(min_length=1),
@@ -263,16 +263,10 @@ class TrainingConfig(BaseConfig):
 
     @model_validator(mode="after")
     def reject_explicit_null_optional_fields(self) -> TrainingConfig:
-        for field_name in ("description", "tags", "simulation", "search"):
+        for field_name in ("description", "tags", "search"):
             if (
                 field_name in self.model_fields_set
                 and getattr(self, field_name) is None
             ):
                 raise ValueError(f"{field_name} cannot be null")
-        return self
-
-    @model_validator(mode="after")
-    def require_simulation_for_preprocessors(self) -> TrainingConfig:
-        if any(self.input_features.values()) and self.simulation is None:
-            raise ValueError("simulation is required when preprocessors are configured")
         return self

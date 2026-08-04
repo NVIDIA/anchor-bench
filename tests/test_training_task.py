@@ -22,6 +22,10 @@ def _config_data(source: str) -> dict[str, Any]:
             "source": source,
             "resampling": {"type": "uniform", "dt": 0.02},
         },
+        "simulation": {
+            "backend": "newton",
+            "usd_path": "robot.usda",
+        },
         "input_features": {
             "actual_q": None,
             "position_error": "position_error",
