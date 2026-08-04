@@ -10,7 +10,7 @@ import pytest
 
 from anchor_bench.core import SimulationContext
 from anchor_bench.train import BasePreprocessor
-from anchor_bench.train.gru import (
+from anchor_bench.train.preprocessors.gru import (
     PositionErrorPreprocessor,
     ResidualTorquePreprocessor,
     SolverPDPreprocessor,

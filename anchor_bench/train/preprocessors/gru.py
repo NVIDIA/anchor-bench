@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Mapping
 import numpy as np
 import pandas as pd
 
-from anchor_bench.train.preprocessors import BasePreprocessor
+from anchor_bench.train.preprocessors.base import BasePreprocessor
 
 
 def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:
