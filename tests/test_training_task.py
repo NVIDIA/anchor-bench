@@ -181,6 +181,12 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "anchor_bench.tasks.train.trainer.Trainer",
         StubTrainer,
     )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.artifacts.save_training_artifacts",
+        lambda result, sequences, training_config: (
+            events.append("save") or tmp_path / "artifacts"
+        ),
+    )
 
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
@@ -190,6 +196,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         f"simulation:newton:{usd_path}",
         "preprocess",
         "train",
+        "save",
     ]
     assert output_directory.parent == tmp_path / "outputs"
     assert trajectories["experiment"].drop_duplicates().tolist() == ["wave", "step"]
@@ -251,6 +258,10 @@ def test_training_task_skips_simulation_for_existing_features(
         "anchor_bench.tasks.train.trainer.Trainer",
         StubTrainer,
     )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.artifacts.save_training_artifacts",
+        lambda result, sequences, training_config: tmp_path / "artifacts",
+    )
 
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
@@ -289,6 +300,9 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
 
     assert output_directory.parent == tmp_path / "outputs"
     assert (output_directory / ".completed").is_file()
+    assert (output_directory / "model.pt").is_file()
+    assert (output_directory / "history.yaml").is_file()
+    assert (output_directory / "metadata.yaml").is_file()
     assert trajectories["mapping"].drop_duplicates().tolist() == ["shoulder"]
     assert trajectories.loc[
         trajectories["kind"] == "input", "feature"

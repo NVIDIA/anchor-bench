@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
@@ -33,6 +34,7 @@ class TrainingResult:
 
     model: nn.Module
     history: list[EpochLoss]
+    artifact_path: Optional[Path] = None
 
 
 class Trainer:

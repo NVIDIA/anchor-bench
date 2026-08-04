@@ -1,5 +1,6 @@
 """Training task interfaces."""
 
+from anchor_bench.tasks.train.artifacts import save_training_artifacts
 from anchor_bench.tasks.train.data import (
     SequenceDataset,
     TrainingDataLoaders,
@@ -35,4 +36,5 @@ __all__ = [
     "ValidatorRunner",
     "create_data_loaders",
     "get_model",
+    "save_training_artifacts",
 ]
