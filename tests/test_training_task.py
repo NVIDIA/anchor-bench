@@ -115,10 +115,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         events.append(f"load:{source}:{dt}")
         return loaded
 
-    def initialize_context(path: str) -> object:
+    def initialize_context(backend: str, path: str) -> object:
         """Record simulation initialization before preprocessing."""
 
-        events.append(f"simulation:{path}")
+        events.append(f"simulation:{backend}:{path}")
         return object()
 
     def preprocess(
@@ -144,7 +144,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         load,
     )
     monkeypatch.setattr(
-        "anchor_bench.tasks.train.task.NewtonSimulationContext",
+        "anchor_bench.tasks.train.task.create_simulation_context",
         initialize_context,
     )
     monkeypatch.setattr(
@@ -156,7 +156,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
     assert events == [
         "load:dataset.parquet:0.02",
-        f"simulation:{usd_path}",
+        f"simulation:newton:{usd_path}",
         "preprocess",
     ]
     assert [(sequence.experiment, sequence.name) for sequence in sequences] == [
@@ -189,8 +189,8 @@ def test_training_task_skips_simulation_for_existing_features(
         lambda source, *, dt: _aligned_dataset(),
     )
     monkeypatch.setattr(
-        "anchor_bench.tasks.train.task.NewtonSimulationContext",
-        lambda path: pytest.fail("simulation context should not be created"),
+        "anchor_bench.tasks.train.task.create_simulation_context",
+        lambda backend, path: pytest.fail("simulation context should not be created"),
     )
 
     sequences = TrainingTask(config).run()

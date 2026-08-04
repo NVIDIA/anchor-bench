@@ -192,6 +192,16 @@ def test_preprocessors_require_simulation(valid_config_data):
         TrainingConfig.model_validate(data)
 
 
+def test_rejects_blank_preprocessor_name(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["input_features"]["position"] = ""
+
+    with pytest.raises(
+        ValidationError, match="String should have at least 1 character"
+    ):
+        TrainingConfig.model_validate(data)
+
+
 @pytest.mark.parametrize(
     "field_name",
     ["description", "tags", "simulation", "search"],

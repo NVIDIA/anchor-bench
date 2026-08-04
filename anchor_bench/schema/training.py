@@ -248,7 +248,7 @@ class TrainingConfig(BaseConfig):
     dataset: ParquetDatasetConfig
     simulation: Optional[SimulationConfig] = None
     input_features: Annotated[
-        Dict[str, Optional[str]],
+        Dict[str, Optional[NonEmptyString]],
         Field(min_length=1),
     ]
     output_features: NonEmptyString

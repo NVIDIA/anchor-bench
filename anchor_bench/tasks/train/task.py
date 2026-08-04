@@ -7,7 +7,7 @@ from typing import Mapping, Sequence, cast
 
 import pandas as pd
 
-from anchor_bench.core.simulation.newton import NewtonSimulationContext
+from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.data import DatasetLoader
 from anchor_bench.schema.training import SimulationConfig, TrainingConfig
 from anchor_bench.tasks.base_task import BaseTask
@@ -56,7 +56,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
         if any(self.config.input_features.values()):
             simulation = cast(SimulationConfig, self.config.simulation)
-            NewtonSimulationContext(simulation.usd_path)
+            create_simulation_context(simulation.backend, simulation.usd_path)
 
         dataset = PreprocessorRunner.run(dataset, self.config.input_features)
         mappings = {
