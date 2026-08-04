@@ -1,10 +1,10 @@
-"""Instantiate configured training validators."""
+"""Instantiate and execute configured training validators."""
 
 from __future__ import annotations
 
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
-from anchor_bench.train.validators import BaseValidator
+from anchor_bench.train.validators import BaseValidator, ValidationResult
 
 
 class _TrainingValidatorConfig(Protocol):
@@ -54,3 +54,27 @@ class ValidatorRunner:
                 )
             )
         return instances
+
+    @staticmethod
+    def run(
+        validators: Iterable[_TrainingValidatorConfig],
+        *,
+        model: Any,
+        validation_dataset: Any,
+    ) -> list[ValidationResult]:
+        """Validate a trained model against its validation dataset in order."""
+
+        results = []
+        for validator in ValidatorRunner.instantiate(validators):
+            result = validator.validate(model, validation_dataset)
+            if not isinstance(result, ValidationResult):
+                raise TypeError(
+                    f"Validator {validator.name!r} must return a ValidationResult."
+                )
+            if result.name != validator.name or result.type != validator.type:
+                raise ValueError(
+                    f"Validator {validator.name!r} returned result metadata for "
+                    f"{result.name!r} ({result.type!r})."
+                )
+            results.append(result)
+        return results

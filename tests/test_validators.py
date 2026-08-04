@@ -6,16 +6,20 @@ import pytest
 
 import anchor_bench.train.validators as validator_registry
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BaseValidator
+from anchor_bench.train import BaseValidator, ValidationResult
 
 
 class RecordingValidator(BaseValidator):
     """Provide an inert concrete validator for scaffold tests."""
 
-    def validate(self, model: object, validation_dataset: object) -> object:
-        """Return the stored configuration for an observable test result."""
+    def validate(self, model: object, validation_dataset: object) -> ValidationResult:
+        """Return an inert structured validation result."""
 
-        return self.config
+        return ValidationResult(
+            name=self.name,
+            type=self.type,
+            metrics={},
+        )
 
 
 def test_base_validator_stores_configuration(
