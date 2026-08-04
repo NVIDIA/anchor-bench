@@ -128,6 +128,7 @@ def test_model_matches_general_training_schema(valid_config_data):
     config = TrainingConfig.model_validate(valid_config_data)
 
     assert config.type == "training"
+    assert config.output_dir == "outputs/training"
     assert isinstance(config.dataset, ParquetDatasetConfig)
     assert config.dataset.source == "datasets/actuator.parquet"
     assert config.dataset.resampling.type == "uniform"

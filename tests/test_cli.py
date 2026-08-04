@@ -10,7 +10,7 @@ def test_cli_runs_config(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.actuator_sys_id.ActuatorSysIdTask.run",
-        lambda self: tmp_path / "output",
+        lambda self: self.output_directory,
     )
 
     assert main(["--config", str(config_path)]) == 0

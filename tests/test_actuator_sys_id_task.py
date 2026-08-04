@@ -61,8 +61,8 @@ def _config(tmp_path, **overrides):
         "output_dir": str(tmp_path / "output"),
         "dataset": {
             "type": "parquet",
-            "commanded_state": {"path": "commanded.parquet"},
-            "measured_state": {"path": "measured.parquet"},
+            "source": "actuator.parquet",
+            "resampling": {"type": "uniform", "dt": 0.005},
         },
     }
     data.update(overrides)
@@ -77,12 +77,18 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         [("wave", 0), ("wave", 5_000_000)],
         names=["experiment", "time_ns"],
     )
-    commanded = pd.DataFrame({"hip/command_q": [0.0, 1.0]}, index=index)
-    measured = pd.DataFrame({"hip/actual_q": [0.1, 0.8]}, index=index)
+    dataset = pd.DataFrame(
+        {
+            "hip/command_q": [0.0, 1.0],
+            "hip/actual_q": [0.1, 0.8],
+        },
+        index=index,
+    )
 
     def fake_load(path, *, dt):
+        assert path == "actuator.parquet"
         assert dt == 0.005
-        return commanded if path == "commanded.parquet" else measured
+        return dataset
 
     monkeypatch.setattr(
         "anchor_bench.tasks.actuator_sys_id.dataset.DatasetLoader.load",
@@ -92,7 +98,6 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
     trajectories = load_trajectories(
         _config(tmp_path).dataset,
         joint_names=["hip"],
-        control_dt=0.005,
     )
 
     assert len(trajectories) == 1
@@ -110,10 +115,9 @@ def test_task_stops_at_unimplemented_optimization(tmp_path, monkeypatch):
     config = _config(tmp_path)
     seen = {}
 
-    def fake_load(dataset_config, *, joint_names, control_dt):
+    def fake_load(dataset_config, *, joint_names):
         seen["dataset_config"] = dataset_config
         seen["joint_names"] = joint_names
-        seen["control_dt"] = control_dt
         return []
 
     monkeypatch.setattr(task_module, "load_trajectories", fake_load)
@@ -124,7 +128,6 @@ def test_task_stops_at_unimplemented_optimization(tmp_path, monkeypatch):
     assert seen == {
         "dataset_config": config.dataset,
         "joint_names": ["hip"],
-        "control_dt": 0.005,
     }
 
 
