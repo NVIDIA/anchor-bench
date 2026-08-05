@@ -13,6 +13,7 @@ dependencies = [
   "pyarrow>=14,<26",
   "pydantic>=2.7,<3",
   "PyYAML>=6.0,<7",
+  "torch>=2.3,<3",
 ]
 
 [project.optional-dependencies]
