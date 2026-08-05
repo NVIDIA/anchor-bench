@@ -66,6 +66,14 @@ def test_save_training_artifacts_writes_portable_run(
         "format_version": 1,
         "model_type": "gru",
         "seed": 7,
+        "input_features": [
+            {
+                "name": "input",
+                "preprocessor": None,
+            }
+        ],
+        "output_feature": "target",
+        "simulation": {"backend": "newton", "usd_path": "robot.usda"},
         "mappings": {
             "joint": {
                 "inputs": ["joint/input"],

@@ -8,6 +8,13 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from anchor_bench.train.utils import (
+    position_error,
+)
+from anchor_bench.train.utils import (
+    solver_pd as calculate_solver_pd,
+)
+
 
 @dataclass(frozen=True)
 class _ReplayState:
@@ -117,7 +124,14 @@ class _NewtonStepper:
         dof = self._indices[joint][1]
         kp = float(self._model.joint_target_ke.numpy()[dof])
         kd = float(self._model.joint_target_kd.numpy()[dof])
-        return kp * (command - state.position[joint]) - kd * state.velocity[joint]
+        return float(
+            calculate_solver_pd(
+                position_error(command, state.position[joint]),
+                state.velocity[joint],
+                kp,
+                kd,
+            )
+        )
 
     def _write_control(
         self,
