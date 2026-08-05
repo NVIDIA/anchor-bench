@@ -104,6 +104,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
     events: list[str] = []
     loaded = _aligned_dataset()
+    monkeypatch.setattr(
+        "anchor_bench.core.artifacts.resolve_repo_root",
+        lambda: tmp_path,
+    )
     usd_path = tmp_path / "robot.usda"
     usd_path.write_text("#usda 1.0", encoding="utf-8")
     config_data = _config_data("dataset.parquet")
@@ -111,7 +115,6 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "backend": "newton",
         "usd_path": str(usd_path),
     }
-    config_data["output_dir"] = str(tmp_path / "outputs")
     config = TrainingConfig.model_validate(config_data)
 
     def load(source: str, *, dt: float) -> pd.DataFrame:
@@ -181,6 +184,12 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "anchor_bench.tasks.train.trainer.Trainer",
         StubTrainer,
     )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.artifacts.save_training_artifacts",
+        lambda result, sequences, training_config, output_directory: (
+            events.append("save") or tmp_path / "artifacts"
+        ),
+    )
 
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
@@ -190,8 +199,9 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         f"simulation:newton:{usd_path}",
         "preprocess",
         "train",
+        "save",
     ]
-    assert output_directory.parent == tmp_path / "outputs"
+    assert output_directory.parent == tmp_path / "output"
     assert trajectories["experiment"].drop_duplicates().tolist() == ["wave", "step"]
     assert trajectories["mapping"].drop_duplicates().tolist() == ["arm"]
     wave_inputs = trajectories.loc[
@@ -224,7 +234,10 @@ def test_training_task_skips_simulation_for_existing_features(
 
     config_data = _config_data("dataset.parquet")
     config_data["input_features"] = {"actual_q": None}
-    config_data["output_dir"] = str(tmp_path / "outputs")
+    monkeypatch.setattr(
+        "anchor_bench.core.artifacts.resolve_repo_root",
+        lambda: tmp_path,
+    )
     config = TrainingConfig.model_validate(config_data)
 
     monkeypatch.setattr(
@@ -251,6 +264,12 @@ def test_training_task_skips_simulation_for_existing_features(
         "anchor_bench.tasks.train.trainer.Trainer",
         StubTrainer,
     )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.artifacts.save_training_artifacts",
+        lambda result, sequences, training_config, output_directory: (
+            tmp_path / "artifacts"
+        ),
+    )
 
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
@@ -258,10 +277,17 @@ def test_training_task_skips_simulation_for_existing_features(
     assert trajectories["sequence"].nunique() == 2
 
 
-def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
+def test_task_runner_registers_and_runs_training(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Run the prepared-sequence pipeline through a parsed YAML config."""
 
     assert TASKS["training"] is TrainingTask
+    monkeypatch.setattr(
+        "anchor_bench.core.artifacts.resolve_repo_root",
+        lambda: tmp_path,
+    )
 
     timestamps = [index * 20_000_000 for index in range(12)]
     dataset = pd.DataFrame(
@@ -277,7 +303,6 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     dataset.to_parquet(dataset_path)
     config_data = _config_data(str(dataset_path))
     config_data["input_features"] = {"actual_q": None}
-    config_data["output_dir"] = str(tmp_path / "outputs")
     config_data["mapping"] = {
         "shoulder": {"inputs": ["shoulder"], "outputs": ["shoulder"]}
     }
@@ -287,8 +312,11 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     output_directory = TaskRunner().run(str(config_path))
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
-    assert output_directory.parent == tmp_path / "outputs"
+    assert output_directory.parent == tmp_path / "output"
     assert (output_directory / ".completed").is_file()
+    assert (output_directory / "model.pt").is_file()
+    assert (output_directory / "history.yaml").is_file()
+    assert (output_directory / "metadata.yaml").is_file()
     assert trajectories["mapping"].drop_duplicates().tolist() == ["shoulder"]
     assert trajectories.loc[
         trajectories["kind"] == "input", "feature"
