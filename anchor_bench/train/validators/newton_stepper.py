@@ -32,11 +32,17 @@ class _NewtonStepper:
         model = simulation_context.model
         q_starts = model.joint_q_start.numpy()
         dof_starts = model.joint_qd_start.numpy()
+        target_starts = model.joint_target_q_start.numpy()
         self._indices = {
-            joint: (int(q_starts[index]), int(dof_starts[index]))
+            joint: (
+                int(q_starts[index]),
+                int(dof_starts[index]),
+                int(target_starts[index]),
+            )
             for index, joint in enumerate(model.joint_label)
             if int(q_starts[index + 1] - q_starts[index]) == 1
             and int(dof_starts[index + 1] - dof_starts[index]) == 1
+            and int(target_starts[index + 1] - target_starts[index]) == 1
         }
         missing = sorted(set(output_joints) - self._indices.keys())
         if missing:
@@ -118,7 +124,7 @@ class _NewtonStepper:
         command: Mapping[str, float],
         effort: Mapping[str, float],
     ) -> None:
-        targets = self._joint_array(self._control.joint_target_q, command, 0)
+        targets = self._joint_array(self._control.joint_target_q, command, 2)
         forces = self._joint_array(self._control.joint_f, effort, 1, clear=True)
         self._control.joint_target_q.assign(targets)
         self._control.joint_target_qd.assign(np.zeros_like(forces))

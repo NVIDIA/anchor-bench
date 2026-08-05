@@ -59,6 +59,7 @@ class FakeNewtonModel:
         self.joint_label = ["joint"]
         self.joint_q_start = FakeArray([0.0, 1.0])
         self.joint_qd_start = FakeArray([0.0, 1.0])
+        self.joint_target_q_start = FakeArray([0.0, 1.0])
         self.joint_target_mode = FakeArray([3.0])
         self.joint_target_ke = FakeArray([4.0])
         self.joint_target_kd = FakeArray([0.5])
@@ -186,3 +187,15 @@ def test_stepper_retains_usd_actuation_for_residual_effort(
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
     stepper.close()
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
+
+
+def test_stepper_uses_layout_aware_position_target_index() -> None:
+    """Index position targets independently from generalized coordinates."""
+
+    stepper = object.__new__(_NewtonStepper)
+    stepper._indices = {"joint": (1, 0, 0)}
+    stepper._control = FakeControl()
+
+    stepper._write_control({"joint": 3.0}, {})
+
+    assert stepper._control.joint_target_q.numpy().tolist() == [3.0]

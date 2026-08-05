@@ -255,12 +255,22 @@ def test_rejects_invalid_replay_configuration(config: dict[str, object]) -> None
         )
 
 
-def test_rejects_non_monotonic_timestamps() -> None:
-    """Require positive replay timesteps as a data-integrity check."""
+@pytest.mark.parametrize(
+    ("timestamps", "message"),
+    [
+        ([0, 0, 1], "timestamps must increase"),
+        ([0, 1, 3], "timestamps must be uniformly spaced"),
+    ],
+)
+def test_rejects_invalid_timestamps(
+    timestamps: list[int],
+    message: str,
+) -> None:
+    """Require positive, constant replay timesteps."""
 
     sequence = _sequence()
     bad_index = pd.MultiIndex.from_product(
-        [["wave"], [0, 0, 1]],
+        [["wave"], timestamps],
         names=["experiment", "time_ns"],
     )
     invalid = NewtonReplaySequence(
@@ -282,5 +292,5 @@ def test_rejects_non_monotonic_timestamps() -> None:
         config={},
     )
 
-    with pytest.raises(ValueError, match="timestamps must increase"):
+    with pytest.raises(ValueError, match=message):
         validator.validate(FakeModel(), [invalid])

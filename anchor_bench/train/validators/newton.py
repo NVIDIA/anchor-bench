@@ -156,10 +156,13 @@ class NewtonReplayValidator(BaseValidator):
         timestamps = reference_index.get_level_values("time_ns").to_numpy(
             dtype=np.int64
         )
-        if len(timestamps) > 1 and np.any(np.diff(timestamps) <= 0):
+        intervals = np.diff(timestamps)
+        if np.any(intervals <= 0):
             raise ValueError(
                 "Newton replay timestamps must increase within an experiment."
             )
+        if len(intervals) > 1 and np.any(intervals != intervals[0]):
+            raise ValueError("Newton replay timestamps must be uniformly spaced.")
         if sequence.position.columns.tolist() != sequence.velocity.columns.tolist():
             raise ValueError("Newton replay position and velocity joints must match.")
 
@@ -265,15 +268,20 @@ class NewtonReplayValidator(BaseValidator):
         timestamps = sequence.command.index.get_level_values("time_ns").to_numpy(
             dtype=np.int64
         )
+        dt = (
+            float(timestamps[1] - timestamps[0]) / 1_000_000_000.0
+            if len(timestamps) > 1
+            else 0.0
+        )
         command_joints = tuple(sequence.command.columns)
         commands = sequence.command.to_numpy(dtype=float)
         input_columns = tuple(
             tuple(mapping.inputs.columns) for mapping in sequence.mappings
         )
-        for row, dt_ns in enumerate(np.diff(timestamps)):
+        for row, command_values in enumerate(commands[:-1]):
             command = {
                 joint: float(value)
-                for joint, value in zip(command_joints, commands[row])
+                for joint, value in zip(command_joints, command_values)
             }
             features = np.asarray(
                 [
@@ -284,7 +292,6 @@ class NewtonReplayValidator(BaseValidator):
             )[:, np.newaxis, :]
             predictions, hidden = self._predict(model, features, hidden)
             effort = _route_effort(predictions, sequence.mappings)
-            dt = float(dt_ns) / 1_000_000_000.0
             state = stepper.step(command=command, effort=effort, dt=dt)
             for signal, values in (
                 ("position", state.position),
