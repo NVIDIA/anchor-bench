@@ -136,6 +136,13 @@ def test_data_loaders_split_before_windowing_without_timestep_leakage() -> None:
     assert train_timesteps == set(range(6)) | set(range(100, 106))
     assert validation_timesteps == {6.0, 7.0, 106.0, 107.0}
     assert train_timesteps.isdisjoint(validation_timesteps)
+    assert [sequence.experiment for sequence in loaders.validation_sequences] == [
+        "first",
+        "second",
+    ]
+    assert [
+        sequence.inputs.iloc[:, 0].tolist() for sequence in loaders.validation_sequences
+    ] == [[6.0, 7.0], [106.0, 107.0]]
 
     inputs, targets = next(iter(loaders.train))
     assert inputs.shape == (3, 2, 1)

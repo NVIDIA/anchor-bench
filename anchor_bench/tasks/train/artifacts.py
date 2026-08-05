@@ -14,11 +14,13 @@ if TYPE_CHECKING:
     from anchor_bench.schema.training import TrainingConfig
     from anchor_bench.tasks.train.task import MappedTrainingSequence
     from anchor_bench.tasks.train.trainer import TrainingResult
+    from anchor_bench.train.validators import ValidationResult
 
 
 def save_training_artifacts(
     result: TrainingResult,
     sequences: Sequence[MappedTrainingSequence],
+    validation_results: Sequence[ValidationResult],
     config: TrainingConfig,
     output_folder: Path,
 ) -> Path:
@@ -32,6 +34,10 @@ def save_training_artifacts(
     write_yaml(
         output_folder / "history.yaml",
         [asdict(entry) for entry in result.history],
+    )
+    write_yaml(
+        output_folder / "validation.yaml",
+        [asdict(validation_result) for validation_result in validation_results],
     )
     write_yaml(
         output_folder / "metadata.yaml",
