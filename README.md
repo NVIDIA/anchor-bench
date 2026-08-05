@@ -1,6 +1,6 @@
 # Anchor Bench
 
-[![Tests](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml/badge.svg)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
+[![Tests](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml/badge.svg?branch=refactor-main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
 [![Coverage](/../badges/badges/coverage.svg)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
 
 Anchor Bench is an early-stage, configuration-driven Python package for robot
