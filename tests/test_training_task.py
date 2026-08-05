@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
@@ -148,6 +149,8 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         return result
 
     prepared: list[MappedTrainingSequence] = []
+    trained_model = object()
+    held_out_dataset = object()
 
     class StubTrainer:
         """Record data passed through the trainer boundary."""
@@ -161,12 +164,29 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
             assert training_config is config
             prepared.extend(dataset)
+            self.data_loaders = SimpleNamespace(
+                validation=SimpleNamespace(dataset=held_out_dataset)
+            )
 
-        def train(self) -> str:
+        def train(self) -> SimpleNamespace:
             """Record training execution."""
 
             events.append("train")
-            return "trained"
+            return SimpleNamespace(model=trained_model)
+
+    def validate(
+        validators: object,
+        *,
+        model: object,
+        validation_dataset: object,
+    ) -> list[object]:
+        """Record post-training validator execution."""
+
+        assert validators == config.validation.validators
+        assert model is trained_model
+        assert validation_dataset is held_out_dataset
+        events.append("validate")
+        return []
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
@@ -185,6 +205,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         StubTrainer,
     )
     monkeypatch.setattr(
+        "anchor_bench.tasks.train.validator_runner.ValidatorRunner.run",
+        validate,
+    )
+    monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
         lambda result, sequences, training_config, output_directory: (
             events.append("save") or tmp_path / "artifacts"
@@ -199,6 +223,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         f"simulation:newton:{usd_path}",
         "preprocess",
         "train",
+        "validate",
         "save",
     ]
     assert output_directory.parent == tmp_path / "output"
@@ -226,11 +251,11 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
     ]
 
 
-def test_training_task_skips_simulation_for_existing_features(
+def test_training_task_initializes_simulation_for_validators(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Avoid creating Newton when preprocessing is not requested."""
+    """Create the shared simulation context even without preprocessing."""
 
     config_data = _config_data("dataset.parquet")
     config_data["input_features"] = {"actual_q": None}
@@ -244,10 +269,13 @@ def test_training_task_skips_simulation_for_existing_features(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
         lambda source, *, dt: _aligned_dataset(),
     )
+    simulation_calls = []
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.create_simulation_context",
-        lambda backend, path: pytest.fail("simulation context should not be created"),
+        lambda backend, path: simulation_calls.append((backend, path)),
     )
+
+    validation_dataset = object()
 
     class StubTrainer:
         """Avoid running PyTorch in the simulation-bypass test."""
@@ -255,14 +283,22 @@ def test_training_task_skips_simulation_for_existing_features(
         def __init__(self, config: object, dataset: object) -> None:
             """Accept the prepared training inputs."""
 
-        def train(self) -> str:
+            self.data_loaders = SimpleNamespace(
+                validation=SimpleNamespace(dataset=validation_dataset)
+            )
+
+        def train(self) -> SimpleNamespace:
             """Return an inert training result."""
 
-            return "trained"
+            return SimpleNamespace(model=object())
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.trainer.Trainer",
         StubTrainer,
+    )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.validator_runner.ValidatorRunner.run",
+        lambda validators, *, model, validation_dataset: [],
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
@@ -274,6 +310,7 @@ def test_training_task_skips_simulation_for_existing_features(
     output_directory = TrainingTask(config).run()
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
+    assert simulation_calls == [("newton", "robot.usda")]
     assert trajectories["sequence"].nunique() == 2
 
 
@@ -287,6 +324,14 @@ def test_task_runner_registers_and_runs_training(
     monkeypatch.setattr(
         "anchor_bench.core.artifacts.resolve_repo_root",
         lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.task.create_simulation_context",
+        lambda backend, path: object(),
+    )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.validator_runner.ValidatorRunner.run",
+        lambda validators, *, model, validation_dataset: [],
     )
 
     timestamps = [index * 20_000_000 for index in range(12)]

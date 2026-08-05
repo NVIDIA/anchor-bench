@@ -52,9 +52,8 @@ class TrainingTask(BaseTask[TrainingConfig]):
             dt=float(self.config.dataset.resampling.dt),
         )
 
-        if any(self.config.input_features.values()):
-            simulation = self.config.simulation
-            create_simulation_context(simulation.backend, simulation.usd_path)
+        simulation = self.config.simulation
+        create_simulation_context(simulation.backend, simulation.usd_path)
 
         dataset = PreprocessorRunner.run(dataset, self.config.input_features)
         mappings = {
@@ -69,7 +68,16 @@ class TrainingTask(BaseTask[TrainingConfig]):
         )
         from anchor_bench.tasks.train.trainer import Trainer
 
-        result = Trainer(self.config, sequences).train()
+        trainer = Trainer(self.config, sequences)
+        result = trainer.train()
+
+        from anchor_bench.tasks.train.validator_runner import ValidatorRunner
+
+        ValidatorRunner.run(
+            self.config.validation.validators,
+            model=result.model,
+            validation_dataset=trainer.data_loaders.validation.dataset,
+        )
 
         from anchor_bench.tasks.train.artifacts import save_training_artifacts
 
