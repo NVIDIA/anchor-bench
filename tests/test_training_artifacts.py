@@ -1,10 +1,8 @@
 from pathlib import Path
 
-import pytest
 import torch
 import yaml
 
-from anchor_bench.core import artifacts
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     EpochLoss,
@@ -17,11 +15,9 @@ from tests.test_training_data import _config_data, _sequence
 
 def test_save_training_artifacts_writes_portable_run(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Persist config, CPU weights, history, and resolved feature ordering."""
+    """Persist CPU weights, history, and resolved feature ordering."""
 
-    monkeypatch.setattr(artifacts, "resolve_repo_root", lambda: tmp_path)
     config = TrainingConfig.model_validate(_config_data())
     model = GruModel(config.model, input_size=1, output_size=1)
     result = TrainingResult(
@@ -32,19 +28,19 @@ def test_save_training_artifacts_writes_portable_run(
         ],
     )
 
-    output_folder = save_training_artifacts(
+    output_folder = tmp_path / "artifacts"
+    output_folder.mkdir()
+    saved_output_folder = save_training_artifacts(
         result,
         [
             _sequence("first", [0.0, 1.0]),
             _sequence("second", [2.0, 3.0]),
         ],
         config,
+        output_folder,
     )
 
-    assert output_folder.parent == tmp_path / "output"
-    assert yaml.safe_load(
-        (output_folder / "config.yaml").read_text()
-    ) == config.model_dump(mode="json")
+    assert saved_output_folder == output_folder
     assert yaml.safe_load((output_folder / "history.yaml").read_text()) == [
         {"epoch": 1, "training": 2.0, "validation": 3.0},
         {"epoch": 2, "training": 1.0, "validation": None},

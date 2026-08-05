@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Sequence
 
 import torch
 
-from anchor_bench.core.artifacts import get_or_create_output_folder, write_yaml
+from anchor_bench.core.artifacts import write_yaml
 
 if TYPE_CHECKING:
     from anchor_bench.schema.training import TrainingConfig
@@ -20,10 +20,10 @@ def save_training_artifacts(
     result: TrainingResult,
     sequences: Sequence[MappedTrainingSequence],
     config: TrainingConfig,
+    output_folder: Path,
 ) -> Path:
     """Write one portable, config-addressed training artifact folder."""
 
-    output_folder, _ = get_or_create_output_folder(config)
     state_dict = {
         name: tensor.detach().cpu()
         for name, tensor in result.model.state_dict().items()

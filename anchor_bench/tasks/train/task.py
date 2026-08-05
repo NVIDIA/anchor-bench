@@ -73,7 +73,12 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
         from anchor_bench.tasks.train.artifacts import save_training_artifacts
 
-        save_training_artifacts(result, sequences, self.config)
+        save_training_artifacts(
+            result,
+            sequences,
+            self.config,
+            self.output_directory,
+        )
         self._write_trajectories(
             sequences,
             self.output_directory / TRAJECTORIES_FILENAME,

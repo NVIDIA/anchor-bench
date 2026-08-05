@@ -186,7 +186,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
-        lambda result, sequences, training_config: (
+        lambda result, sequences, training_config, output_directory: (
             events.append("save") or tmp_path / "artifacts"
         ),
     )
@@ -266,7 +266,9 @@ def test_training_task_skips_simulation_for_existing_features(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
-        lambda result, sequences, training_config: tmp_path / "artifacts",
+        lambda result, sequences, training_config, output_directory: (
+            tmp_path / "artifacts"
+        ),
     )
 
     output_directory = TrainingTask(config).run()
