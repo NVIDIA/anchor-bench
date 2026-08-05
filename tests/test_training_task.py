@@ -290,7 +290,7 @@ def test_training_task_initializes_simulation_for_validators(
     validation_dataset = object()
 
     class StubTrainer:
-        """Avoid running PyTorch in the simulation-bypass test."""
+        """Avoid running PyTorch in the validator initialization test."""
 
         def __init__(self, config: object, dataset: object) -> None:
             """Accept the prepared training inputs."""
@@ -314,8 +314,9 @@ def test_training_task_initializes_simulation_for_validators(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
-        lambda result, sequences, validation_results, training_config,
-        output_directory: tmp_path / "artifacts",
+        lambda result, sequences, validation_results, training_config, output_directory: (
+            tmp_path / "artifacts"
+        ),
     )
 
     output_directory = TrainingTask(config).run()
