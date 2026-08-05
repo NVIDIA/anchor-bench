@@ -10,10 +10,8 @@ import anchor_bench.train.validators as validator_registry
 import anchor_bench.train.validators.newton as newton_validator
 from anchor_bench.core import SimulationContext
 from anchor_bench.schema.training import TrainingValidatorConfig
-from anchor_bench.tasks.train import ValidatorRunner
+from anchor_bench.tasks.train import MappedTrainingSequence, ValidatorRunner
 from anchor_bench.train.validators.newton import (
-    NewtonReplayMapping,
-    NewtonReplaySequence,
     NewtonReplayValidator,
 )
 
@@ -144,27 +142,29 @@ def _sequence(
     target_feature: str = "actual_effort",
     *,
     experiment: str = "wave",
-) -> NewtonReplaySequence:
+) -> MappedTrainingSequence:
     """Build one replay whose live position error produces the real trajectory."""
 
     index = pd.MultiIndex.from_product(
         [[experiment], [0, 1_000_000_000, 2_000_000_000]],
         names=["experiment", "time_ns"],
     )
-    mapping = NewtonReplayMapping(
+    return MappedTrainingSequence(
+        experiment=experiment,
+        name="joint",
         inputs=pd.DataFrame(
-            {"joint/position_error": [99.0, 99.0, 99.0]},
+            {
+                "joint/position_error": [99.0, 99.0, 99.0],
+                "joint/actual_q": [0.0, 1.0, 2.0],
+                "joint/actual_dq": [0.0, 1.0, 1.0],
+                "joint/command_q": [1.0, 2.0, 3.0],
+            },
             index=index,
         ),
-        output_joints=("joint",),
-    )
-    return NewtonReplaySequence(
-        experiment=experiment,
-        mappings=(mapping,),
-        command=pd.DataFrame({"joint": [1.0, 2.0, 3.0]}, index=index),
-        position=pd.DataFrame({"joint": [0.0, 1.0, 2.0]}, index=index),
-        velocity=pd.DataFrame({"joint": [0.0, 1.0, 1.0]}, index=index),
-        target_feature=target_feature,
+        targets=pd.DataFrame(
+            {f"joint/{target_feature}": [0.0, 0.0, 0.0]},
+            index=index,
+        ),
     )
 
 
@@ -297,18 +297,11 @@ def test_rejects_invalid_timestamps(
         [["wave"], timestamps],
         names=["experiment", "time_ns"],
     )
-    invalid = NewtonReplaySequence(
+    invalid = MappedTrainingSequence(
         experiment=sequence.experiment,
-        mappings=(
-            NewtonReplayMapping(
-                inputs=sequence.mappings[0].inputs.set_axis(bad_index),
-                output_joints=("joint",),
-            ),
-        ),
-        command=sequence.command.set_axis(bad_index),
-        position=sequence.position.set_axis(bad_index),
-        velocity=sequence.velocity.set_axis(bad_index),
-        target_feature=sequence.target_feature,
+        name=sequence.name,
+        inputs=sequence.inputs.set_axis(bad_index),
+        targets=sequence.targets.set_axis(bad_index),
     )
     validator = NewtonReplayValidator(
         name="rollout",

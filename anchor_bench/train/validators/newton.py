@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from anchor_bench.tasks.train.task import MappedTrainingSequence
 from anchor_bench.train.validators.base import (
     BaseValidator,
     ValidationResult,
@@ -81,7 +82,7 @@ class NewtonReplayValidator(BaseValidator):
     ) -> ValidationResult:
         """Replay every experiment and return aggregate and per-experiment metrics."""
 
-        sequences = self._require_sequences(validation_dataset)
+        sequences = self._prepare_sequences(validation_dataset)
         output_joints = self._output_joints(sequences)
         stepper = _NewtonStepper(
             self.simulation_context,
@@ -123,21 +124,134 @@ class NewtonReplayValidator(BaseValidator):
         return ValidationResult(name=self.name, type=self.type, metrics=metrics)
 
     @staticmethod
-    def _require_sequences(dataset: Any) -> tuple[NewtonReplaySequence, ...]:
+    def _prepare_sequences(dataset: Any) -> tuple[NewtonReplaySequence, ...]:
+        """Build private replay sequences from held-out mapped pandas data."""
+
         if isinstance(dataset, (str, bytes)) or not isinstance(dataset, Sequence):
             raise TypeError(
-                "NewtonReplayValidator requires NewtonReplaySequence values."
+                "NewtonReplayValidator requires mapped validation sequences."
             )
-        sequences = tuple(dataset)
-        if not sequences:
+        mapped_sequences = tuple(dataset)
+        if not mapped_sequences:
             raise ValueError("Newton replay requires at least one validation sequence.")
-        if any(not isinstance(item, NewtonReplaySequence) for item in sequences):
+        if any(
+            not isinstance(item, MappedTrainingSequence) for item in mapped_sequences
+        ):
             raise TypeError(
-                "NewtonReplayValidator requires NewtonReplaySequence values."
+                "NewtonReplayValidator requires mapped validation sequences."
             )
+
+        grouped: dict[Any, list[MappedTrainingSequence]] = {}
+        for sequence in mapped_sequences:
+            grouped.setdefault(sequence.experiment, []).append(sequence)
+
+        sequences = tuple(
+            NewtonReplayValidator._build_sequence(experiment, mappings)
+            for experiment, mappings in grouped.items()
+        )
         for sequence in sequences:
             NewtonReplayValidator._validate_sequence(sequence)
         return sequences
+
+    @staticmethod
+    def _build_sequence(
+        experiment: object,
+        sequences: Sequence[MappedTrainingSequence],
+    ) -> NewtonReplaySequence:
+        """Derive one replay experiment from its mapped pandas sequences."""
+
+        names = [sequence.name for sequence in sequences]
+        if len(names) != len(set(names)):
+            raise ValueError(
+                f"Newton replay experiment {experiment!r} has duplicate mappings."
+            )
+
+        mappings = []
+        target_features = set()
+        for sequence in sequences:
+            if not sequence.inputs.index.equals(sequence.targets.index):
+                raise ValueError(
+                    f"Newton replay mapping {sequence.name!r} inputs and targets "
+                    "must share an index."
+                )
+            output_joints = []
+            for column in sequence.targets.columns:
+                joint, feature = NewtonReplayValidator._split_column(column)
+                output_joints.append(joint)
+                target_features.add(feature)
+            mappings.append(
+                NewtonReplayMapping(
+                    inputs=sequence.inputs,
+                    output_joints=tuple(output_joints),
+                )
+            )
+
+        if len(target_features) != 1:
+            raise ValueError(
+                "Newton replay mapped targets must share one target feature."
+            )
+        output_joints = tuple(
+            joint for mapping in mappings for joint in mapping.output_joints
+        )
+        return NewtonReplaySequence(
+            experiment=experiment,
+            mappings=tuple(mappings),
+            command=NewtonReplayValidator._feature_frame(
+                sequences, "command_q", output_joints
+            ),
+            position=NewtonReplayValidator._feature_frame(
+                sequences, "actual_q", output_joints
+            ),
+            velocity=NewtonReplayValidator._feature_frame(
+                sequences, "actual_dq", output_joints
+            ),
+            target_feature=target_features.pop(),
+        )
+
+    @staticmethod
+    def _feature_frame(
+        sequences: Sequence[MappedTrainingSequence],
+        feature: str,
+        joints: Sequence[str],
+    ) -> pd.DataFrame:
+        """Collect one named signal across mappings in output-joint order."""
+
+        columns: dict[str, pd.Series] = {}
+        for sequence in sequences:
+            for index, column in enumerate(sequence.inputs.columns):
+                joint, current_feature = NewtonReplayValidator._split_column(column)
+                if current_feature != feature:
+                    continue
+                values = sequence.inputs.iloc[:, index]
+                if joint in columns and not columns[joint].equals(values):
+                    raise ValueError(
+                        f"Newton replay has conflicting {feature!r} values for "
+                        f"joint {joint!r}."
+                    )
+                columns[joint] = values
+
+        ordered_joints = tuple(dict.fromkeys(joints))
+        missing = [joint for joint in ordered_joints if joint not in columns]
+        if missing:
+            raise ValueError(
+                f"Newton replay requires mapped {feature!r} inputs for joints: "
+                + ", ".join(missing)
+            )
+        return pd.concat(
+            [columns[joint].rename(joint) for joint in ordered_joints],
+            axis=1,
+        )
+
+    @staticmethod
+    def _split_column(column: object) -> tuple[str, str]:
+        """Split one mapped entity/feature column name."""
+
+        if not isinstance(column, str) or "/" not in column:
+            raise ValueError(
+                "Newton replay mapped columns must use entity/feature names."
+            )
+        joint, feature = column.rsplit("/", 1)
+        return joint, feature
 
     @staticmethod
     def _validate_sequence(sequence: NewtonReplaySequence) -> None:
