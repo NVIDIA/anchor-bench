@@ -43,10 +43,11 @@ failure without documenting the reason in the handoff.
 ### Fixing gate failures
 
 - For `ruff check` failures, first apply safe automatic fixes with
-  `uv run ruff check --fix`, fix any remaining violations manually, and rerun
-  `uv run ruff check`.
-- For `ruff format --check` failures, format the repository with
-  `uv run ruff format`, then rerun `uv run ruff format --check`.
+  `uv run ruff check --fix <affected-python-paths>`, fix any remaining
+  violations manually, and rerun `uv run ruff check`.
+- For `ruff format --check` failures, format the affected paths with
+  `uv run ruff format <affected-python-paths>`, then rerun
+  `uv run ruff format --check`.
 - For `pyright` failures, correct the implementation or type annotations and
   rerun `uv run pyright`. Do not add an ignore solely to make the gate pass;
   use one only when the reported issue is intentionally safe and document why.
