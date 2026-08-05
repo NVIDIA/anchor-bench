@@ -10,6 +10,7 @@ from anchor_bench.tasks.train import (
     TrainingResult,
     save_training_artifacts,
 )
+from anchor_bench.train.validators import ValidationResult
 from tests.test_training_data import _config_data, _sequence
 
 
@@ -36,6 +37,13 @@ def test_save_training_artifacts_writes_portable_run(
             _sequence("first", [0.0, 1.0]),
             _sequence("second", [2.0, 3.0]),
         ],
+        [
+            ValidationResult(
+                name="held-out loss",
+                type="offline",
+                metrics={"loss": 0.25},
+            )
+        ],
         config,
         output_folder,
     )
@@ -44,6 +52,13 @@ def test_save_training_artifacts_writes_portable_run(
     assert yaml.safe_load((output_folder / "history.yaml").read_text()) == [
         {"epoch": 1, "training": 2.0, "validation": 3.0},
         {"epoch": 2, "training": 1.0, "validation": None},
+    ]
+    assert yaml.safe_load((output_folder / "validation.yaml").read_text()) == [
+        {
+            "name": "held-out loss",
+            "type": "offline",
+            "metrics": {"loss": 0.25},
+        }
     ]
     assert yaml.safe_load((output_folder / "metadata.yaml").read_text()) == {
         "format_version": 1,

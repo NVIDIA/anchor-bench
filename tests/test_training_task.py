@@ -151,6 +151,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
     prepared: list[MappedTrainingSequence] = []
     trained_model = object()
     held_out_dataset = object()
+    validation_results = [object()]
 
     class StubTrainer:
         """Record data passed through the trainer boundary."""
@@ -186,7 +187,20 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         assert model is trained_model
         assert validation_dataset is held_out_dataset
         events.append("validate")
-        return []
+        return validation_results
+
+    def save(
+        result: object,
+        sequences: object,
+        received_validation_results: object,
+        training_config: object,
+        output_directory: object,
+    ) -> Path:
+        """Record validation result persistence."""
+
+        assert received_validation_results is validation_results
+        events.append("save")
+        return tmp_path / "artifacts"
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
@@ -210,9 +224,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
-        lambda result, sequences, training_config, output_directory: (
-            events.append("save") or tmp_path / "artifacts"
-        ),
+        save,
     )
 
     output_directory = TrainingTask(config).run()
@@ -302,9 +314,8 @@ def test_training_task_initializes_simulation_for_validators(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
-        lambda result, sequences, training_config, output_directory: (
-            tmp_path / "artifacts"
-        ),
+        lambda result, sequences, validation_results, training_config,
+        output_directory: tmp_path / "artifacts",
     )
 
     output_directory = TrainingTask(config).run()
@@ -361,6 +372,7 @@ def test_task_runner_registers_and_runs_training(
     assert (output_directory / ".completed").is_file()
     assert (output_directory / "model.pt").is_file()
     assert (output_directory / "history.yaml").is_file()
+    assert (output_directory / "validation.yaml").is_file()
     assert (output_directory / "metadata.yaml").is_file()
     assert trajectories["mapping"].drop_duplicates().tolist() == ["shoulder"]
     assert trajectories.loc[
