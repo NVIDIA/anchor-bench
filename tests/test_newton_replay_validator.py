@@ -9,6 +9,8 @@ import pytest
 import anchor_bench.train.validators as validator_registry
 import anchor_bench.train.validators.newton as newton_validator
 from anchor_bench.core import SimulationContext
+from anchor_bench.schema.training import TrainingValidatorConfig
+from anchor_bench.tasks.train import ValidatorRunner
 from anchor_bench.train.validators.newton import (
     NewtonReplayMapping,
     NewtonReplaySequence,
@@ -170,6 +172,28 @@ def test_registry_exposes_newton_replay_validator() -> None:
     """Resolve the built-in validator through its YAML entrypoint key."""
 
     assert validator_registry.newton_replay is NewtonReplayValidator
+
+
+def test_runner_executes_registered_newton_replay_validator() -> None:
+    """Execute the registered validator through its YAML configuration."""
+
+    results = ValidatorRunner.run(
+        [
+            TrainingValidatorConfig(
+                name="rollout",
+                type="simulation",
+                entrypoint="newton_replay",
+                config={"signals": ["position"]},
+            )
+        ],
+        model=FakeModel(),
+        validation_dataset=[_sequence()],
+    )
+
+    assert len(results) == 1
+    assert results[0].name == "rollout"
+    assert results[0].type == "simulation"
+    assert results[0].metrics["aggregate/position/rmse"] == 0.0
 
 
 def test_replays_live_inputs_and_reports_physical_metrics() -> None:
