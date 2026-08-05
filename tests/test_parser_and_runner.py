@@ -40,10 +40,8 @@ simulation:
     line_search_iterations: 4
 dataset:
   type: parquet
-  source: runs/actuator.parquet
-  resampling:
-    type: uniform
-    dt: 0.002
+  commanded_state: {path: runs/commanded}
+  measured_state: {path: runs/measured}
 """
 
 
