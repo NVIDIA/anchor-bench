@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 import numpy as np
 import pandas as pd
 
+from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 from anchor_bench.train.validators.base import (
     BaseValidator,
@@ -85,7 +86,7 @@ class NewtonReplayValidator(BaseValidator):
         sequences = self._prepare_sequences(validation_dataset)
         output_joints = self._output_joints(sequences)
         stepper = _NewtonStepper(
-            self.simulation_context,
+            cast(NewtonSimulationContext, self.simulation_context),
             output_joints=output_joints,
             residual=self._uses_residual_effort(sequences),
             substeps=self.substeps,

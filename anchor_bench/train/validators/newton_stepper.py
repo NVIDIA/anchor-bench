@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib import import_module
 from typing import Any, Mapping
 
+import newton
 import numpy as np
+
+from anchor_bench.core.simulation.newton import NewtonSimulationContext
 
 
 @dataclass(frozen=True)
@@ -18,21 +20,29 @@ class _ReplayState:
 
 
 class _NewtonStepper:
-    """Own Newton solver state and advance one replay at a time."""
+    """Advance closed-loop replay through the shared Newton context."""
 
     def __init__(
         self,
-        simulation_context: Any,
+        simulation_context: NewtonSimulationContext,
         *,
         output_joints: tuple[str, ...],
         residual: bool,
         substeps: int,
     ) -> None:
-        newton = import_module("newton")
         model = simulation_context.model
-        q_starts = model.joint_q_start.numpy()
-        dof_starts = model.joint_qd_start.numpy()
-        target_starts = model.joint_target_q_start.numpy()
+        joint_q_start = model.joint_q_start
+        joint_qd_start = model.joint_qd_start
+        joint_target_q_start = model.joint_target_q_start
+        if (
+            joint_q_start is None
+            or joint_qd_start is None
+            or joint_target_q_start is None
+        ):
+            raise RuntimeError("Newton model does not expose joint index arrays.")
+        q_starts = joint_q_start.numpy()
+        dof_starts = joint_qd_start.numpy()
+        target_starts = joint_target_q_start.numpy()
         self._indices = {
             joint: (
                 int(q_starts[index]),
@@ -50,23 +60,19 @@ class _NewtonStepper:
                 "Newton model is missing scalar joints: " + ", ".join(missing)
             )
 
-        solver_type = getattr(getattr(newton, "solvers", None), "SolverMuJoCo", None)
-        if solver_type is None:
-            raise RuntimeError("Newton replay requires newton.solvers.SolverMuJoCo.")
-        self._model = model
-        self._state_0 = simulation_context.state
-        self._state_1 = model.state()
-        self._control = model.control()
+        self._simulation_context = simulation_context
         self.output_joints = output_joints
         self._substeps = substeps
         self._original_modes: np.ndarray | None = None
         if not residual:
-            modes = np.asarray(model.joint_target_mode.numpy()).copy()
+            joint_target_mode = model.joint_target_mode
+            if joint_target_mode is None:
+                raise RuntimeError("Newton model does not expose joint target modes.")
+            modes = np.asarray(joint_target_mode.numpy()).copy()
             self._original_modes = modes.copy()
             for joint in output_joints:
                 modes[self._indices[joint][1]] = int(newton.JointTargetMode.EFFORT)
-            model.joint_target_mode.assign(modes)
-        self._solver = solver_type(model)
+            joint_target_mode.assign(modes)
 
     def reset(
         self,
@@ -82,12 +88,17 @@ class _NewtonStepper:
             raise ValueError(
                 "Newton replay contains unknown joints: " + ", ".join(unknown)
             )
-        q = self._joint_array(self._model.joint_q, position, 0)
-        qd = self._joint_array(self._state_0.joint_qd, velocity, 1, clear=True)
-        self._solver.reset(self._state_0)
-        for state in (self._state_0, self._state_1):
-            state.joint_q.assign(q)
-            state.joint_qd.assign(qd)
+        context = self._simulation_context
+        q = self._joint_array(context.model.joint_q, position, 0)
+        qd = self._joint_array(context.state_in.joint_qd, velocity, 1, clear=True)
+        context.solver.reset(context.state_in)
+        for state in (context.state_in, context.state_out):
+            state_joint_q = state.joint_q
+            state_joint_qd = state.joint_qd
+            if state_joint_q is None or state_joint_qd is None:
+                raise RuntimeError("Newton state does not expose joint state arrays.")
+            state_joint_q.assign(q)
+            state_joint_qd.assign(qd)
         self._write_control(command, {})
         return self._read_state()
 
@@ -103,20 +114,18 @@ class _NewtonStepper:
         self._write_control(command, effort)
         physics_dt = dt / self._substeps
         for _ in range(self._substeps):
-            self._solver.step(
-                self._state_0,
-                self._state_1,
-                self._control,
-                None,
-                physics_dt,
-            )
-            self._state_0, self._state_1 = self._state_1, self._state_0
+            self._simulation_context.step(dt=physics_dt)
         return self._read_state()
 
     def solver_pd(self, joint: str, command: float, state: _ReplayState) -> float:
         dof = self._indices[joint][1]
-        kp = float(self._model.joint_target_ke.numpy()[dof])
-        kd = float(self._model.joint_target_kd.numpy()[dof])
+        model = self._simulation_context.model
+        joint_target_ke = model.joint_target_ke
+        joint_target_kd = model.joint_target_kd
+        if joint_target_ke is None or joint_target_kd is None:
+            raise RuntimeError("Newton model does not expose joint target gains.")
+        kp = float(joint_target_ke.numpy()[dof])
+        kd = float(joint_target_kd.numpy()[dof])
         return kp * (command - state.position[joint]) - kd * state.velocity[joint]
 
     def _write_control(
@@ -124,11 +133,17 @@ class _NewtonStepper:
         command: Mapping[str, float],
         effort: Mapping[str, float],
     ) -> None:
-        targets = self._joint_array(self._control.joint_target_q, command, 2)
-        forces = self._joint_array(self._control.joint_f, effort, 1, clear=True)
-        self._control.joint_target_q.assign(targets)
-        self._control.joint_target_qd.assign(np.zeros_like(forces))
-        self._control.joint_f.assign(forces)
+        control = self._simulation_context.control
+        joint_target_q = control.joint_target_q
+        joint_target_qd = control.joint_target_qd
+        joint_f = control.joint_f
+        if joint_target_q is None or joint_target_qd is None or joint_f is None:
+            raise RuntimeError("Newton control does not expose joint control arrays.")
+        targets = self._joint_array(joint_target_q, command, 2)
+        forces = self._joint_array(joint_f, effort, 1, clear=True)
+        joint_target_q.assign(targets)
+        joint_target_qd.assign(np.zeros_like(forces))
+        joint_f.assign(forces)
 
     def _joint_array(
         self,
@@ -145,8 +160,13 @@ class _NewtonStepper:
         return result
 
     def _read_state(self) -> _ReplayState:
-        q = self._state_0.joint_q.numpy()
-        qd = self._state_0.joint_qd.numpy()
+        state = self._simulation_context.state_in
+        joint_q = state.joint_q
+        joint_qd = state.joint_qd
+        if joint_q is None or joint_qd is None:
+            raise RuntimeError("Newton state does not expose joint state arrays.")
+        q = joint_q.numpy()
+        qd = joint_qd.numpy()
         return _ReplayState(
             position={
                 joint: float(q[index[0]]) for joint, index in self._indices.items()
@@ -158,4 +178,7 @@ class _NewtonStepper:
 
     def close(self) -> None:
         if self._original_modes is not None:
-            self._model.joint_target_mode.assign(self._original_modes)
+            joint_target_mode = self._simulation_context.model.joint_target_mode
+            if joint_target_mode is None:
+                raise RuntimeError("Newton model does not expose joint target modes.")
+            joint_target_mode.assign(self._original_modes)

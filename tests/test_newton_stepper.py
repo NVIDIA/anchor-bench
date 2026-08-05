@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import numpy as np
 import pytest
 
-from anchor_bench.train.validators import newton_stepper
+from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.train.validators.newton_stepper import _NewtonStepper
 
 
@@ -37,6 +36,10 @@ class FakeState:
 
         self.joint_q = FakeArray([0.0])
         self.joint_qd = FakeArray([0.0])
+        self.clear_count = 0
+
+    def clear_forces(self) -> None:
+        self.clear_count += 1
 
 
 class FakeControl:
@@ -112,33 +115,52 @@ class FakeSolver:
         self.steps.append(dt)
 
 
-@pytest.fixture
-def fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the delayed Newton import with the fake solver API."""
+class FakeNewtonContext:
+    """Own one fake model, solver, and set of simulation buffers."""
 
-    module = SimpleNamespace(
-        solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
-        JointTargetMode=SimpleNamespace(EFFORT=4),
-    )
+    def __init__(self) -> None:
+        self.model = FakeNewtonModel()
+        self.state_in = self.model.state()
+        self.state_out = self.model.state()
+        self.control = self.model.control()
+        self.contacts = object()
+        self.solver = FakeSolver(self.model)
+
+    @property
+    def state(self) -> FakeState:
+        return self.state_in
+
+    def step(self, *, dt: float) -> None:
+        self.state_in.clear_forces()
+        self.solver.step(
+            self.state_in,
+            self.state_out,
+            self.control,
+            self.contacts,
+            dt,
+        )
+        self.state_in, self.state_out = self.state_out, self.state_in
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_solver() -> None:
+    """Reset fake solver instances before every test."""
+
     FakeSolver.instances.clear()
-    monkeypatch.setattr(newton_stepper, "import_module", lambda name: module)
 
 
-def _context() -> SimpleNamespace:
+def _context() -> FakeNewtonContext:
     """Build one fake shared model and initial state."""
 
-    model = FakeNewtonModel()
-    return SimpleNamespace(model=model, state=model.state())
+    return FakeNewtonContext()
 
 
-def test_stepper_resets_steps_and_restores_direct_effort_mode(
-    fake_newton: None,
-) -> None:
+def test_stepper_resets_steps_and_restores_direct_effort_mode() -> None:
     """Own stepping in the validator while leaving the shared model reusable."""
 
     context = _context()
     stepper = _NewtonStepper(
-        context,
+        cast(NewtonSimulationContext, context),
         output_joints=("joint",),
         residual=False,
         substeps=2,
@@ -162,23 +184,21 @@ def test_stepper_resets_steps_and_restores_direct_effort_mode(
     assert initial.position == {"joint": 1.0}
     assert result.position["joint"] == pytest.approx(1.4)
     assert result.velocity == {"joint": 2.0}
-    assert context.model.last_control is not None
-    assert context.model.last_control.joint_target_q.numpy().tolist() == [3.0]
-    assert context.model.last_control.joint_f.numpy().tolist() == [2.0]
+    assert context.control.joint_target_q.numpy().tolist() == [3.0]
+    assert context.control.joint_f.numpy().tolist() == [2.0]
+    assert len(FakeSolver.instances) == 1
 
     stepper.close()
 
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
 
 
-def test_stepper_retains_usd_actuation_for_residual_effort(
-    fake_newton: None,
-) -> None:
+def test_stepper_retains_usd_actuation_for_residual_effort() -> None:
     """Leave the authored PD and friction path enabled for residual output."""
 
     context = _context()
     stepper = _NewtonStepper(
-        context,
+        cast(NewtonSimulationContext, context),
         output_joints=("joint",),
         residual=True,
         substeps=1,
@@ -194,8 +214,9 @@ def test_stepper_uses_layout_aware_position_target_index() -> None:
 
     stepper = object.__new__(_NewtonStepper)
     stepper._indices = {"joint": (1, 0, 0)}
-    stepper._control = FakeControl()
+    context = _context()
+    stepper._simulation_context = cast(NewtonSimulationContext, context)
 
     stepper._write_control({"joint": 3.0}, {})
 
-    assert stepper._control.joint_target_q.numpy().tolist() == [3.0]
+    assert context.control.joint_target_q.numpy().tolist() == [3.0]
