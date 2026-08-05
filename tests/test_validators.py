@@ -5,22 +5,27 @@ from types import SimpleNamespace
 import pytest
 
 import anchor_bench.train.validators as validator_registry
+from anchor_bench.core import SimulationContext
 from anchor_bench.train import BaseValidator
 
 
 class RecordingValidator(BaseValidator):
     """Provide an inert concrete validator for scaffold tests."""
 
-    def validate(self) -> object:
+    def validate(self, model: object, validation_dataset: object) -> object:
         """Return the stored configuration for an observable test result."""
 
         return self.config
 
 
-def test_base_validator_stores_configuration() -> None:
+def test_base_validator_stores_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Retain the schema fields needed when validation is integrated later."""
 
     source_config = {"split": "test"}
+    simulation_context = object()
+    monkeypatch.setattr(SimulationContext, "current", lambda: simulation_context)
 
     validator = RecordingValidator(
         name="held-out loss",
@@ -32,6 +37,7 @@ def test_base_validator_stores_configuration() -> None:
     assert validator.type == "offline"
     assert validator.config == source_config
     assert validator.config is not source_config
+    assert validator.simulation_context is simulation_context
 
 
 def test_base_validator_cannot_be_instantiated() -> None:
