@@ -93,6 +93,8 @@ def test_sequence_dataset_respects_length_stride_and_boundaries() -> None:
     )
 
     assert len(dataset) == 4
+    assert dataset.input_size == 1
+    assert dataset.output_size == 1
     assert [inputs[:, 0].tolist() for inputs, _ in dataset] == [
         [0.0, 1.0, 2.0],
         [2.0, 3.0, 4.0],

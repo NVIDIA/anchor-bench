@@ -65,7 +65,7 @@ def valid_config_data():
             "sequence": {
                 "length": 32,
                 "stride": 8,
-                "hidden_state": "carry",
+                "hidden_state": "reset",
             },
             "optimizer": {
                 "type": "adamw",
@@ -107,7 +107,7 @@ def valid_config_data():
                 },
                 "training.sequence.hidden_state": {
                     "data_type": "categorical",
-                    "values": ["reset", "carry"],
+                    "values": ["reset"],
                 },
             },
         },
@@ -297,8 +297,8 @@ def test_search_rejects_parameter_name_without_object_path(valid_config_data):
 def test_search_rejects_duplicate_categorical_values(valid_config_data):
     data = deepcopy(valid_config_data)
     data["search"]["search_space"]["training.sequence.hidden_state"]["values"] = [
-        "carry",
-        "carry",
+        "reset",
+        "reset",
     ]
 
     with pytest.raises(

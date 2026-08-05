@@ -5,21 +5,34 @@ from anchor_bench.tasks.train.data import (
     TrainingDataLoaders,
     create_data_loaders,
 )
+from anchor_bench.tasks.train.model_registry import MODEL_REGISTRY, get_model
+from anchor_bench.tasks.train.models import GruModel
 from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
 from anchor_bench.tasks.train.task import (
     EntityMapping,
     MappedTrainingSequence,
     TrainingTask,
 )
+from anchor_bench.tasks.train.trainer import (
+    EpochLoss,
+    Trainer,
+    TrainingResult,
+)
 from anchor_bench.tasks.train.validator_runner import ValidatorRunner
 
 __all__ = [
+    "MODEL_REGISTRY",
     "EntityMapping",
+    "EpochLoss",
+    "GruModel",
     "MappedTrainingSequence",
     "PreprocessorRunner",
     "SequenceDataset",
+    "Trainer",
     "TrainingDataLoaders",
+    "TrainingResult",
     "TrainingTask",
     "ValidatorRunner",
     "create_data_loaders",
+    "get_model",
 ]
