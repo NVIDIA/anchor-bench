@@ -6,8 +6,8 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-import anchor_bench.train.validators.newton as newton_validator
-from anchor_bench.train.validators.newton import _NewtonStepper
+from anchor_bench.train.validators import newton_stepper
+from anchor_bench.train.validators.newton_stepper import _NewtonStepper
 
 
 class FakeArray:
@@ -120,7 +120,7 @@ def fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
         JointTargetMode=SimpleNamespace(EFFORT=4),
     )
     FakeSolver.instances.clear()
-    monkeypatch.setattr(newton_validator, "import_module", lambda name: module)
+    monkeypatch.setattr(newton_stepper, "import_module", lambda name: module)
 
 
 def _context() -> SimpleNamespace:

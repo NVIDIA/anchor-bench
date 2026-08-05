@@ -150,7 +150,6 @@ def _sequence(
         names=["experiment", "time_ns"],
     )
     mapping = NewtonReplayMapping(
-        name="joint",
         inputs=pd.DataFrame(
             {"joint/position_error": [99.0, 99.0, 99.0]},
             index=index,
@@ -268,7 +267,6 @@ def test_rejects_non_monotonic_timestamps() -> None:
         experiment=sequence.experiment,
         mappings=(
             NewtonReplayMapping(
-                name="joint",
                 inputs=sequence.mappings[0].inputs.set_axis(bad_index),
                 output_joints=("joint",),
             ),
