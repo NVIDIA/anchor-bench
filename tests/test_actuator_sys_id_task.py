@@ -240,9 +240,13 @@ def test_cmaes_optimizer_sampling_is_seed_deterministic(tmp_path):
     step = first.step(first_objective)
     second.step(second_objective)
 
+    first_population = first_objective.population
+    second_population = second_objective.population
+    assert first_population is not None
+    assert second_population is not None
     np.testing.assert_allclose(
-        first_objective.population,
-        second_objective.population,
+        first_population,
+        second_population,
     )
     assert step.iteration == 0
     assert step.iteration_best_score == pytest.approx(0.25)
@@ -250,7 +254,7 @@ def test_cmaes_optimizer_sampling_is_seed_deterministic(tmp_path):
     assert first.best_score == pytest.approx(0.25)
     np.testing.assert_allclose(
         first.best_candidate,
-        first_objective.population[1],
+        first_population[1],
     )
     final_step = first.step(RecordingObjective())
     assert final_step.converged
