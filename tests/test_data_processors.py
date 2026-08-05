@@ -9,11 +9,11 @@ import pandas as pd
 import pytest
 
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BasePreprocessor
-from anchor_bench.train.preprocessors.gru import (
-    PositionErrorPreprocessor,
-    ResidualTorquePreprocessor,
-    SolverPDPreprocessor,
+from anchor_bench.train import BaseDataProcessor
+from anchor_bench.train.data_processors.gru import (
+    PositionErrorDataProcessor,
+    ResidualTorqueDataProcessor,
+    SolverPDDataProcessor,
 )
 
 
@@ -31,7 +31,7 @@ class FakeNewtonArray:
         return np.asarray(self.values)
 
 
-class DifferencePreprocessor(BasePreprocessor):
+class DifferenceDataProcessor(BaseDataProcessor):
     def process(self) -> pd.DataFrame:
         return pd.DataFrame(
             {"position_error": self.dataset["command"] - self.dataset["position"]},
@@ -61,7 +61,7 @@ def simulation_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> RecordingSimulationContext:
-    """Create one process-wide context for every preprocessor test."""
+    """Create one process-wide context for every data processor test."""
 
     monkeypatch.setattr(
         SimulationContext,
@@ -88,18 +88,18 @@ def dataset() -> pd.DataFrame:
     )
 
 
-def test_base_preprocessor_generates_aligned_features(
+def test_base_data_processor_generates_aligned_features(
     dataset: pd.DataFrame,
 ) -> None:
-    result = DifferencePreprocessor(dataset).process()
+    result = DifferenceDataProcessor(dataset).process()
 
     assert result.index.equals(dataset.index)
     assert result["position_error"].tolist() == [0.5, 0.25]
 
 
-def test_base_preprocessor_cannot_be_instantiated(dataset: pd.DataFrame) -> None:
+def test_base_data_processor_cannot_be_instantiated(dataset: pd.DataFrame) -> None:
     with pytest.raises(TypeError):
-        BasePreprocessor(dataset)  # pyright: ignore[reportAbstractUsage]
+        BaseDataProcessor(dataset)  # pyright: ignore[reportAbstractUsage]
 
 
 def test_simulation_context_cannot_be_instantiated(
@@ -114,21 +114,21 @@ def test_simulation_context_cannot_be_instantiated(
         SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
 
 
-def test_base_preprocessor_uses_current_context(
+def test_base_data_processor_uses_current_context(
     dataset: pd.DataFrame,
     simulation_context: RecordingSimulationContext,
 ) -> None:
-    preprocessor = DifferencePreprocessor(dataset)
+    data_processor = DifferenceDataProcessor(dataset)
 
-    assert preprocessor.simulation_context is simulation_context
-    assert preprocessor.simulation_context.model.joint_label == [
+    assert data_processor.simulation_context is simulation_context
+    assert data_processor.simulation_context.model.joint_label == [
         "shoulder",
         "elbow",
     ]
-    assert preprocessor.simulation_context.state == "state"
+    assert data_processor.simulation_context.state == "state"
 
 
-def test_position_error_preprocessor_handles_multiple_entities() -> None:
+def test_position_error_data_processor_handles_multiple_entities() -> None:
     dataset = pd.DataFrame(
         {
             "shoulder/command_q": [2.0, 1.0],
@@ -139,7 +139,7 @@ def test_position_error_preprocessor_handles_multiple_entities() -> None:
         index=pd.Index(["sample-a", "sample-b"]),
     )
 
-    result = PositionErrorPreprocessor(dataset).process()
+    result = PositionErrorDataProcessor(dataset).process()
 
     assert result.columns.tolist() == [
         "shoulder/position_error",
@@ -150,7 +150,7 @@ def test_position_error_preprocessor_handles_multiple_entities() -> None:
     assert result.index.equals(dataset.index)
 
 
-def test_solver_pd_preprocessor_uses_entity_gains() -> None:
+def test_solver_pd_data_processor_uses_entity_gains() -> None:
     dataset = pd.DataFrame(
         {
             "shoulder/position_error": [1.0, -0.5],
@@ -161,14 +161,14 @@ def test_solver_pd_preprocessor_uses_entity_gains() -> None:
         index=pd.Index(["sample-a", "sample-b"]),
     )
 
-    result = SolverPDPreprocessor(dataset).process()
+    result = SolverPDDataProcessor(dataset).process()
 
     assert result["shoulder/solver_pd"].tolist() == [1.0, 0.0]
     assert result["elbow/solver_pd"].tolist() == [1.0, 4.0]
     assert result.index.equals(dataset.index)
 
 
-def test_residual_torque_preprocessor_subtracts_baselines() -> None:
+def test_residual_torque_data_processor_subtracts_baselines() -> None:
     dataset = pd.DataFrame(
         {
             "elbow/position_error": [0.5, 1.0, 0.0],
@@ -178,13 +178,13 @@ def test_residual_torque_preprocessor_subtracts_baselines() -> None:
         index=pd.Index(["sample-a", "sample-b", "sample-c"]),
     )
 
-    result = ResidualTorquePreprocessor(dataset).process()
+    result = ResidualTorqueDataProcessor(dataset).process()
 
     assert result["elbow/torque_residual"].tolist() == pytest.approx([8.65, 4.45, 10.0])
     assert result.index.equals(dataset.index)
 
 
-def test_preprocessor_entity_must_match_usd_joint() -> None:
+def test_data_processor_entity_must_match_usd_joint() -> None:
     """Reject dataset entities that do not identify a USD joint."""
 
     dataset = pd.DataFrame(
@@ -198,7 +198,7 @@ def test_preprocessor_entity_must_match_usd_joint() -> None:
         ValueError,
         match="USD model does not contain joint .wrist.",
     ):
-        SolverPDPreprocessor(dataset).process()
+        SolverPDDataProcessor(dataset).process()
 
 
 def test_residual_torque_requires_actual_effort_column() -> None:
@@ -209,7 +209,7 @@ def test_residual_torque_requires_actual_effort_column() -> None:
         }
     )
 
-    preprocessor = ResidualTorquePreprocessor(dataset)
+    data_processor = ResidualTorqueDataProcessor(dataset)
 
     with pytest.raises(ValueError, match="elbow/actual_effort"):
-        preprocessor.process()
+        data_processor.process()

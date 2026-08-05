@@ -268,7 +268,10 @@ class TrainingConfig(BaseConfig):
         Dict[str, Optional[NonEmptyString]],
         Field(min_length=1),
     ]
-    output_features: NonEmptyString
+    output_features: Annotated[
+        Dict[str, Optional[NonEmptyString]],
+        Field(min_length=1),
+    ]
     mapping: Annotated[
         Dict[str, NetworkMappingConfig],
         Field(min_length=1),

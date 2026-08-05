@@ -45,7 +45,7 @@ def _config_data() -> dict[str, Any]:
         },
         "simulation": {"backend": "newton", "usd_path": "robot.usda"},
         "input_features": {"input": None},
-        "output_features": "target",
+        "output_features": {"target": None},
         "mapping": {"joint": {"inputs": ["joint"], "outputs": ["joint"]}},
         "model": {
             "type": "gru",

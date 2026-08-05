@@ -69,10 +69,15 @@ def test_save_training_artifacts_writes_portable_run(
         "input_features": [
             {
                 "name": "input",
-                "preprocessor": None,
+                "data_processor": None,
             }
         ],
-        "output_feature": "target",
+        "output_features": [
+            {
+                "name": "target",
+                "data_processor": None,
+            }
+        ],
         "simulation": {"backend": "newton", "usd_path": "robot.usda"},
         "mappings": {
             "joint": {

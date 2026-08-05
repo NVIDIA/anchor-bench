@@ -20,7 +20,7 @@ from anchor_bench.schema.training import (
     TrainingConfig,
 )
 from anchor_bench.tasks.base_task import BaseTask
-from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
+from anchor_bench.tasks.train.data_processor_runner import DataProcessorRunner
 
 if TYPE_CHECKING:
     from anchor_bench.tasks.train.trainer import TrainingResult
@@ -90,7 +90,8 @@ class TrainingTask(BaseTask[TrainingConfig]):
         simulation = self.config.simulation
         create_simulation_context(simulation.backend, simulation.usd_path)
 
-        dataset = PreprocessorRunner.run(dataset, self.config.input_features)
+        dataset = DataProcessorRunner.run(dataset, self.config.input_features)
+        dataset = DataProcessorRunner.run(dataset, self.config.output_features)
         mappings = {
             name: EntityMapping(inputs=mapping.inputs, outputs=mapping.outputs)
             for name, mapping in self.config.mapping.items()
@@ -98,7 +99,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         sequences = self._map_features(
             dataset,
             input_features=list(self.config.input_features),
-            output_feature=self.config.output_features,
+            output_features=list(self.config.output_features),
             mappings=mappings,
         )
         from anchor_bench.tasks.train.trainer import Trainer
@@ -308,7 +309,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         dataset: pd.DataFrame,
         *,
         input_features: Sequence[str],
-        output_feature: str,
+        output_features: Sequence[str],
         mappings: Mapping[str, EntityMapping],
     ) -> list[MappedTrainingSequence]:
         """Prepare one ordered training sequence for every configured mapping."""
@@ -319,7 +320,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
             input_columns, output_columns = TrainingTask._resolve_mapping_columns(
                 dataset,
                 input_features=input_features,
-                output_feature=output_feature,
+                output_features=output_features,
                 mapping=mapping,
             )
             resolved_mappings.append((name, input_columns, output_columns))
@@ -377,7 +378,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         dataset: pd.DataFrame,
         *,
         input_features: Sequence[str],
-        output_feature: str,
+        output_features: Sequence[str],
         mapping: EntityMapping,
     ) -> tuple[list[str], list[str]]:
         """Resolve and validate one mapping's ordered dataset columns."""
@@ -387,7 +388,11 @@ class TrainingTask(BaseTask[TrainingConfig]):
             for feature in input_features
             for entity in mapping.inputs
         ]
-        output_columns = [f"{entity}/{output_feature}" for entity in mapping.outputs]
+        output_columns = [
+            f"{entity}/{feature}"
+            for feature in output_features
+            for entity in mapping.outputs
+        ]
         required_columns = list(dict.fromkeys(input_columns + output_columns))
         missing_columns = [
             column for column in required_columns if column not in dataset.columns
