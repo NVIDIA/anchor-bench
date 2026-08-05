@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
   "cmaes",
   "numpy>=1.23,<3",
+  "optuna>=4.9,<5",
   "pandas>=2.1,<3",
   "pyarrow>=14,<26",
   "pydantic>=2.7,<3",

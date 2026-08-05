@@ -12,6 +12,8 @@ from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
 from anchor_bench.tasks.train.task import (
     EntityMapping,
     MappedTrainingSequence,
+    SearchResult,
+    SearchTrial,
     TrainingTask,
 )
 from anchor_bench.tasks.train.trainer import (
@@ -28,6 +30,8 @@ __all__ = [
     "GruModel",
     "MappedTrainingSequence",
     "PreprocessorRunner",
+    "SearchResult",
+    "SearchTrial",
     "SequenceDataset",
     "Trainer",
     "TrainingDataLoaders",

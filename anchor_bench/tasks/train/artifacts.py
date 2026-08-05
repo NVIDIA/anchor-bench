@@ -12,7 +12,7 @@ from anchor_bench.core.artifacts import write_yaml
 
 if TYPE_CHECKING:
     from anchor_bench.schema.training import TrainingConfig
-    from anchor_bench.tasks.train.task import MappedTrainingSequence
+    from anchor_bench.tasks.train.task import MappedTrainingSequence, SearchResult
     from anchor_bench.tasks.train.trainer import TrainingResult
     from anchor_bench.train.validators import ValidationResult
 
@@ -23,6 +23,8 @@ def save_training_artifacts(
     validation_results: Sequence[ValidationResult],
     config: TrainingConfig,
     output_folder: Path,
+    *,
+    search_result: SearchResult | None = None,
 ) -> Path:
     """Write one portable, config-addressed training artifact folder."""
 
@@ -48,6 +50,23 @@ def save_training_artifacts(
             "mappings": _feature_layouts(sequences),
         },
     )
+    if search_result is not None:
+        write_yaml(
+            output_folder / "search.yaml",
+            {
+                "objective": {
+                    "metric": search_result.objective_metric,
+                    "direction": search_result.objective_direction,
+                },
+                "best_trial": search_result.best_trial,
+                "best_value": search_result.best_value,
+                "best_parameters": dict(search_result.best_parameters),
+                "best_config": search_result.best_config.model_dump(
+                    mode="json", exclude_none=True
+                ),
+                "trials": [asdict(trial) for trial in search_result.trials],
+            },
+        )
     return output_folder
 
 

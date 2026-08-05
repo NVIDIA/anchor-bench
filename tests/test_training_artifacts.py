@@ -7,6 +7,8 @@ from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     EpochLoss,
     GruModel,
+    SearchResult,
+    SearchTrial,
     TrainingResult,
     save_training_artifacts,
 )
@@ -83,3 +85,58 @@ def test_save_training_artifacts_writes_portable_run(
     assert all(
         torch.equal(saved_state[name], expected_state[name]) for name in expected_state
     )
+
+
+def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
+    """Persist the objective, trials, parameters, and winning configuration."""
+
+    config = TrainingConfig.model_validate(_config_data())
+    model = GruModel(config.model, input_size=1, output_size=1)
+    training_result = TrainingResult(
+        model=model,
+        history=[EpochLoss(epoch=1, training=2.0, validation=1.0)],
+    )
+    sequences = [_sequence("first", [0.0, 1.0])]
+    search_result = SearchResult(
+        training_result=training_result,
+        best_config=config,
+        validation_sequences=tuple(sequences),
+        objective_metric="validation_loss",
+        objective_direction="minimize",
+        best_trial=1,
+        best_value=1.0,
+        best_parameters={"model.hidden_size": 8},
+        trials=(
+            SearchTrial(
+                number=0,
+                parameters={"model.hidden_size": 16},
+                value=2.0,
+            ),
+            SearchTrial(
+                number=1,
+                parameters={"model.hidden_size": 8},
+                value=1.0,
+            ),
+        ),
+    )
+    output_folder = tmp_path / "artifacts"
+    output_folder.mkdir()
+
+    save_training_artifacts(
+        training_result,
+        sequences,
+        [],
+        config,
+        output_folder,
+        search_result=search_result,
+    )
+
+    summary = yaml.safe_load((output_folder / "search.yaml").read_text())
+    assert summary["objective"] == {
+        "metric": "validation_loss",
+        "direction": "minimize",
+    }
+    assert summary["best_trial"] == 1
+    assert summary["best_parameters"] == {"model.hidden_size": 8}
+    assert [trial["value"] for trial in summary["trials"]] == [2.0, 1.0]
+    assert summary["best_config"]["model"]["hidden_size"] == 8
