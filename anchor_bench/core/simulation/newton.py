@@ -23,6 +23,10 @@ class NewtonSimulationContext(SimulationContext):
             ) from error
 
         builder = newton.ModelBuilder()
+        solver_type = getattr(getattr(newton, "solvers", None), "SolverMuJoCo", None)
+        register = getattr(solver_type, "register_custom_attributes", None)
+        if callable(register):
+            register(builder)
         builder.add_usd(source=str(usd_path))
         model = builder.finalize()
         return model, model.state()

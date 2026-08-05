@@ -9,7 +9,9 @@ from anchor_bench.train.validators.base import (
 )
 
 # Built-in validators are registered here as name: (module, class) entries.
-VALIDATORS: dict[str, tuple[str, str]] = {}
+VALIDATORS: dict[str, tuple[str, str]] = {
+    "newton_replay": (".newton", "NewtonReplayValidator"),
+}
 
 
 def __getattr__(name: str) -> type[BaseValidator]:
