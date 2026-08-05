@@ -160,10 +160,13 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
             self,
             training_config: TrainingConfig,
             dataset: Sequence[MappedTrainingSequence],
+            *,
+            checkpoint_directory: Path,
         ) -> None:
             """Retain the prepared sequences."""
 
             assert training_config is config
+            assert checkpoint_directory.name == "checkpoints"
             prepared.extend(dataset)
             self.data_loaders = SimpleNamespace(validation_sequences=held_out_dataset)
 
@@ -293,10 +296,17 @@ def test_training_task_initializes_simulation_for_validators(
     class StubTrainer:
         """Avoid running PyTorch in the validator initialization test."""
 
-        def __init__(self, config: object, dataset: object) -> None:
+        def __init__(
+            self,
+            config: object,
+            dataset: object,
+            *,
+            checkpoint_directory: Path,
+        ) -> None:
             """Accept the prepared training inputs."""
 
             self.data_loaders = SimpleNamespace(validation_sequences=validation_dataset)
+            assert checkpoint_directory.name == "checkpoints"
 
         def train(self) -> SimpleNamespace:
             """Return an inert training result."""

@@ -105,7 +105,11 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
         search_result = None
         if self.config.search is None:
-            trainer = Trainer(self.config, sequences)
+            trainer = Trainer(
+                self.config,
+                sequences,
+                checkpoint_directory=self.output_directory / "checkpoints",
+            )
             result = trainer.train()
             validation_sequences = trainer.data_loaders.validation_sequences
             artifact_config = self.config
@@ -177,7 +181,13 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
             nonlocal best
             trial_config, parameters = self._trial_config(trial)
-            trainer = Trainer(trial_config, sequences)
+            trainer = Trainer(
+                trial_config,
+                sequences,
+                checkpoint_directory=(
+                    self.output_directory / "checkpoints" / f"trial-{trial.number:04d}"
+                ),
+            )
             result = trainer.train()
             value = self._validation_loss(result)
             if not isfinite(value):

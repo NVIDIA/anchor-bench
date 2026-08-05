@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -176,3 +177,57 @@ def test_trainer_rejects_training_without_a_complete_window() -> None:
 
     with pytest.raises(ValueError, match="complete training sequence window"):
         Trainer(config, [_sequence("wave", [0.0, 1.0])], device="cpu")
+
+
+def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
+    """Save complete checkpoints only at configured epoch intervals."""
+
+    config_data = _config_data()
+    config_data["training"]["epochs"] = 5
+    config_data["training"]["checkpoint"] = {"every_n_epochs": 2}
+    config_data["training"]["sequence"] = {
+        "length": 2,
+        "stride": 2,
+        "hidden_state": "reset",
+    }
+    config = TrainingConfig.model_validate(config_data)
+    checkpoint_directory = tmp_path / "checkpoints"
+    trainer = Trainer(
+        config,
+        [_sequence("wave", [float(value) for value in range(20)])],
+        device="cpu",
+        checkpoint_directory=checkpoint_directory,
+    )
+
+    trainer.train()
+
+    assert sorted(path.name for path in checkpoint_directory.iterdir()) == [
+        "epoch-000002.pt",
+        "epoch-000004.pt",
+    ]
+    checkpoint = torch.load(
+        checkpoint_directory / "epoch-000004.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert checkpoint["epoch"] == 4
+    assert [entry["epoch"] for entry in checkpoint["history"]] == [1, 2, 3, 4]
+    assert checkpoint["config"]["training"]["checkpoint"] == {"every_n_epochs": 2}
+    assert checkpoint["model_state_dict"].keys() == trainer.model.state_dict().keys()
+    assert checkpoint["optimizer_state_dict"]["state"]
+    assert not list(checkpoint_directory.glob("*.tmp"))
+
+
+def test_trainer_requires_directory_when_checkpointing() -> None:
+    """Reject checkpointing without an artifact destination."""
+
+    config_data = _config_data()
+    config_data["training"]["checkpoint"] = {"every_n_epochs": 1}
+    config = TrainingConfig.model_validate(config_data)
+
+    with pytest.raises(ValueError, match="checkpoint directory"):
+        Trainer(
+            config,
+            [_sequence("wave", [float(value) for value in range(20)])],
+            device="cpu",
+        )
