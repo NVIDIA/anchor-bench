@@ -2,10 +2,11 @@
 
 from anchor_bench.tasks.train import PreprocessorRunner
 from anchor_bench.train.preprocessors import BasePreprocessor
-from anchor_bench.train.validators import BaseValidator
+from anchor_bench.train.validators import BaseValidator, ValidationResult
 
 __all__ = [
     "BasePreprocessor",
     "BaseValidator",
     "PreprocessorRunner",
+    "ValidationResult",
 ]

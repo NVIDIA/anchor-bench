@@ -8,16 +8,20 @@ import pytest
 import anchor_bench.train.validators as validator_registry
 from anchor_bench.core import SimulationContext
 from anchor_bench.tasks.train import ValidatorRunner
-from anchor_bench.train import BaseValidator
+from anchor_bench.train import BaseValidator, ValidationResult
 
 
 class RecordingValidator(BaseValidator):
     """Provide an inert concrete validator for runner tests."""
 
-    def validate(self, model: object, validation_dataset: object) -> object:
-        """Return the stored configuration for an observable test result."""
+    def validate(self, model: object, validation_dataset: object) -> ValidationResult:
+        """Return one observable scalar metric."""
 
-        return self.config
+        return ValidationResult(
+            name=self.name,
+            type=self.type,
+            metrics={"score": float(self.config.get("score", 0.0))},
+        )
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,17 @@ class ValidatorConfig:
     type: Literal["offline", "simulation"]
     entrypoint: str
     config: Mapping[str, Any]
+
+
+@pytest.fixture(autouse=True)
+def simulation_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> object:
+    """Provide the shared simulation context required by every validator."""
+
+    context = object()
+    monkeypatch.setattr(SimulationContext, "current", lambda: context)
+    return context
 
 
 def _register(
@@ -46,13 +61,12 @@ def _register(
 
 def test_instantiates_validators_in_configuration_order(
     monkeypatch: pytest.MonkeyPatch,
+    simulation_context: object,
 ) -> None:
     """Resolve every entrypoint and retain its name, type, and config."""
 
     _register(monkeypatch, "first", RecordingValidator)
     _register(monkeypatch, "second", RecordingValidator)
-    simulation_context = object()
-    monkeypatch.setattr(SimulationContext, "current", lambda: simulation_context)
     configs = [
         ValidatorConfig(
             name="held-out loss",
@@ -126,3 +140,101 @@ def test_rejects_registered_non_validator(
 
     with pytest.raises(TypeError, match="must inherit from BaseValidator"):
         ValidatorRunner.instantiate([config])
+
+
+def test_runs_validators_in_configuration_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Execute configured validators and collect results in declaration order."""
+
+    _register(monkeypatch, "first", RecordingValidator)
+    _register(monkeypatch, "second", RecordingValidator)
+    configs = [
+        ValidatorConfig(
+            name="held-out loss",
+            type="offline",
+            entrypoint="first",
+            config={"score": 0.25},
+        ),
+        ValidatorConfig(
+            name="rollout tracking",
+            type="simulation",
+            entrypoint="second",
+            config={"score": 0.75},
+        ),
+    ]
+
+    results = ValidatorRunner.run(
+        configs,
+        model=object(),
+        validation_dataset=object(),
+    )
+
+    assert results == [
+        ValidationResult(
+            name="held-out loss",
+            type="offline",
+            metrics={"score": 0.25},
+        ),
+        ValidationResult(
+            name="rollout tracking",
+            type="simulation",
+            metrics={"score": 0.75},
+        ),
+    ]
+
+
+def test_run_rejects_non_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require every validator to return the common result contract."""
+
+    _register(monkeypatch, "invalid-result", RecordingValidator)
+    monkeypatch.setattr(
+        RecordingValidator,
+        "validate",
+        lambda self, model, validation_dataset: object(),
+    )
+    config = ValidatorConfig(
+        name="invalid result",
+        type="offline",
+        entrypoint="invalid-result",
+        config={},
+    )
+
+    with pytest.raises(TypeError, match="must return a ValidationResult"):
+        ValidatorRunner.run(
+            [config],
+            model=object(),
+            validation_dataset=object(),
+        )
+
+
+def test_run_rejects_mismatched_result_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep collected result metadata aligned with its configured validator."""
+
+    _register(monkeypatch, "mismatch", RecordingValidator)
+    monkeypatch.setattr(
+        RecordingValidator,
+        "validate",
+        lambda self, model, validation_dataset: ValidationResult(
+            name="another validator",
+            type=self.type,
+            metrics={},
+        ),
+    )
+    config = ValidatorConfig(
+        name="configured validator",
+        type="offline",
+        entrypoint="mismatch",
+        config={},
+    )
+
+    with pytest.raises(ValueError, match="returned result metadata"):
+        ValidatorRunner.run(
+            [config],
+            model=object(),
+            validation_dataset=object(),
+        )

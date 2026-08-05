@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
 from anchor_bench.core.simulation import SimulationContext
 
 ValidatorType = Literal["offline", "simulation"]
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """Structured metrics produced by one configured validator."""
+
+    name: str
+    type: ValidatorType
+    metrics: Mapping[str, float]
 
 
 class BaseValidator(ABC):
@@ -20,12 +30,12 @@ class BaseValidator(ABC):
         type: ValidatorType,
         config: Mapping[str, Any],
     ) -> None:
-        self.name = name
-        self.type = type
-        self.config = dict(config)
+        self.name: str = name
+        self.type: ValidatorType = type
+        self.config: dict[str, Any] = dict(config)
         self.simulation_context = SimulationContext.current()
 
     @abstractmethod
-    def validate(self, model: Any, validation_dataset: Any) -> object:
+    def validate(self, model: Any, validation_dataset: Any) -> ValidationResult:
         """Validate a trained model against its validation dataset."""
         raise NotImplementedError
