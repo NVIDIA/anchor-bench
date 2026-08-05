@@ -122,3 +122,19 @@ def test_model_rejects_non_finite_numbers(valid_config_data):
 
     with pytest.raises(ValidationError):
         ActuatorSysIdConfig.model_validate(data)
+
+
+def test_model_rejects_non_integral_control_substeps(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["simulation"]["control_freq"] = 333
+
+    with pytest.raises(ValidationError, match="divisible by control_freq"):
+        ActuatorSysIdConfig.model_validate(data)
+
+
+def test_model_rejects_joint_names_repeated_across_groups(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["joint_parameters"].append(deepcopy(data["joint_parameters"][0]))
+
+    with pytest.raises(ValidationError, match="unique across parameter groups"):
+        ActuatorSysIdConfig.model_validate(data)

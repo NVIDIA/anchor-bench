@@ -23,12 +23,16 @@ class FakeModelBuilder:
     """Record calls made through Newton model builder API."""
 
     last_instance: ClassVar[Optional["FakeModelBuilder"]] = None
+    instances: ClassVar[list["FakeModelBuilder"]] = []
     instance_count: ClassVar[int] = 0
 
     def __init__(self) -> None:
         self.usd_source = None
+        self.replicated_template = None
+        self.world_count = None
         self.model = FakeModel()
         FakeModelBuilder.last_instance = self
+        FakeModelBuilder.instances.append(self)
         FakeModelBuilder.instance_count += 1
 
     def add_usd(self, *, source: str) -> None:
@@ -40,6 +44,17 @@ class FakeModelBuilder:
         """Return the finalized fake model."""
 
         return self.model
+
+    def replicate(
+        self,
+        template: "FakeModelBuilder",
+        *,
+        world_count: int,
+    ) -> None:
+        """Record a replicated model request."""
+
+        self.replicated_template = template
+        self.world_count = world_count
 
 
 class OtherSimulationContext(SimulationContext):
@@ -82,6 +97,7 @@ def test_lazily_loads_one_newton_model_and_state(
         import_fake_newton,
     )
     FakeModelBuilder.instance_count = 0
+    FakeModelBuilder.instances = []
 
     context = NewtonSimulationContext(str(source))
     same_context = NewtonSimulationContext(str(source))
@@ -103,6 +119,66 @@ def test_lazily_loads_one_newton_model_and_state(
     assert loaded_state is state
     assert imported == ["newton"]
     assert FakeModelBuilder.instance_count == 1
+
+
+def test_builds_configurable_replicated_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep USD loading and population replication in the shared context."""
+
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    registered = []
+
+    class FakeSolver:
+        @staticmethod
+        def register_custom_attributes(builder: FakeModelBuilder) -> None:
+            registered.append(builder)
+
+    fake_newton = SimpleNamespace(
+        ModelBuilder=FakeModelBuilder,
+        solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
+    )
+    imported = []
+
+    def import_fake_newton(name: str):
+        imported.append(name)
+        return fake_newton
+
+    monkeypatch.setattr(
+        "anchor_bench.core.simulation.newton.import_module",
+        import_fake_newton,
+    )
+    FakeModelBuilder.instance_count = 0
+    FakeModelBuilder.instances = []
+    configured = []
+
+    context = NewtonSimulationContext(str(source))
+    model = context.create_replicated_model(
+        world_count=4,
+        configure_builder=configured.append,
+    )
+
+    template, population = FakeModelBuilder.instances
+    assert imported == ["newton"]
+    assert registered == [template, population]
+    assert template.usd_source == str(source)
+    assert configured == [template]
+    assert population.replicated_template is template
+    assert population.world_count == 4
+    assert model is population.model
+
+
+def test_rejects_invalid_replicated_world_count(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    context = NewtonSimulationContext(str(source))
+
+    with pytest.raises(ValueError, match="positive integer"):
+        context.create_replicated_model(world_count=0)
 
 
 def test_rejects_access_before_context_creation() -> None:
