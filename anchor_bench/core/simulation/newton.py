@@ -2,33 +2,16 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Tuple
+from typing import Any, Callable, Tuple
+
+import newton
 
 from anchor_bench.core.simulation import SimulationContext
 
-if TYPE_CHECKING:
-    import newton
 
-
-class NewtonSimulationContext(SimulationContext["newton.Model", "newton.State"]):
+class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     """Load simulation models with Newton."""
-
-    @property
-    def runtime(self) -> Any:
-        """Return the lazily imported Newton runtime."""
-
-        runtime = getattr(self, "_runtime", None)
-        if runtime is None:
-            try:
-                runtime = import_module("newton")
-            except ImportError as error:
-                raise RuntimeError(
-                    "NewtonSimulationContext requires the Newton runtime."
-                ) from error
-            self._runtime = runtime
-        return runtime
 
     def create_replicated_model(
         self,
@@ -60,16 +43,7 @@ class NewtonSimulationContext(SimulationContext["newton.Model", "newton.State"])
     ) -> newton.solvers.SolverMuJoCo:
         """Create Newton's MuJoCo solver for a model."""
 
-        solver_type = getattr(
-            getattr(self.runtime, "solvers", None),
-            "SolverMuJoCo",
-            None,
-        )
-        if solver_type is None:
-            raise RuntimeError(
-                "NewtonSimulationContext requires newton.solvers.SolverMuJoCo."
-            )
-        return solver_type(model, **options)
+        return newton.solvers.SolverMuJoCo(model, **options)
 
     def _load(self, usd_path: Path) -> Tuple[newton.Model, newton.State]:
         """Build a Newton model and initial state from a USD file."""
@@ -88,13 +62,6 @@ class NewtonSimulationContext(SimulationContext["newton.Model", "newton.State"])
     def _create_builder(self) -> newton.ModelBuilder:
         """Create a builder with Newton solver attributes registered."""
 
-        builder = self.runtime.ModelBuilder()
-        solver_type = getattr(
-            getattr(self.runtime, "solvers", None),
-            "SolverMuJoCo",
-            None,
-        )
-        register = getattr(solver_type, "register_custom_attributes", None)
-        if callable(register):
-            register(builder)
+        builder = newton.ModelBuilder()
+        newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
         return builder

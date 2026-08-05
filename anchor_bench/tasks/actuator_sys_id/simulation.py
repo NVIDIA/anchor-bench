@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Dict, List, Sequence, Tuple
+from typing import ClassVar, Dict, List, Sequence, Tuple
 
+import newton
 import numpy as np
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
@@ -11,9 +12,6 @@ from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
-
-if TYPE_CHECKING:
-    import newton
 
 
 class NewtonPopulationEvaluator:
@@ -57,7 +55,6 @@ class NewtonPopulationEvaluator:
         if not isinstance(context, NewtonSimulationContext):
             raise TypeError("actuator_sys_id requires a Newton simulation context")
         self._simulation_context = context
-        self._newton = context.runtime
 
         def configure_template(template: newton.ModelBuilder) -> None:
             template_indices = _builder_joint_indices(template, self.joint_names)
@@ -109,7 +106,7 @@ class NewtonPopulationEvaluator:
         indices: Dict[str, Tuple[int, int]],
         initial: Candidate,
     ) -> None:
-        position_mode = int(self._newton.JointTargetMode.POSITION)
+        position_mode = int(newton.JointTargetMode.POSITION)
         group_by_joint = {
             joint: group
             for group in self.config.joint_parameters
@@ -167,7 +164,7 @@ class NewtonPopulationEvaluator:
                     )
             model_array.assign(values)
 
-        model_flags = getattr(self._newton, "ModelFlags", None)
+        model_flags = getattr(newton, "ModelFlags", None)
         if model_flags is not None:
             flags = model_flags.JOINT_DOF_PROPERTIES | model_flags.ACTUATOR_PROPERTIES
             self._solver.notify_model_changed(flags)
@@ -215,7 +212,7 @@ class NewtonPopulationEvaluator:
                 raise RuntimeError("Newton state does not expose joint state arrays")
             state_joint_q.assign(joint_q)
             state_joint_qd.assign(joint_qd)
-            self._newton.eval_fk(
+            newton.eval_fk(
                 self._model,
                 state_joint_q,
                 state_joint_qd,

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Mapping
+from typing import Dict, List, Mapping
 
+import newton
 import numpy as np
 import pandas as pd
 
 from anchor_bench.train.preprocessors.base import BasePreprocessor
-
-if TYPE_CHECKING:
-    import newton
 
 
 def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:

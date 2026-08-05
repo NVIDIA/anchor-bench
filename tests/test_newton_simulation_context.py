@@ -77,24 +77,21 @@ def reset_simulation_context(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_lazily_loads_one_newton_model_and_state(
+def test_lazily_builds_one_newton_model_and_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "robot.usda"
     source.write_text("#usda 1.0", encoding="utf-8")
-    fake_newton = SimpleNamespace(ModelBuilder=FakeModelBuilder)
-    imported = []
-
-    def import_fake_newton(name: str):
-        """Record the delayed Newton import."""
-
-        imported.append(name)
-        return fake_newton
+    solver_type = SimpleNamespace(register_custom_attributes=lambda builder: None)
+    fake_newton = SimpleNamespace(
+        ModelBuilder=FakeModelBuilder,
+        solvers=SimpleNamespace(SolverMuJoCo=solver_type),
+    )
 
     monkeypatch.setattr(
-        "anchor_bench.core.simulation.newton.import_module",
-        import_fake_newton,
+        "anchor_bench.core.simulation.newton.newton",
+        fake_newton,
     )
     FakeModelBuilder.instance_count = 0
     FakeModelBuilder.instances = []
@@ -104,7 +101,7 @@ def test_lazily_loads_one_newton_model_and_state(
 
     assert context is same_context
     assert SimulationContext.current() is context
-    assert imported == []
+    assert FakeModelBuilder.instance_count == 0
 
     model = context.model
     state = context.state
@@ -117,7 +114,6 @@ def test_lazily_loads_one_newton_model_and_state(
     assert state is builder.model.initial_state
     assert loaded_model is model
     assert loaded_state is state
-    assert imported == ["newton"]
     assert FakeModelBuilder.instance_count == 1
 
 
@@ -140,15 +136,9 @@ def test_builds_configurable_replicated_model(
         ModelBuilder=FakeModelBuilder,
         solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
     )
-    imported = []
-
-    def import_fake_newton(name: str):
-        imported.append(name)
-        return fake_newton
-
     monkeypatch.setattr(
-        "anchor_bench.core.simulation.newton.import_module",
-        import_fake_newton,
+        "anchor_bench.core.simulation.newton.newton",
+        fake_newton,
     )
     FakeModelBuilder.instance_count = 0
     FakeModelBuilder.instances = []
@@ -161,7 +151,6 @@ def test_builds_configurable_replicated_model(
     )
 
     template, population = FakeModelBuilder.instances
-    assert imported == ["newton"]
     assert registered == [template, population]
     assert template.usd_source == str(source)
     assert configured == [template]

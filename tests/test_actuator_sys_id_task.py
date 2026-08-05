@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
+import newton
 import numpy as np
 import pandas as pd
 import pytest
@@ -22,9 +23,6 @@ from anchor_bench.tasks.actuator_sys_id.simulation import (
     _model_joint_indices,
 )
 from anchor_bench.tasks.actuator_sys_id.task import ActuatorSysIdTask
-
-if TYPE_CHECKING:
-    import newton
 
 
 def _config(tmp_path, **overrides):
@@ -273,9 +271,6 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
 
     class FakeContext:
         def __init__(self):
-            self.runtime = SimpleNamespace(
-                JointTargetMode=SimpleNamespace(POSITION=1),
-            )
             self.created_world_count = None
             self.solver_options = None
             self.template = SimpleNamespace(
