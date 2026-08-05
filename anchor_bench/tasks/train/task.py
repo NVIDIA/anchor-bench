@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
@@ -12,6 +13,8 @@ from anchor_bench.data import DatasetLoader
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.base_task import BaseTask
 from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
+
+TRAJECTORIES_FILENAME = "trajectories.parquet"
 
 
 @dataclass(frozen=True)
@@ -35,19 +38,14 @@ class MappedTrainingSequence:
 class TrainingTask(BaseTask[TrainingConfig]):
     """Prepare aligned datasets for network training."""
 
-    def __init__(self, config: TrainingConfig) -> None:
-        """Initialize training-data preparation from validated configuration."""
-
-        self.config = config
-
     @classmethod
     def name(cls) -> str:
         """Return the training configuration discriminator."""
 
         return "training"
 
-    def run(self) -> list[MappedTrainingSequence]:
-        """Load, preprocess, and map configured training sequences."""
+    def run(self) -> Path:
+        """Prepare mapped training trajectories and persist them as Parquet."""
 
         dataset = DatasetLoader.load(
             self.config.dataset.source,
@@ -63,12 +61,49 @@ class TrainingTask(BaseTask[TrainingConfig]):
             name: EntityMapping(inputs=mapping.inputs, outputs=mapping.outputs)
             for name, mapping in self.config.mapping.items()
         }
-        return self._map_features(
+        sequences = self._map_features(
             dataset,
             input_features=list(self.config.input_features),
             output_feature=self.config.output_features,
             mappings=mappings,
         )
+        self._write_trajectories(
+            sequences,
+            self.output_directory / TRAJECTORIES_FILENAME,
+        )
+        return self.output_directory
+
+    @staticmethod
+    def _write_trajectories(
+        sequences: Sequence[MappedTrainingSequence],
+        path: Path,
+    ) -> None:
+        """Write mapped inputs and targets to one long-form Parquet artifact."""
+
+        records = []
+        for sequence_index, sequence in enumerate(sequences):
+            for kind, values in (
+                ("input", sequence.inputs),
+                ("target", sequence.targets),
+            ):
+                index_names = [name for name in values.index.names if name is not None]
+                if len(index_names) != values.index.nlevels:
+                    raise ValueError(
+                        "Mapped trajectory index levels must all have names."
+                    )
+                frame = values.reset_index().melt(
+                    id_vars=index_names,
+                    var_name="feature",
+                    value_name="value",
+                )
+                frame.insert(0, "kind", kind)
+                frame.insert(0, "mapping", sequence.name)
+                frame.insert(0, "sequence", sequence_index)
+                records.append(frame)
+
+        if not records:
+            raise ValueError("Training did not produce any mapped trajectories.")
+        pd.concat(records, ignore_index=True).to_parquet(path, index=False)
 
     @staticmethod
     def _map_features(

@@ -111,6 +111,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "backend": "newton",
         "usd_path": str(usd_path),
     }
+    config_data["output_dir"] = str(tmp_path / "outputs")
     config = TrainingConfig.model_validate(config_data)
 
     def load(source: str, *, dt: float) -> pd.DataFrame:
@@ -156,24 +157,30 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         preprocess,
     )
 
-    sequences = TrainingTask(config).run()
+    output_directory = TrainingTask(config).run()
+    trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
     assert events == [
         "load:dataset.parquet:0.02",
         f"simulation:newton:{usd_path}",
         "preprocess",
     ]
-    assert [(sequence.experiment, sequence.name) for sequence in sequences] == [
-        ("wave", "arm"),
-        ("step", "arm"),
+    assert output_directory.parent == tmp_path / "outputs"
+    assert trajectories["experiment"].drop_duplicates().tolist() == ["wave", "step"]
+    assert trajectories["mapping"].drop_duplicates().tolist() == ["arm"]
+    wave_inputs = trajectories.loc[
+        (trajectories["sequence"] == 0) & (trajectories["kind"] == "input")
     ]
-    assert sequences[0].inputs.columns.tolist() == [
+    assert wave_inputs["feature"].drop_duplicates().tolist() == [
         "shoulder/actual_q",
         "elbow/actual_q",
         "shoulder/position_error",
         "elbow/position_error",
     ]
-    assert sequences[0].targets.columns.tolist() == [
+    wave_targets = trajectories.loc[
+        (trajectories["sequence"] == 0) & (trajectories["kind"] == "target")
+    ]
+    assert wave_targets["feature"].drop_duplicates().tolist() == [
         "elbow/actual_effort",
         "shoulder/actual_effort",
     ]
@@ -181,11 +188,13 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
 def test_training_task_skips_simulation_for_existing_features(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Avoid creating Newton when preprocessing is not requested."""
 
     config_data = _config_data("dataset.parquet")
     config_data["input_features"] = {"actual_q": None}
+    config_data["output_dir"] = str(tmp_path / "outputs")
     config = TrainingConfig.model_validate(config_data)
 
     monkeypatch.setattr(
@@ -197,9 +206,10 @@ def test_training_task_skips_simulation_for_existing_features(
         lambda backend, path: pytest.fail("simulation context should not be created"),
     )
 
-    sequences = TrainingTask(config).run()
+    output_directory = TrainingTask(config).run()
+    trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
-    assert len(sequences) == 2
+    assert trajectories["sequence"].nunique() == 2
 
 
 def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
@@ -224,20 +234,26 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     dataset.to_parquet(dataset_path)
     config_data = _config_data(str(dataset_path))
     config_data["input_features"] = {"actual_q": None}
+    config_data["output_dir"] = str(tmp_path / "outputs")
     config_data["mapping"] = {
         "shoulder": {"inputs": ["shoulder"], "outputs": ["shoulder"]}
     }
     config_path = tmp_path / "training.yaml"
     config_path.write_text(yaml.safe_dump(config_data), encoding="utf-8")
 
-    sequences = TaskRunner().run(str(config_path))
+    output_directory = TaskRunner().run(str(config_path))
+    trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
-    assert len(sequences) == 1
-    assert sequences[0].experiment == "wave"
-    assert sequences[0].name == "shoulder"
-    assert sequences[0].inputs.columns.tolist() == ["shoulder/actual_q"]
-    assert sequences[0].targets.columns.tolist() == ["shoulder/actual_effort"]
-    assert sequences[0].inputs.index.get_level_values("time_ns").tolist() == [
+    assert output_directory.parent == tmp_path / "outputs"
+    assert (output_directory / ".completed").is_file()
+    assert trajectories["mapping"].drop_duplicates().tolist() == ["shoulder"]
+    assert trajectories.loc[
+        trajectories["kind"] == "input", "feature"
+    ].drop_duplicates().tolist() == ["shoulder/actual_q"]
+    assert trajectories.loc[
+        trajectories["kind"] == "target", "feature"
+    ].drop_duplicates().tolist() == ["shoulder/actual_effort"]
+    assert trajectories["time_ns"].drop_duplicates().tolist() == [
         0,
         20_000_000,
     ]
