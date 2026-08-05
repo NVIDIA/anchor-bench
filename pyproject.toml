@@ -25,6 +25,12 @@ dependencies = [
 simulation = [
   "newton[importers,sim]==1.4.0",
 ]
+mlflow = [
+  "mlflow>=3.0,<4",
+]
+wandb = [
+  "wandb>=0.26,<1",
+]
 dev = [
   "pyright>=1.1,<2",
   "pytest>=8,<9",
@@ -34,6 +40,9 @@ dev = [
 
 [project.scripts]
 anchor-bench = "anchor_bench.cli:main"
+
+[project.entry-points."anchor_bench.mlops_backends"]
+wandb = "anchor_bench.mlops.backends.wandb:WandbBackend"
 
 [tool.setuptools.packages.find]
 include = ["anchor_bench*"]
