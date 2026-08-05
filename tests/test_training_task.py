@@ -165,9 +165,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
             assert training_config is config
             prepared.extend(dataset)
-            self.data_loaders = SimpleNamespace(
-                validation=SimpleNamespace(dataset=held_out_dataset)
-            )
+            self.data_loaders = SimpleNamespace(validation_sequences=held_out_dataset)
 
         def train(self) -> SimpleNamespace:
             """Record training execution."""
@@ -295,9 +293,7 @@ def test_training_task_initializes_simulation_for_validators(
         def __init__(self, config: object, dataset: object) -> None:
             """Accept the prepared training inputs."""
 
-            self.data_loaders = SimpleNamespace(
-                validation=SimpleNamespace(dataset=validation_dataset)
-            )
+            self.data_loaders = SimpleNamespace(validation_sequences=validation_dataset)
 
         def train(self) -> SimpleNamespace:
             """Return an inert training result."""

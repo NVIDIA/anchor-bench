@@ -76,7 +76,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         validation_results = ValidatorRunner.run(
             self.config.validation.validators,
             model=result.model,
-            validation_dataset=trainer.data_loaders.validation.dataset,
+            validation_dataset=trainer.data_loaders.validation_sequences,
         )
 
         from anchor_bench.tasks.train.artifacts import save_training_artifacts

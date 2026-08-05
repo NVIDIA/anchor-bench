@@ -88,6 +88,7 @@ class TrainingDataLoaders:
 
     train: DataLoader[tuple[Tensor, Tensor]]
     validation: DataLoader[tuple[Tensor, Tensor]]
+    validation_sequences: tuple[MappedTrainingSequence, ...]
 
 
 def create_data_loaders(
@@ -121,6 +122,7 @@ def create_data_loaders(
             batch_size=training.batch_size,
             shuffle=False,
         ),
+        validation_sequences=tuple(validation_sequences),
     )
 
 
