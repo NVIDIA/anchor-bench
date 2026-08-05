@@ -104,6 +104,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
     events: list[str] = []
     loaded = _aligned_dataset()
+    monkeypatch.setattr(
+        "anchor_bench.core.artifacts.resolve_repo_root",
+        lambda: tmp_path,
+    )
     usd_path = tmp_path / "robot.usda"
     usd_path.write_text("#usda 1.0", encoding="utf-8")
     config_data = _config_data("dataset.parquet")
@@ -111,7 +115,6 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "backend": "newton",
         "usd_path": str(usd_path),
     }
-    config_data["output_dir"] = str(tmp_path / "outputs")
     config = TrainingConfig.model_validate(config_data)
 
     def load(source: str, *, dt: float) -> pd.DataFrame:
@@ -198,7 +201,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "train",
         "save",
     ]
-    assert output_directory.parent == tmp_path / "outputs"
+    assert output_directory.parent == tmp_path / "output"
     assert trajectories["experiment"].drop_duplicates().tolist() == ["wave", "step"]
     assert trajectories["mapping"].drop_duplicates().tolist() == ["arm"]
     wave_inputs = trajectories.loc[
@@ -231,7 +234,10 @@ def test_training_task_skips_simulation_for_existing_features(
 
     config_data = _config_data("dataset.parquet")
     config_data["input_features"] = {"actual_q": None}
-    config_data["output_dir"] = str(tmp_path / "outputs")
+    monkeypatch.setattr(
+        "anchor_bench.core.artifacts.resolve_repo_root",
+        lambda: tmp_path,
+    )
     config = TrainingConfig.model_validate(config_data)
 
     monkeypatch.setattr(
