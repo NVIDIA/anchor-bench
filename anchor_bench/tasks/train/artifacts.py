@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import torch
-import yaml
 
-from anchor_bench.core.artifacts import get_or_create_output_folder
+from anchor_bench.core.artifacts import get_or_create_output_folder, write_yaml
 
 if TYPE_CHECKING:
     from anchor_bench.schema.training import TrainingConfig
@@ -24,20 +23,17 @@ def save_training_artifacts(
 ) -> Path:
     """Write one portable, config-addressed training artifact folder."""
 
-    output_folder, _ = get_or_create_output_folder(
-        config,
-        output_root=config.output_dir,
-    )
+    output_folder, _ = get_or_create_output_folder(config)
     state_dict = {
         name: tensor.detach().cpu()
         for name, tensor in result.model.state_dict().items()
     }
     torch.save(state_dict, output_folder / "model.pt")
-    _write_yaml(
+    write_yaml(
         output_folder / "history.yaml",
         [asdict(entry) for entry in result.history],
     )
-    _write_yaml(
+    write_yaml(
         output_folder / "metadata.yaml",
         {
             "format_version": 1,
@@ -64,12 +60,3 @@ def _feature_layouts(
             },
         )
     return layouts
-
-
-def _write_yaml(path: Path, document: Any) -> None:
-    """Write a readable YAML training artifact."""
-
-    path.write_text(
-        yaml.safe_dump(document, sort_keys=False),
-        encoding="utf-8",
-    )

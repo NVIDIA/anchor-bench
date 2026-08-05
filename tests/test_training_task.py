@@ -269,10 +269,17 @@ def test_training_task_skips_simulation_for_existing_features(
     assert trajectories["sequence"].nunique() == 2
 
 
-def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
+def test_task_runner_registers_and_runs_training(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Run the prepared-sequence pipeline through a parsed YAML config."""
 
     assert TASKS["training"] is TrainingTask
+    monkeypatch.setattr(
+        "anchor_bench.core.artifacts.resolve_repo_root",
+        lambda: tmp_path,
+    )
 
     timestamps = [index * 20_000_000 for index in range(12)]
     dataset = pd.DataFrame(
@@ -288,7 +295,6 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     dataset.to_parquet(dataset_path)
     config_data = _config_data(str(dataset_path))
     config_data["input_features"] = {"actual_q": None}
-    config_data["output_dir"] = str(tmp_path / "outputs")
     config_data["mapping"] = {
         "shoulder": {"inputs": ["shoulder"], "outputs": ["shoulder"]}
     }
@@ -298,7 +304,7 @@ def test_task_runner_registers_and_runs_training(tmp_path: Path) -> None:
     output_directory = TaskRunner().run(str(config_path))
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
-    assert output_directory.parent == tmp_path / "outputs"
+    assert output_directory.parent == tmp_path / "output"
     assert (output_directory / ".completed").is_file()
     assert (output_directory / "model.pt").is_file()
     assert (output_directory / "history.yaml").is_file()

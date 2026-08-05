@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
 import torch
 import yaml
 
+from anchor_bench.core import artifacts
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     EpochLoss,
@@ -13,12 +15,14 @@ from anchor_bench.tasks.train import (
 from tests.test_training_data import _config_data, _sequence
 
 
-def test_save_training_artifacts_writes_portable_run(tmp_path: Path) -> None:
+def test_save_training_artifacts_writes_portable_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Persist config, CPU weights, history, and resolved feature ordering."""
 
-    config_data = _config_data()
-    config_data["output_dir"] = str(tmp_path / "training")
-    config = TrainingConfig.model_validate(config_data)
+    monkeypatch.setattr(artifacts, "resolve_repo_root", lambda: tmp_path)
+    config = TrainingConfig.model_validate(_config_data())
     model = GruModel(config.model, input_size=1, output_size=1)
     result = TrainingResult(
         model=model,
@@ -37,10 +41,10 @@ def test_save_training_artifacts_writes_portable_run(tmp_path: Path) -> None:
         config,
     )
 
-    assert output_folder.parent == tmp_path / "training"
-    assert yaml.safe_load((output_folder / "config.yaml").read_text())[
-        "output_dir"
-    ] == str(tmp_path / "training")
+    assert output_folder.parent == tmp_path / "output"
+    assert yaml.safe_load(
+        (output_folder / "config.yaml").read_text()
+    ) == config.model_dump(mode="json")
     assert yaml.safe_load((output_folder / "history.yaml").read_text()) == [
         {"epoch": 1, "training": 2.0, "validation": 3.0},
         {"epoch": 2, "training": 1.0, "validation": None},

@@ -28,7 +28,7 @@ def get_or_create_output_folder(
         if output_folder.is_dir():
             return output_folder, (output_folder / COMPLETION_MARKER).is_file()
         raise
-    _write_yaml(
+    write_yaml(
         output_folder / "config.yaml",
         config.model_dump(mode="json"),
     )
@@ -46,7 +46,9 @@ def _hash_name(config: BaseModel) -> str:
     return hashlib.sha256(content).hexdigest()[:8]
 
 
-def _write_yaml(path: Path, document: Any) -> None:
+def write_yaml(path: Path, document: Any) -> None:
+    """Write a YAML artifact."""
+
     path.write_text(
         yaml.safe_dump(document, sort_keys=False),
         encoding="utf-8",

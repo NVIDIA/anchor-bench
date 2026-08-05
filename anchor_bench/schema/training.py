@@ -251,7 +251,6 @@ class TrainingConfig(BaseConfig):
     type: Literal["training"]  # pyright: ignore[reportIncompatibleVariableOverride]
     description: Optional[str] = None
     tags: Optional[List[str]] = None
-    output_dir: NonEmptyString = "outputs/training"
     dataset: ParquetDatasetConfig
     simulation: SimulationConfig
     input_features: Annotated[
