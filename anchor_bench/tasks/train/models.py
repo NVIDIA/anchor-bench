@@ -38,11 +38,16 @@ class GruModel(nn.Module):
             torch.tensor(float(config.output.scale)),
         )
 
-    def forward(self, inputs: Tensor) -> Tensor:
-        """Return a prediction for every input timestep."""
+    def forward(
+        self,
+        inputs: Tensor,
+        hidden: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Return timestep predictions and the next recurrent hidden state."""
 
-        recurrent, _ = self.recurrent(inputs)
-        return self.activation(self.output(recurrent)) * self.output_scale
+        recurrent, next_hidden = self.recurrent(inputs, hidden)
+        predictions = self.activation(self.output(recurrent)) * self.output_scale
+        return predictions, next_hidden
 
 
 def _activation(name: str) -> nn.Module:

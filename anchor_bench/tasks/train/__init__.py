@@ -4,7 +4,9 @@ from anchor_bench.tasks.train.artifacts import save_training_artifacts
 from anchor_bench.tasks.train.data import (
     SequenceDataset,
     TrainingDataLoaders,
+    ValidationDataset,
     create_data_loaders,
+    create_validation_dataset,
 )
 from anchor_bench.tasks.train.model_registry import MODEL_REGISTRY, get_model
 from anchor_bench.tasks.train.models import GruModel
@@ -37,8 +39,10 @@ __all__ = [
     "TrainingDataLoaders",
     "TrainingResult",
     "TrainingTask",
+    "ValidationDataset",
     "ValidatorRunner",
     "create_data_loaders",
+    "create_validation_dataset",
     "get_model",
     "save_training_artifacts",
 ]

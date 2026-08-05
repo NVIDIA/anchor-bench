@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from anchor_bench.tasks.train.data import ValidationDataset
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 from anchor_bench.train.utils import position_error
 from anchor_bench.train.validators.base import (
@@ -126,13 +127,11 @@ class NewtonReplayValidator(BaseValidator):
 
     @staticmethod
     def _prepare_sequences(dataset: Any) -> tuple[NewtonReplaySequence, ...]:
-        """Build private replay sequences from held-out mapped pandas data."""
+        """Build private replay sequences from complete held-out processed data."""
 
-        if isinstance(dataset, (str, bytes)) or not isinstance(dataset, Sequence):
-            raise TypeError(
-                "NewtonReplayValidator requires mapped validation sequences."
-            )
-        mapped_sequences = tuple(dataset)
+        if not isinstance(dataset, ValidationDataset):
+            raise TypeError("NewtonReplayValidator requires a ValidationDataset.")
+        mapped_sequences = dataset.sequences
         if not mapped_sequences:
             raise ValueError("Newton replay requires at least one validation sequence.")
         if any(
@@ -147,7 +146,14 @@ class NewtonReplayValidator(BaseValidator):
             grouped.setdefault(sequence.experiment, []).append(sequence)
 
         sequences = tuple(
-            NewtonReplayValidator._build_sequence(experiment, mappings)
+            NewtonReplayValidator._build_sequence(
+                experiment,
+                mappings,
+                NewtonReplayValidator._experiment_frame(
+                    dataset.dataframe,
+                    experiment,
+                ),
+            )
             for experiment, mappings in grouped.items()
         )
         for sequence in sequences:
@@ -158,6 +164,7 @@ class NewtonReplayValidator(BaseValidator):
     def _build_sequence(
         experiment: object,
         sequences: Sequence[MappedTrainingSequence],
+        dataframe: pd.DataFrame,
     ) -> NewtonReplaySequence:
         """Derive one replay experiment from its mapped pandas sequences."""
 
@@ -198,50 +205,56 @@ class NewtonReplayValidator(BaseValidator):
             experiment=experiment,
             mappings=tuple(mappings),
             command=NewtonReplayValidator._feature_frame(
-                sequences, "command_q", output_joints
+                dataframe, "command_q", output_joints
             ),
             position=NewtonReplayValidator._feature_frame(
-                sequences, "actual_q", output_joints
+                dataframe, "actual_q", output_joints
             ),
             velocity=NewtonReplayValidator._feature_frame(
-                sequences, "actual_dq", output_joints
+                dataframe, "actual_dq", output_joints
             ),
             target_feature=target_features.pop(),
         )
 
     @staticmethod
+    def _experiment_frame(
+        dataframe: pd.DataFrame,
+        experiment: object,
+    ) -> pd.DataFrame:
+        """Select one experiment from the complete processed validation frame."""
+
+        if "experiment" not in dataframe.index.names:
+            raise ValueError("Newton replay data requires an experiment index.")
+        try:
+            return dataframe.xs(
+                experiment,
+                level="experiment",
+                drop_level=False,
+            )
+        except KeyError as error:
+            raise ValueError(
+                f"Newton replay data is missing experiment {experiment!r}."
+            ) from error
+
+    @staticmethod
     def _feature_frame(
-        sequences: Sequence[MappedTrainingSequence],
+        dataframe: pd.DataFrame,
         feature: str,
         joints: Sequence[str],
     ) -> pd.DataFrame:
-        """Collect one named signal across mappings in output-joint order."""
-
-        columns: dict[str, pd.Series] = {}
-        for sequence in sequences:
-            for index, column in enumerate(sequence.inputs.columns):
-                joint, current_feature = NewtonReplayValidator._split_column(column)
-                if current_feature != feature:
-                    continue
-                values = sequence.inputs.iloc[:, index]
-                if joint in columns and not columns[joint].equals(values):
-                    raise ValueError(
-                        f"Newton replay has conflicting {feature!r} values for "
-                        f"joint {joint!r}."
-                    )
-                columns[joint] = values
+        """Select one named signal from complete processed validation data."""
 
         ordered_joints = tuple(dict.fromkeys(joints))
-        missing = [joint for joint in ordered_joints if joint not in columns]
+        columns = [f"{joint}/{feature}" for joint in ordered_joints]
+        missing = [column for column in columns if column not in dataframe.columns]
         if missing:
             raise ValueError(
-                f"Newton replay requires mapped {feature!r} inputs for joints: "
+                f"Newton replay requires processed {feature!r} columns: "
                 + ", ".join(missing)
             )
-        return pd.concat(
-            [columns[joint].rename(joint) for joint in ordered_joints],
-            axis=1,
-        )
+        frame = dataframe.loc[:, columns].copy()
+        frame.columns = list(ordered_joints)
+        return frame
 
     @staticmethod
     def _split_column(column: object) -> tuple[str, str]:

@@ -10,7 +10,11 @@ import anchor_bench.train.validators as validator_registry
 import anchor_bench.train.validators.newton as newton_validator
 from anchor_bench.core import SimulationContext
 from anchor_bench.schema.training import TrainingValidatorConfig
-from anchor_bench.tasks.train import MappedTrainingSequence, ValidatorRunner
+from anchor_bench.tasks.train import (
+    MappedTrainingSequence,
+    ValidationDataset,
+    ValidatorRunner,
+)
 from anchor_bench.train.validators.newton import (
     NewtonReplayValidator,
 )
@@ -153,18 +157,35 @@ def _sequence(
         experiment=experiment,
         name="joint",
         inputs=pd.DataFrame(
-            {
-                "joint/position_error": [99.0, 99.0, 99.0],
-                "joint/actual_q": [0.0, 1.0, 2.0],
-                "joint/actual_dq": [0.0, 1.0, 1.0],
-                "joint/command_q": [1.0, 2.0, 3.0],
-            },
+            {"joint/position_error": [99.0, 99.0, 99.0]},
             index=index,
         ),
         targets=pd.DataFrame(
             {f"joint/{target_feature}": [0.0, 0.0, 0.0]},
             index=index,
         ),
+    )
+
+
+def _validation_dataset(
+    *sequences: MappedTrainingSequence,
+) -> ValidationDataset:
+    """Keep recorded replay signals separate from configured model inputs."""
+
+    frames = [
+        pd.DataFrame(
+            {
+                "joint/actual_q": [0.0, 1.0, 2.0],
+                "joint/actual_dq": [0.0, 1.0, 1.0],
+                "joint/command_q": [1.0, 2.0, 3.0],
+            },
+            index=sequence.inputs.index,
+        )
+        for sequence in sequences
+    ]
+    return ValidationDataset(
+        sequences=tuple(sequences),
+        dataframe=pd.concat(frames),
     )
 
 
@@ -187,7 +208,7 @@ def test_runner_executes_registered_newton_replay_validator() -> None:
             )
         ],
         model=FakeModel(),
-        validation_dataset=[_sequence()],
+        validation_dataset=_validation_dataset(_sequence()),
     )
 
     assert len(results) == 1
@@ -206,7 +227,7 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
         config={"signals": ["position", "velocity"], "substeps": 4},
     )
 
-    result = validator.validate(model, [_sequence()])
+    result = validator.validate(model, _validation_dataset(_sequence()))
 
     stepper = FakeStepper.instances[0]
     assert model.evaluated
@@ -237,7 +258,7 @@ def test_resets_hidden_state_between_experiments() -> None:
 
     validator.validate(
         model,
-        [_sequence(), _sequence(experiment="step")],
+        _validation_dataset(_sequence(), _sequence(experiment="step")),
     )
 
     assert model.hidden_inputs == [None, 1, None, 1]
@@ -253,7 +274,7 @@ def test_residual_target_keeps_newton_baseline_enabled() -> None:
         config={"signals": ["position"]},
     )
 
-    validator.validate(FakeModel(), [_sequence("torque_residual")])
+    validator.validate(FakeModel(), _validation_dataset(_sequence("torque_residual")))
 
     assert FakeStepper.instances[0].residual is True
 
@@ -310,4 +331,4 @@ def test_rejects_invalid_timestamps(
     )
 
     with pytest.raises(ValueError, match=message):
-        validator.validate(FakeModel(), [invalid])
+        validator.validate(FakeModel(), _validation_dataset(invalid))
