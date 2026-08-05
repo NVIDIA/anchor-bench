@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping
+from typing import TYPE_CHECKING, Dict, List, Mapping
 
 import numpy as np
 import pandas as pd
 
 from anchor_bench.train.preprocessors.base import BasePreprocessor
+
+if TYPE_CHECKING:
+    import newton
 
 
 def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:
@@ -34,14 +37,17 @@ def _feature_entities(dataset: pd.DataFrame, feature: str) -> List[str]:
 
 
 def _joint_parameters(
-    model: Any,
+    model: newton.Model,
     entities: List[str],
     field: str,
 ) -> Dict[str, float]:
     """Read one per-DOF model field for dataset entities."""
 
     labels = model.joint_label
-    dof_starts = model.joint_qd_start.numpy()
+    joint_qd_start = model.joint_qd_start
+    if joint_qd_start is None:
+        raise ValueError("USD model does not define joint_qd_start.")
+    dof_starts = joint_qd_start.numpy()
     model_values = getattr(model, field, None)
     if model_values is None:
         raise ValueError(f"USD model does not define {field}.")

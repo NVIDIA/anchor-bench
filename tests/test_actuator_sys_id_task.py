@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
@@ -21,6 +22,9 @@ from anchor_bench.tasks.actuator_sys_id.simulation import (
     _model_joint_indices,
 )
 from anchor_bench.tasks.actuator_sys_id.task import ActuatorSysIdTask
+
+if TYPE_CHECKING:
+    import newton
 
 
 def _config(tmp_path, **overrides):
@@ -237,12 +241,15 @@ def test_newton_joint_mapping_separates_state_and_target_layouts():
         def numpy(self):
             return self.values
 
-    model = SimpleNamespace(
-        joint_label=["root", "hip", "root", "hip"],
-        joint_world=FakeArray([0, 0, 1, 1]),
-        joint_q_start=FakeArray([0, 7, 8, 15, 16]),
-        joint_qd_start=FakeArray([0, 6, 7, 13, 14]),
-        joint_target_q_start=FakeArray([0, 6, 7, 13, 14]),
+    model = cast(
+        "newton.Model",
+        SimpleNamespace(
+            joint_label=["root", "hip", "root", "hip"],
+            joint_world=FakeArray([0, 0, 1, 1]),
+            joint_q_start=FakeArray([0, 7, 8, 15, 16]),
+            joint_qd_start=FakeArray([0, 6, 7, 13, 14]),
+            joint_target_q_start=FakeArray([0, 6, 7, 13, 14]),
+        ),
     )
 
     q_indices, dof_indices, target_indices = _model_joint_indices(

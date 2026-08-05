@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, List, Sequence, Tuple
+from typing import TYPE_CHECKING, ClassVar, Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -11,6 +11,9 @@ from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
+
+if TYPE_CHECKING:
+    import newton
 
 
 class NewtonPopulationEvaluator:
@@ -56,7 +59,7 @@ class NewtonPopulationEvaluator:
         self._simulation_context = context
         self._newton = context.runtime
 
-        def configure_template(template: Any) -> None:
+        def configure_template(template: newton.ModelBuilder) -> None:
             template_indices = _builder_joint_indices(template, self.joint_names)
             self._configure_template(template, template_indices, initial)
 
@@ -102,7 +105,7 @@ class NewtonPopulationEvaluator:
 
     def _configure_template(
         self,
-        template: Any,
+        template: newton.ModelBuilder,
         indices: Dict[str, Tuple[int, int]],
         initial: Candidate,
     ) -> None:
@@ -269,7 +272,7 @@ def _matching_label(labels: Sequence[str], requested: str) -> int:
 
 
 def _builder_joint_indices(
-    builder: Any,
+    builder: newton.ModelBuilder,
     joint_names: Sequence[str],
 ) -> Dict[str, Tuple[int, int]]:
     result: Dict[str, Tuple[int, int]] = {}
@@ -289,14 +292,26 @@ def _builder_joint_indices(
 
 
 def _model_joint_indices(
-    model: Any,
+    model: newton.Model,
     joint_names: Sequence[str],
     num_envs: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    worlds = np.asarray(model.joint_world.numpy(), dtype=np.int64)
-    q_starts = np.asarray(model.joint_q_start.numpy(), dtype=np.int64)
-    dof_starts = np.asarray(model.joint_qd_start.numpy(), dtype=np.int64)
-    target_starts = np.asarray(model.joint_target_q_start.numpy(), dtype=np.int64)
+    joint_world = model.joint_world
+    joint_q_start = model.joint_q_start
+    joint_qd_start = model.joint_qd_start
+    joint_target_q_start = model.joint_target_q_start
+    if (
+        joint_world is None
+        or joint_q_start is None
+        or joint_qd_start is None
+        or joint_target_q_start is None
+    ):
+        raise RuntimeError("Newton model does not expose joint index arrays")
+
+    worlds = np.asarray(joint_world.numpy(), dtype=np.int64)
+    q_starts = np.asarray(joint_q_start.numpy(), dtype=np.int64)
+    dof_starts = np.asarray(joint_qd_start.numpy(), dtype=np.int64)
+    target_starts = np.asarray(joint_target_q_start.numpy(), dtype=np.int64)
     q_indices = np.empty((num_envs, len(joint_names)), dtype=np.int64)
     dof_indices = np.empty_like(q_indices)
     target_indices = np.empty_like(q_indices)
