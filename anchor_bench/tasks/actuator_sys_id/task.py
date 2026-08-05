@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord, SysIdResult
+from anchor_bench.tasks.actuator_sys_id.objective import ActuatorSysIdObjective
 from anchor_bench.tasks.actuator_sys_id.optimizer import create_optimizer
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import NewtonPopulationEvaluator
@@ -30,26 +29,24 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
         evaluator = NewtonPopulationEvaluator(self.config, parameter_space)
+        objective = ActuatorSysIdObjective(
+            parameter_space,
+            evaluator,
+            trajectories,
+        )
         history = []
 
-        for generation in range(self.config.optimizer.max_iterations):
-            normalized = optimizer.ask()
-            population = parameter_space.decode_population(normalized)
-            scores = evaluator.evaluate(population, trajectories)
-            converged = optimizer.tell(scores)
+        while not optimizer.converged:
+            step = optimizer.step(objective)
             history.append(
                 GenerationRecord(
-                    generation=generation,
-                    best_mse=optimizer.best_score,
-                    population_mean_mse=float(np.mean(scores)),
+                    generation=step.iteration,
+                    best_mse=step.best_score,
+                    population_mean_mse=step.mean_score,
                 )
             )
-            if converged:
-                break
 
-        if optimizer.best_normalized is None:
-            raise RuntimeError("CMA-ES did not produce a valid actuator candidate")
-        best_parameters = parameter_space.decode(optimizer.best_normalized)
+        best_parameters = parameter_space.decode(optimizer.best_candidate)
         sys_id_result = write_artifacts(
             self.output_directory,
             best_parameters=best_parameters,

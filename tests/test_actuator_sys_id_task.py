@@ -16,7 +16,10 @@ from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord, Trajectory
-from anchor_bench.tasks.actuator_sys_id.optimizer import CmaEsOptimizer
+from anchor_bench.tasks.actuator_sys_id.optimizer import (
+    CmaEsOptimizer,
+    OptimizationStep,
+)
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import (
     NewtonPopulationEvaluator,
@@ -144,32 +147,33 @@ def test_task_orchestrates_optimizer_evaluator_and_artifacts(tmp_path, monkeypat
 
     class FakeOptimizer:
         def __init__(self):
-            self.generation = 0
+            self.converged = False
             self.best_score = float("inf")
-            self.best_normalized = None
-            self.last_population = None
+            self.best_candidate = None
 
-        def ask(self):
-            self.last_population = np.asarray(
+        def step(self, objective):
+            population = np.asarray(
                 [
                     [-1.0, -1.0, -1.0, -1.0, -1.0],
                     [0.0, 0.0, 0.0, 0.0, 0.0],
                 ]
             )
-            return self.last_population
-
-        def tell(self, scores):
+            scores = objective.evaluate(population)
             best = int(np.argmin(scores))
             self.best_score = float(scores[best])
-            assert self.last_population is not None
-            self.best_normalized = self.last_population[best]
-            self.generation += 1
-            return True
+            self.best_candidate = population[best]
+            self.converged = True
+            return OptimizationStep(
+                iteration=0,
+                scores=scores,
+                best_score=self.best_score,
+                converged=True,
+            )
 
     class FakeEvaluator:
         def evaluate(self, population, trajectories):
             assert len(population) == 2
-            assert trajectories == [trajectory]
+            assert trajectories == (trajectory,)
             return np.asarray([1.0, 0.25])
 
     written = {}
@@ -223,12 +227,36 @@ def test_cmaes_optimizer_sampling_is_seed_deterministic(tmp_path):
         seed=7,
     )
 
-    first_population = first.ask()
-    second_population = second.ask()
-    first.tell(np.asarray([0.5, 0.25, 0.75, 1.0]))
+    class RecordingObjective:
+        def __init__(self):
+            self.population = None
 
-    np.testing.assert_allclose(first_population, second_population)
+        def evaluate(self, population):
+            self.population = np.array(population, copy=True)
+            return np.asarray([0.5, 0.25, 0.75, 1.0])
+
+    first_objective = RecordingObjective()
+    second_objective = RecordingObjective()
+    step = first.step(first_objective)
+    second.step(second_objective)
+
+    np.testing.assert_allclose(
+        first_objective.population,
+        second_objective.population,
+    )
+    assert step.iteration == 0
+    assert step.iteration_best_score == pytest.approx(0.25)
+    assert step.mean_score == pytest.approx(0.625)
     assert first.best_score == pytest.approx(0.25)
+    np.testing.assert_allclose(
+        first.best_candidate,
+        first_objective.population[1],
+    )
+    final_step = first.step(RecordingObjective())
+    assert final_step.converged
+    assert first.converged
+    with pytest.raises(RuntimeError, match="already converged"):
+        first.step(RecordingObjective())
 
 
 def test_newton_joint_mapping_separates_state_and_target_layouts():
