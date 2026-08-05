@@ -21,13 +21,13 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
         self,
         sequences: Sequence[MappedTrainingSequence],
         *,
-        length: int,
+        window_length: int,
         stride: int,
     ) -> None:
         """Convert mapped sequences to tensors and index their valid windows."""
 
         self._sequences: list[tuple[Tensor, Tensor]] = []
-        self._windows: list[tuple[int, int]] = []
+        self._window_indices: list[tuple[int, int]] = []
         expected_shape: tuple[int, int] | None = None
 
         for sequence in sequences:
@@ -56,24 +56,28 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
             )
             sequence_index = len(self._sequences)
             self._sequences.append((inputs, targets))
-            self._windows.extend(
+            self._window_indices.extend(
                 (sequence_index, start)
-                for start in range(0, len(inputs) - length + 1, stride)
+                for start in range(
+                    0,
+                    len(inputs) - window_length + 1,
+                    stride,
+                )
             )
 
-        self._length = length
+        self._window_length = window_length
 
     def __len__(self) -> int:
         """Return the number of complete sequence windows."""
 
-        return len(self._windows)
+        return len(self._window_indices)
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return one input and target window as tensor views."""
 
-        sequence_index, start = self._windows[index]
+        sequence_index, start = self._window_indices[index]
         inputs, targets = self._sequences[sequence_index]
-        stop = start + self._length
+        stop = start + self._window_length
         return inputs[start:stop], targets[start:stop]
 
 
@@ -97,7 +101,7 @@ def create_data_loaders(
         validation_ratio=float(training.validation_ratio),
     )
     dataset_arguments = {
-        "length": training.sequence.length,
+        "window_length": training.sequence.length,
         "stride": training.sequence.stride,
     }
     train_dataset = SequenceDataset(train_sequences, **dataset_arguments)

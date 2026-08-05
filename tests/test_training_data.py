@@ -88,7 +88,7 @@ def test_sequence_dataset_respects_length_stride_and_boundaries() -> None:
             _sequence("first", [0.0, 1.0, 2.0, 3.0, 4.0]),
             _sequence("second", [100.0, 101.0, 102.0, 103.0, 104.0]),
         ],
-        length=3,
+        window_length=3,
         stride=2,
     )
 
@@ -148,4 +148,4 @@ def test_sequence_dataset_rejects_inconsistent_tensor_widths() -> None:
     vector.inputs["joint/second_input"] = [4.0, 5.0]
 
     with pytest.raises(ValueError, match="identical input and target widths"):
-        SequenceDataset([scalar, vector], length=2, stride=1)
+        SequenceDataset([scalar, vector], window_length=2, stride=1)
