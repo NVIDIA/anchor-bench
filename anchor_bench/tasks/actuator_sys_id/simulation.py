@@ -44,9 +44,9 @@ class NewtonPopulationEvaluator:
             _joint_delay_steps(config, self.control_dt),
             dtype=np.int64,
         )
-        self._build_runtime()
+        self._initialize_simulation()
 
-    def _build_runtime(self) -> None:
+    def _initialize_simulation(self) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
         context = create_simulation_context(
             self.config.simulation.type,
@@ -60,39 +60,34 @@ class NewtonPopulationEvaluator:
             template_indices = _builder_joint_indices(template, self.joint_names)
             self._configure_template(template, template_indices, initial)
 
-        self._model = context.create_replicated_model(
+        solver_config = self.config.simulation.solver
+        context.initialize(
             world_count=self.num_envs,
             configure_builder=configure_template,
+            solver_options={
+                "solver": "newton",
+                "integrator": solver_config.integrator,
+                "iterations": solver_config.solver_iterations,
+                "ls_iterations": solver_config.line_search_iterations,
+            },
         )
+        model = context.model
         (
             self._joint_q_indices,
             self._joint_dof_indices,
             self._joint_target_indices,
         ) = _model_joint_indices(
-            self._model,
+            model,
             self.joint_names,
             self.num_envs,
         )
-        solver_config = self.config.simulation.solver
-        self._solver = context.create_mujoco_solver(
-            self._model,
-            solver="newton",
-            integrator=solver_config.integrator,
-            iterations=solver_config.solver_iterations,
-            ls_iterations=solver_config.line_search_iterations,
-        )
-        self._state_in = self._model.state()
-        self._state_out = self._model.state()
-        self._control = self._model.control()
-        self._contacts = self._model.contacts()
-        model_joint_q = self._model.joint_q
-        model_joint_qd = self._model.joint_qd
-        joint_target_pos = self._control.joint_target_pos
+        model_joint_q = model.joint_q
+        model_joint_qd = model.joint_qd
+        joint_target_pos = context.control.joint_target_pos
         if model_joint_q is None or model_joint_qd is None:
             raise RuntimeError("Newton model does not expose joint state arrays")
         if joint_target_pos is None:
             raise RuntimeError("Newton control does not expose joint position targets")
-        self._joint_target_pos = joint_target_pos
         self._base_q = np.asarray(model_joint_q.numpy(), dtype=np.float32)
         self._base_qd = np.asarray(model_joint_qd.numpy(), dtype=np.float32)
         self._base_targets = np.asarray(
@@ -153,7 +148,7 @@ class NewtonPopulationEvaluator:
 
     def _apply_population(self, population: Sequence[Candidate]) -> None:
         for parameter_name, model_array_name in self._MODEL_ARRAYS.items():
-            model_array = getattr(self._model, model_array_name)
+            model_array = getattr(self._simulation_context.model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
             values = np.asarray(model_array.numpy(), dtype=np.float32)
@@ -167,7 +162,7 @@ class NewtonPopulationEvaluator:
         model_flags = getattr(newton, "ModelFlags", None)
         if model_flags is not None:
             flags = model_flags.JOINT_DOF_PROPERTIES | model_flags.ACTUATOR_PROPERTIES
-            self._solver.notify_model_changed(flags)
+            self._simulation_context.solver.notify_model_changed(flags)
 
     def _evaluate_trajectory(self, trajectory: Trajectory) -> np.ndarray:
         if trajectory.joint_names != self.joint_names:
@@ -191,7 +186,7 @@ class NewtonPopulationEvaluator:
             )
             self._set_targets(delayed)
             self._step_control_interval()
-            state_joint_q = self._state_in.joint_q
+            state_joint_q = self._simulation_context.state_in.joint_q
             if state_joint_q is None:
                 raise RuntimeError("Newton state does not expose joint positions")
             joint_q = np.asarray(state_joint_q.numpy(), dtype=np.float64)
@@ -205,7 +200,8 @@ class NewtonPopulationEvaluator:
         joint_qd = np.array(self._base_qd, copy=True)
         joint_q[self._joint_q_indices] = measured_position[np.newaxis, :]
         joint_qd[self._joint_dof_indices] = 0.0
-        for state in (self._state_in, self._state_out):
+        context = self._simulation_context
+        for state in (context.state_in, context.state_out):
             state_joint_q = state.joint_q
             state_joint_qd = state.joint_qd
             if state_joint_q is None or state_joint_qd is None:
@@ -213,31 +209,26 @@ class NewtonPopulationEvaluator:
             state_joint_q.assign(joint_q)
             state_joint_qd.assign(joint_qd)
             newton.eval_fk(
-                self._model,
+                context.model,
                 state_joint_q,
                 state_joint_qd,
                 state,
             )
-        reset = getattr(self._solver, "reset", None)
+        reset = getattr(context.solver, "reset", None)
         if callable(reset):
-            reset(self._state_in)
+            reset(context.state_in)
 
     def _set_targets(self, command: np.ndarray) -> None:
         targets = np.array(self._base_targets, copy=True)
         targets[self._joint_target_indices] = command[np.newaxis, :]
-        self._joint_target_pos.assign(targets)
+        joint_target_pos = self._simulation_context.control.joint_target_pos
+        if joint_target_pos is None:
+            raise RuntimeError("Newton control does not expose joint position targets")
+        joint_target_pos.assign(targets)
 
     def _step_control_interval(self) -> None:
         for _ in range(self.control_substeps):
-            self._state_in.clear_forces()
-            self._solver.step(
-                state_in=self._state_in,
-                state_out=self._state_out,
-                control=self._control,
-                contacts=self._contacts,
-                dt=self.physics_dt,
-            )
-            self._state_in, self._state_out = self._state_out, self._state_in
+            self._simulation_context.step(dt=self.physics_dt)
 
 
 def _joint_names(config: ActuatorSysIdConfig) -> List[str]:

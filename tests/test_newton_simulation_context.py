@@ -8,15 +8,39 @@ from anchor_bench.core import NewtonSimulationContext, SimulationContext
 
 
 class FakeModel:
-    """Record state creation for a fake Newton model."""
+    """Record simulation buffer creation for a fake Newton model."""
 
     def __init__(self) -> None:
-        self.initial_state = object()
+        self.states = []
+        self.control_buffer = object()
+        self.contacts_buffer = object()
 
     def state(self):
-        """Return the model initial state."""
+        """Return a new fake state."""
 
-        return self.initial_state
+        state = FakeState()
+        self.states.append(state)
+        return state
+
+    def control(self):
+        """Return the model control buffer."""
+
+        return self.control_buffer
+
+    def contacts(self):
+        """Return the model contacts buffer."""
+
+        return self.contacts_buffer
+
+
+class FakeState:
+    """Record force clearing for a fake Newton state."""
+
+    def __init__(self) -> None:
+        self.clear_count = 0
+
+    def clear_forces(self) -> None:
+        self.clear_count += 1
 
 
 class FakeModelBuilder:
@@ -57,6 +81,26 @@ class FakeModelBuilder:
         self.world_count = world_count
 
 
+class FakeSolver:
+    """Record solver registration, construction, and steps."""
+
+    registered_builders: ClassVar[list[FakeModelBuilder]] = []
+    instances: ClassVar[list["FakeSolver"]] = []
+
+    @classmethod
+    def register_custom_attributes(cls, builder: FakeModelBuilder) -> None:
+        cls.registered_builders.append(builder)
+
+    def __init__(self, model: FakeModel, **options: Any) -> None:
+        self.model = model
+        self.options = options
+        self.steps = []
+        self.instances.append(self)
+
+    def step(self, **values: Any) -> None:
+        self.steps.append(values)
+
+
 class OtherSimulationContext(SimulationContext):
     """Represent a second backend for singleton enforcement tests."""
 
@@ -77,24 +121,30 @@ def reset_simulation_context(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_lazily_builds_one_newton_model_and_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "robot.usda"
-    source.write_text("#usda 1.0", encoding="utf-8")
-    solver_type = SimpleNamespace(register_custom_attributes=lambda builder: None)
+def _install_fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install and reset the fake Newton construction API."""
+
     fake_newton = SimpleNamespace(
         ModelBuilder=FakeModelBuilder,
-        solvers=SimpleNamespace(SolverMuJoCo=solver_type),
+        solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
     )
-
     monkeypatch.setattr(
         "anchor_bench.core.simulation.newton.newton",
         fake_newton,
     )
     FakeModelBuilder.instance_count = 0
     FakeModelBuilder.instances = []
+    FakeSolver.registered_builders = []
+    FakeSolver.instances = []
+
+
+def test_lazily_builds_one_newton_model_and_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    _install_fake_newton(monkeypatch)
 
     context = NewtonSimulationContext(str(source))
     same_context = NewtonSimulationContext(str(source))
@@ -107,17 +157,25 @@ def test_lazily_builds_one_newton_model_and_state(
     state = context.state
     loaded_model, loaded_state = context.load()
 
-    builder = FakeModelBuilder.last_instance
-    assert builder is not None
-    assert builder.usd_source == str(source)
-    assert model is builder.model
-    assert state is builder.model.initial_state
+    template, population = FakeModelBuilder.instances
+    fake_model = population.model
+    assert template.usd_source == str(source)
+    assert population.replicated_template is template
+    assert population.world_count == 1
+    assert model is fake_model
+    assert state is fake_model.states[0]
     assert loaded_model is model
     assert loaded_state is state
-    assert FakeModelBuilder.instance_count == 1
+    assert context.state_in is fake_model.states[0]
+    assert context.state_out is fake_model.states[1]
+    assert context.control is fake_model.control_buffer
+    assert context.contacts is fake_model.contacts_buffer
+    assert context.solver is FakeSolver.instances[0]
+    assert context.world_count == 1
+    assert FakeModelBuilder.instance_count == 2
 
 
-def test_builds_configurable_replicated_model(
+def test_initializes_one_configurable_replicated_simulation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -125,41 +183,73 @@ def test_builds_configurable_replicated_model(
 
     source = tmp_path / "robot.usda"
     source.write_text("#usda 1.0", encoding="utf-8")
-    registered = []
-
-    class FakeSolver:
-        @staticmethod
-        def register_custom_attributes(builder: FakeModelBuilder) -> None:
-            registered.append(builder)
-
-    fake_newton = SimpleNamespace(
-        ModelBuilder=FakeModelBuilder,
-        solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
-    )
-    monkeypatch.setattr(
-        "anchor_bench.core.simulation.newton.newton",
-        fake_newton,
-    )
-    FakeModelBuilder.instance_count = 0
-    FakeModelBuilder.instances = []
+    _install_fake_newton(monkeypatch)
     configured = []
+    configure = configured.append
 
     context = NewtonSimulationContext(str(source))
-    model = context.create_replicated_model(
+    context.initialize(
         world_count=4,
-        configure_builder=configured.append,
+        configure_builder=configure,
+        solver_options={"iterations": 5},
+    )
+    context.initialize(
+        world_count=4,
+        configure_builder=configure,
+        solver_options={"iterations": 5},
     )
 
     template, population = FakeModelBuilder.instances
-    assert registered == [template, population]
+    assert FakeSolver.registered_builders == [template, population]
     assert template.usd_source == str(source)
     assert configured == [template]
     assert population.replicated_template is template
     assert population.world_count == 4
-    assert model is population.model
+    assert context.model is population.model
+    fake_solver = FakeSolver.instances[0]
+    assert context.solver is fake_solver
+    assert fake_solver.model is population.model
+    assert fake_solver.options == {"iterations": 5}
+    assert FakeModelBuilder.instance_count == 2
+    assert len(FakeSolver.instances) == 1
 
 
-def test_rejects_invalid_replicated_world_count(
+def test_rejects_conflicting_reinitialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    _install_fake_newton(monkeypatch)
+    configure = lambda builder: None
+    context = NewtonSimulationContext(str(source))
+    context.initialize(
+        world_count=4,
+        configure_builder=configure,
+        solver_options={"iterations": 5},
+    )
+
+    with pytest.raises(RuntimeError, match="different world count or configuration"):
+        context.initialize(
+            world_count=8,
+            configure_builder=configure,
+            solver_options={"iterations": 5},
+        )
+    with pytest.raises(RuntimeError, match="different world count or configuration"):
+        context.initialize(
+            world_count=4,
+            configure_builder=lambda builder: None,
+            solver_options={"iterations": 5},
+        )
+    with pytest.raises(RuntimeError, match="different world count or configuration"):
+        context.initialize(
+            world_count=4,
+            configure_builder=configure,
+            solver_options={"iterations": 6},
+        )
+
+
+def test_rejects_invalid_world_count(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "robot.usda"
@@ -167,7 +257,41 @@ def test_rejects_invalid_replicated_world_count(
     context = NewtonSimulationContext(str(source))
 
     with pytest.raises(ValueError, match="positive integer"):
-        context.create_replicated_model(world_count=0)
+        context.initialize(world_count=0)
+
+
+def test_context_steps_and_rotates_owned_states(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    _install_fake_newton(monkeypatch)
+    context = NewtonSimulationContext(str(source))
+    context.initialize()
+    fake_model = FakeModelBuilder.instances[1].model
+    state_in, state_out = fake_model.states
+    assert context.state_in is state_in
+    assert context.state_out is state_out
+
+    context.step(dt=0.01)
+
+    assert state_in.clear_count == 1
+    assert context.state_in is state_out
+    assert context.state_out is state_in
+    assert context.state is state_out
+    assert FakeSolver.instances[0].steps == [
+        {
+            "state_in": state_in,
+            "state_out": state_out,
+            "control": context.control,
+            "contacts": context.contacts,
+            "dt": 0.01,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        context.step(dt=float("nan"))
 
 
 def test_rejects_access_before_context_creation() -> None:

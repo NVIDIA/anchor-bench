@@ -291,16 +291,18 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
                 control=lambda: self.control,
                 contacts=lambda: object(),
             )
+            self.solver = object()
 
-        def create_replicated_model(self, *, world_count, configure_builder):
+        def initialize(
+            self,
+            *,
+            world_count,
+            configure_builder,
+            solver_options,
+        ):
             self.created_world_count = world_count
+            self.solver_options = solver_options
             configure_builder(self.template)
-            return self.model
-
-        def create_mujoco_solver(self, model, **options):
-            assert model is self.model
-            self.solver_options = options
-            return object()
 
     context = FakeContext()
     config = _config(tmp_path)
@@ -328,6 +330,12 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
     evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
 
     assert evaluator._simulation_context is context
+    assert not hasattr(evaluator, "_model")
+    assert not hasattr(evaluator, "_solver")
+    assert not hasattr(evaluator, "_state_in")
+    assert not hasattr(evaluator, "_state_out")
+    assert not hasattr(evaluator, "_control")
+    assert not hasattr(evaluator, "_contacts")
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
     assert context.solver_options == {
