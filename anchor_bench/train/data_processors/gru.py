@@ -332,6 +332,8 @@ class DynamicBiasDataProcessor(BaseDataProcessor):
             raise ValueError("SolverMuJoCo produced non-finite qfrc_bias values.")
         return pd.DataFrame(
             values,
-            columns=[f"{entity}/qfrc_bias" for entity in entities],
+            columns=pd.Index(
+                [f"{entity}/qfrc_bias" for entity in entities],
+            ),
             index=self.dataset.index,
         )

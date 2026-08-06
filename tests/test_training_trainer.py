@@ -10,6 +10,7 @@ from torch import nn
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     MODEL_REGISTRY,
+    BaseModel,
     FeatureNormalization,
     GruModel,
     ModelOutput,
@@ -296,7 +297,7 @@ def test_trainer_feeds_prior_prediction_into_configured_input() -> None:
     sequence.inputs["joint/feedback"] = 99.0
     trainer = Trainer(config, [sequence], device="cpu")
 
-    class RecordingModel(nn.Module):
+    class RecordingModel(BaseModel[torch.Tensor]):
         """Predict one more than the feedback input and record each step."""
 
         def __init__(self) -> None:

@@ -143,6 +143,8 @@ class _NewtonStepper:
             self._initialize_dynamic_bias()
         if self._bias_state is not state:
             solver = self._bias_solver
+            if solver is None:
+                raise RuntimeError("Newton replay bias solver was not initialized.")
             solver.mj_data.qpos[:] = self._bias_default_qpos
             solver.mj_data.qvel[:] = 0.0
             for name, value in state.position.items():

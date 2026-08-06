@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Mapping
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ class FakeModel:
         self.evaluated = True
 
 
-class FakeStepper:
+class FakeStepper(newton_validator._NewtonStepper):
     """Provide deterministic stepping without importing Newton."""
 
     instances: ClassVar[list[FakeStepper]] = []
@@ -64,9 +64,9 @@ class FakeStepper:
     def reset(
         self,
         *,
-        position: dict[str, float],
-        velocity: dict[str, float],
-        command: dict[str, float],
+        position: Mapping[str, float],
+        velocity: Mapping[str, float],
+        command: Mapping[str, float],
     ) -> newton_validator._ReplayState:
         """Reset to the supplied measured state."""
 
@@ -78,8 +78,8 @@ class FakeStepper:
     def step(
         self,
         *,
-        command: dict[str, float],
-        effort: dict[str, float],
+        command: Mapping[str, float],
+        effort: Mapping[str, float],
         dt: float,
     ) -> newton_validator._ReplayState:
         """Integrate effort directly for predictable test trajectories."""
