@@ -30,6 +30,20 @@ class ParameterSpace:
     def __init__(self, parameters: List[Parameter]) -> None:
         if not parameters:
             raise ValueError("actuator system identification requires parameters")
+        keys = [(item.joint, item.name) for item in parameters]
+        if len(keys) != len(set(keys)):
+            raise ValueError("parameter space contains duplicate joint parameters")
+        for item in parameters:
+            values = np.asarray(
+                [item.lower, item.upper, item.initial],
+                dtype=np.float64,
+            )
+            if not np.isfinite(values).all():
+                raise ValueError("parameter bounds and initials must be finite")
+            if item.lower > item.upper:
+                raise ValueError("parameter lower bound must not exceed upper bound")
+            if not item.lower <= item.initial <= item.upper:
+                raise ValueError("parameter initial value must lie within its bounds")
         self.parameters = list(parameters)
         self.lower = np.asarray([item.lower for item in parameters], dtype=np.float64)
         self.upper = np.asarray([item.upper for item in parameters], dtype=np.float64)
@@ -47,10 +61,11 @@ class ParameterSpace:
 
     def normalize(self, physical: np.ndarray) -> np.ndarray:
         values = np.asarray(physical, dtype=np.float64)
-        if values.shape[-1] != self.dimension:
-            raise ValueError(
-                f"expected parameter width {self.dimension}, got {values.shape[-1]}"
-            )
+        self._validate_width(values)
+        if not np.isfinite(values).all():
+            raise ValueError("physical parameters must be finite")
+        if np.any(values < self.lower) or np.any(values > self.upper):
+            raise ValueError("physical parameters must lie within their bounds")
         span = self.upper - self.lower
         unit = np.divide(
             values - self.lower,
@@ -62,10 +77,7 @@ class ParameterSpace:
 
     def denormalize(self, normalized: np.ndarray) -> np.ndarray:
         values = np.asarray(normalized, dtype=np.float64)
-        if values.shape[-1] != self.dimension:
-            raise ValueError(
-                f"expected parameter width {self.dimension}, got {values.shape[-1]}"
-            )
+        self._validate_width(values)
         if not np.isfinite(values).all():
             raise ValueError("optimizer candidates must be finite")
         if np.any(values < -1.0) or np.any(values > 1.0):
@@ -86,6 +98,14 @@ class ParameterSpace:
         if population.ndim != 2:
             raise ValueError("population must be a two-dimensional matrix")
         return [self.decode(row) for row in population]
+
+    def _validate_width(self, values: np.ndarray) -> None:
+        if values.ndim == 0:
+            raise ValueError("parameter values must have at least one dimension")
+        if values.shape[-1] != self.dimension:
+            raise ValueError(
+                f"expected parameter width {self.dimension}, got {values.shape[-1]}"
+            )
 
 
 def create_parameter_space(config: BaseConfig) -> ParameterSpace:

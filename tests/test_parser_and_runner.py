@@ -43,7 +43,7 @@ dataset:
   source: runs/actuator.parquet
   resampling:
     type: uniform
-    dt: 0.002
+    dt: 0.005
 """
 
 

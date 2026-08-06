@@ -30,8 +30,8 @@ class Trajectory:
             raise ValueError(
                 "commanded and measured trajectories must have equal shape"
             )
-        if commanded.shape[0] == 0:
-            raise ValueError("trajectory must contain at least one sample")
+        if commanded.shape[0] < 2:
+            raise ValueError("trajectory must contain at least two samples")
         if commanded.shape[1] != expected_width:
             raise ValueError(
                 "trajectory width does not match the configured joint count"
