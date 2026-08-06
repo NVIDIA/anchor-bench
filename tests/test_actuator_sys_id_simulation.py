@@ -14,6 +14,7 @@ from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import (
     NewtonPopulationEvaluator,
+    _builder_joint_indices,
     _model_joint_indices,
 )
 
@@ -125,6 +126,21 @@ def test_newton_joint_mapping_rejects_non_scalar_targets():
 
     with pytest.raises(ValueError, match="joint 'hip' is not scalar"):
         _model_joint_indices(model, ["hip"], 2)
+
+
+def test_builder_joint_mapping_handles_final_joint_without_end_sentinel():
+    builder = cast(
+        "newton.ModelBuilder",
+        SimpleNamespace(
+            joint_label=["root", "hip"],
+            joint_q_start=[0, 0],
+            joint_qd_start=[0, 0],
+            joint_coord_count=1,
+            joint_dof_count=1,
+        ),
+    )
+
+    assert _builder_joint_indices(builder, ["hip"]) == {"hip": (0, 0)}
 
 
 def test_actuator_config_rejects_dataset_timestep_mismatch(tmp_path):

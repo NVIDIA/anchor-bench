@@ -298,9 +298,13 @@ def _builder_joint_indices(
     for joint_name in joint_names:
         joint_index = _matching_label(builder.joint_label, joint_name)
         q_start = int(builder.joint_q_start[joint_index])
-        q_end = int(builder.joint_q_start[joint_index + 1])
         dof_start = int(builder.joint_qd_start[joint_index])
-        dof_end = int(builder.joint_qd_start[joint_index + 1])
+        if joint_index + 1 < len(builder.joint_label):
+            q_end = int(builder.joint_q_start[joint_index + 1])
+            dof_end = int(builder.joint_qd_start[joint_index + 1])
+        else:
+            q_end = int(builder.joint_coord_count)
+            dof_end = int(builder.joint_dof_count)
         if q_end - q_start != 1 or dof_end - dof_start != 1:
             raise ValueError(
                 f"actuator_sys_id only supports scalar joints; {joint_name!r} "
