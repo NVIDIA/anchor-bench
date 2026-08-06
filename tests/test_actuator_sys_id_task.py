@@ -5,11 +5,13 @@ import pandas as pd
 import pytest
 import yaml
 
+from anchor_bench.errors import DatasetAlignmentError
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
-from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord
+from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord, Trajectory
+from anchor_bench.tasks.actuator_sys_id.optimizer import OptimizationStep
 from anchor_bench.tasks.actuator_sys_id.task import ActuatorSysIdTask
 
 
@@ -111,24 +113,93 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
     )
 
 
-def test_task_stops_at_unimplemented_optimization(tmp_path, monkeypatch):
+def test_load_trajectories_rejects_an_episode_without_a_transition(
+    tmp_path,
+    monkeypatch,
+):
+    dataset = pd.DataFrame(
+        {"hip/command_q": [0.0], "hip/actual_q": [0.1]},
+        index=pd.MultiIndex.from_tuples(
+            [("wave", 0)],
+            names=["experiment", "time_ns"],
+        ),
+    )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.actuator_sys_id.dataset.DatasetLoader.load",
+        lambda *args, **kwargs: dataset,
+    )
+
+    with pytest.raises(DatasetAlignmentError, match="at least two aligned samples"):
+        load_trajectories(_config(tmp_path).dataset, joint_names=["hip"])
+
+
+def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     config = _config(tmp_path)
-    seen = {}
+    trajectory = Trajectory(
+        experiment="wave",
+        joint_names=["hip"],
+        commanded_position=np.asarray([[0.0], [1.0]]),
+        measured_position=np.asarray([[0.1], [0.8]]),
+    )
 
-    def fake_load(dataset_config, *, joint_names):
-        seen["dataset_config"] = dataset_config
-        seen["joint_names"] = joint_names
-        return []
+    class FakeEvaluator:
+        def evaluate(self, population, trajectories):
+            assert len(population) == config.num_envs
+            assert trajectories == (trajectory,)
+            return np.asarray([1.0, 0.25])
 
-    monkeypatch.setattr(task_module, "load_trajectories", fake_load)
+    class FakeOptimizer:
+        def __init__(self):
+            self.converged = False
+            self.best_score = float("inf")
+            self.best_candidate = np.zeros(5)
 
-    with pytest.raises(NotImplementedError, match="optimization is not implemented"):
-        ActuatorSysIdTask(config).run()
+        def step(self, objective):
+            population = np.asarray(
+                [
+                    [-1.0, -1.0, -1.0, -1.0, -1.0],
+                    [0.0, 0.0, 0.0, 0.0, 0.0],
+                ]
+            )
+            scores = objective.evaluate(population)
+            best_index = int(np.argmin(scores))
+            self.best_score = float(scores[best_index])
+            self.best_candidate = population[best_index]
+            self.converged = True
+            return OptimizationStep(
+                iteration=0,
+                scores=scores,
+                best_score=self.best_score,
+                converged=True,
+            )
 
-    assert seen == {
-        "dataset_config": config.dataset,
-        "joint_names": ["hip"],
-    }
+    output_directory = tmp_path / "task-output"
+    output_directory.mkdir()
+    written = {}
+
+    def write(output_dir, **values):
+        written.update(values)
+        return write_artifacts(output_dir, **values)
+
+    monkeypatch.setattr(
+        task_module, "load_trajectories", lambda *args, **kwargs: [trajectory]
+    )
+    monkeypatch.setattr(task_module, "create_optimizer", lambda *args: FakeOptimizer())
+    monkeypatch.setattr(
+        task_module,
+        "NewtonPopulationEvaluator",
+        lambda *args: FakeEvaluator(),
+    )
+    monkeypatch.setattr(task_module, "write_artifacts", write)
+
+    result = ActuatorSysIdTask(config, output_directory).run()
+
+    assert result == output_directory
+    assert written["best_mse"] == pytest.approx(0.25)
+    assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
+    assert written["history"] == [
+        GenerationRecord(generation=0, best_mse=0.25, population_mean_mse=0.625)
+    ]
 
 
 def test_writes_fitted_parameters_and_generation_history(tmp_path):

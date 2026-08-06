@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 
-SIMULATION_CONTEXTS: dict[str, type[SimulationContext]] = {
+SIMULATION_CONTEXTS: dict[str, type[SimulationContext[Any, Any]]] = {
     "newton": NewtonSimulationContext,
 }
 
 
-def create_simulation_context(backend: str, usd_path: str) -> SimulationContext:
+def create_simulation_context(
+    backend: str,
+    usd_path: str,
+) -> SimulationContext[Any, Any]:
     """Create the simulation context registered for a configured backend."""
 
     try:

@@ -56,7 +56,7 @@ def valid_config_data():
             "source": "runs/actuator.parquet",
             "resampling": {
                 "type": "uniform",
-                "dt": 0.002,
+                "dt": 0.005,
             },
         },
     }
@@ -70,7 +70,7 @@ def test_model_matches_schema_and_applies_defaults(valid_config_data):
     assert config.buffer_time == 0.0
     assert isinstance(config.dataset, ParquetDatasetConfig)
     assert config.dataset.source == "runs/actuator.parquet"
-    assert config.dataset.resampling.dt == 0.002
+    assert config.dataset.resampling.dt == 0.005
     assert isinstance(config.joint_parameters[0].controller, PdControllerConfig)
     assert config.joint_parameters[0].controller.delay_duration_ms == 0
     assert config.simulation.solver.integrator == "implicitfast"
@@ -108,11 +108,35 @@ def test_model_rejects_coerced_integer(valid_config_data):
         ActuatorSysIdConfig.model_validate(data)
 
 
+def test_model_requires_at_least_two_cmaes_environments(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["num_envs"] = 1
+
+    with pytest.raises(ValidationError, match="greater than or equal to 2"):
+        ActuatorSysIdConfig.model_validate(data)
+
+
+def test_model_rejects_negative_actuator_parameter_bounds(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["joint_parameters"][0]["parameters"]["armature"]["lower"] = -0.1
+
+    with pytest.raises(ValidationError, match="bounds must be nonnegative: armature"):
+        ActuatorSysIdConfig.model_validate(data)
+
+
 def test_controller_rejects_null(valid_config_data):
     data = deepcopy(valid_config_data)
     data["joint_parameters"][0]["controller"] = None
 
     with pytest.raises(ValidationError):
+        ActuatorSysIdConfig.model_validate(data)
+
+
+def test_model_rejects_dataset_control_timestep_mismatch(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["dataset"]["resampling"]["dt"] = 0.01
+
+    with pytest.raises(ValidationError, match="resampling dt must match"):
         ActuatorSysIdConfig.model_validate(data)
 
 
