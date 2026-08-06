@@ -50,11 +50,17 @@ def save_training_artifacts(
             "input_features": [
                 {
                     "name": feature,
-                    "preprocessor": preprocessor,
+                    "data_processor": data_processor,
                 }
-                for feature, preprocessor in config.input_features.items()
+                for feature, data_processor in config.input_features.items()
             ],
-            "output_feature": config.output_features,
+            "output_features": [
+                {
+                    "name": feature,
+                    "data_processor": data_processor,
+                }
+                for feature, data_processor in config.output_features.items()
+            ],
             "simulation": config.simulation.model_dump(mode="json"),
             "mappings": _feature_layouts(sequences),
         },

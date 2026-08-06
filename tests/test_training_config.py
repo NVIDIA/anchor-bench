@@ -40,7 +40,7 @@ def valid_config_data():
             "velocity": "joint_velocity",
             "command": None,
         },
-        "output_features": "joint_effort",
+        "output_features": {"joint_effort": None},
         "mapping": {
             "actuator": {
                 "inputs": ["position", "velocity", "command"],
@@ -134,6 +134,7 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.dataset.resampling.dt == 0.02
     assert config.dataset.resampling.time_range == "intersection"
     assert config.dataset.resampling.interpolation == "linear"
+    assert config.output_features == {"joint_effort": None}
     assert config.simulation.backend == "newton"
     assert config.simulation.usd_path == "assets/robots/so101.usd"
     assert isinstance(config.model, GruModelConfig)
@@ -186,9 +187,11 @@ def test_requires_simulation(valid_config_data):
         TrainingConfig.model_validate(data)
 
 
-def test_rejects_blank_preprocessor_name(valid_config_data):
+@pytest.mark.parametrize("feature_group", ["input_features", "output_features"])
+def test_rejects_blank_data_processor_name(valid_config_data, feature_group):
     data = deepcopy(valid_config_data)
-    data["input_features"]["position"] = ""
+    feature = next(iter(data[feature_group]))
+    data[feature_group][feature] = ""
 
     with pytest.raises(
         ValidationError, match="String should have at least 1 character"

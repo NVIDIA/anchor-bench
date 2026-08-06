@@ -1,7 +1,7 @@
 """Training-task interfaces."""
 
-from anchor_bench.tasks.train import PreprocessorRunner
-from anchor_bench.train.preprocessors import BasePreprocessor
+from anchor_bench.tasks.train import DataProcessorRunner
+from anchor_bench.train.data_processors import BaseDataProcessor
 from anchor_bench.train.utils import (
     friction_torque,
     position_error,
@@ -11,9 +11,9 @@ from anchor_bench.train.utils import (
 from anchor_bench.train.validators import BaseValidator, ValidationResult
 
 __all__ = [
-    "BasePreprocessor",
+    "BaseDataProcessor",
     "BaseValidator",
-    "PreprocessorRunner",
+    "DataProcessorRunner",
     "ValidationResult",
     "friction_torque",
     "position_error",

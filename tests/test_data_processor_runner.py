@@ -8,12 +8,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import anchor_bench.train.preprocessors as preprocessor_registry
+import anchor_bench.train.data_processors as data_processor_registry
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BasePreprocessor, PreprocessorRunner
+from anchor_bench.train import BaseDataProcessor, DataProcessorRunner
 
 
-class GeneratedFeaturePreprocessor(BasePreprocessor):
+class GeneratedFeatureDataProcessor(BaseDataProcessor):
     """Generate one entity-qualified feature for runner tests."""
 
     def process(self) -> pd.DataFrame:
@@ -25,7 +25,7 @@ class GeneratedFeaturePreprocessor(BasePreprocessor):
         )
 
 
-class DependentFeaturePreprocessor(BasePreprocessor):
+class DependentFeatureDataProcessor(BaseDataProcessor):
     """Consume a feature produced earlier in configuration order."""
 
     def process(self) -> pd.DataFrame:
@@ -37,7 +37,7 @@ class DependentFeaturePreprocessor(BasePreprocessor):
         )
 
 
-class MisalignedPreprocessor(BasePreprocessor):
+class MisalignedDataProcessor(BaseDataProcessor):
     """Return generated data in the wrong row order."""
 
     def process(self) -> pd.DataFrame:
@@ -49,7 +49,7 @@ class MisalignedPreprocessor(BasePreprocessor):
         )
 
 
-class StaticOutputPreprocessor(BasePreprocessor):
+class StaticOutputDataProcessor(BaseDataProcessor):
     """Return the test-selected output without modifying it."""
 
     output: Any = None
@@ -75,7 +75,7 @@ class FakeNewtonArray:
 
 
 class RunnerSimulationContext(SimulationContext):
-    """Provide the shared context required by runner preprocessors."""
+    """Provide the shared context required by runner data processors."""
 
     def _load(self, usd_path: Path) -> tuple[Any, Any]:
         """Return inert model and state objects."""
@@ -94,7 +94,7 @@ def simulation_context(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> RunnerSimulationContext:
-    """Create the shared simulation context before running preprocessors."""
+    """Create the shared simulation context before running data processors."""
 
     monkeypatch.setattr(SimulationContext, "_instance", None)
     source = tmp_path / "robot.usda"
@@ -116,19 +116,19 @@ def dataset() -> pd.DataFrame:
 def _register(
     monkeypatch: pytest.MonkeyPatch,
     name: str,
-    preprocessor_type: type[BasePreprocessor],
+    data_processor_type: type[BaseDataProcessor],
 ) -> None:
-    """Temporarily add an in-repo test preprocessor to the fixed registry."""
+    """Temporarily add an in-repo test data processor to the fixed registry."""
 
     monkeypatch.setitem(
-        preprocessor_registry.PREPROCESSORS,
+        data_processor_registry.DATA_PROCESSORS,
         name,
-        (__name__, preprocessor_type.__name__),
+        (__name__, data_processor_type.__name__),
     )
 
 
-def test_runs_builtin_preprocessor_by_name() -> None:
-    """Resolve and execute a packaged preprocessor through its fixed name."""
+def test_runs_builtin_data_processor_by_name() -> None:
+    """Resolve and execute a packaged data processor through its fixed name."""
 
     index = pd.MultiIndex.from_tuples(
         [("wave", 0), ("wave", 20_000_000)],
@@ -142,7 +142,7 @@ def test_runs_builtin_preprocessor_by_name() -> None:
         index=index,
     )
 
-    result = PreprocessorRunner.run(
+    result = DataProcessorRunner.run(
         dataset,
         {"position_error": "position_error"},
     )
@@ -150,8 +150,8 @@ def test_runs_builtin_preprocessor_by_name() -> None:
     assert result["joint/position_error"].tolist() == [1.0, 2.5]
 
 
-def test_runs_usd_backed_preprocessor_in_configuration_order() -> None:
-    """Expose an earlier feature to a USD-backed preprocessor."""
+def test_runs_usd_backed_data_processor_in_configuration_order() -> None:
+    """Expose an earlier feature to a USD-backed data processor."""
 
     dataset = pd.DataFrame(
         {
@@ -161,7 +161,7 @@ def test_runs_usd_backed_preprocessor_in_configuration_order() -> None:
         }
     )
 
-    result = PreprocessorRunner.run(
+    result = DataProcessorRunner.run(
         dataset,
         {
             "position_error": "position_error",
@@ -173,16 +173,16 @@ def test_runs_usd_backed_preprocessor_in_configuration_order() -> None:
     assert result["joint/solver_pd"].tolist() == [1.75, 4.5]
 
 
-def test_runs_preprocessors_in_configuration_order(
+def test_runs_data_processors_in_configuration_order(
     dataset: pd.DataFrame,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Append generated features and expose them to later preprocessors."""
+    """Append generated features and expose them to later data processors."""
 
-    _register(monkeypatch, "generated", GeneratedFeaturePreprocessor)
-    _register(monkeypatch, "dependent", DependentFeaturePreprocessor)
+    _register(monkeypatch, "generated", GeneratedFeatureDataProcessor)
+    _register(monkeypatch, "dependent", DependentFeatureDataProcessor)
 
-    result = PreprocessorRunner.run(
+    result = DataProcessorRunner.run(
         dataset,
         {
             "actual": None,
@@ -207,7 +207,7 @@ def test_keeps_existing_features_without_copying_data(
 ) -> None:
     """Share existing column storage when no preprocessing is requested."""
 
-    result = PreprocessorRunner.run(dataset, {"actual": None})
+    result = DataProcessorRunner.run(dataset, {"actual": None})
 
     assert result.equals(dataset)
     assert result is not dataset
@@ -223,10 +223,10 @@ def test_rejects_misaligned_generated_data(
 ) -> None:
     """Require generated rows to retain the dataset index."""
 
-    _register(monkeypatch, "misaligned", MisalignedPreprocessor)
+    _register(monkeypatch, "misaligned", MisalignedDataProcessor)
 
     with pytest.raises(ValueError, match="returned a different index"):
-        PreprocessorRunner.run(dataset, {"misaligned": "misaligned"})
+        DataProcessorRunner.run(dataset, {"misaligned": "misaligned"})
 
 
 @pytest.mark.parametrize(
@@ -269,16 +269,16 @@ def test_rejects_invalid_generated_data(
             index=dataset.index,
         )
 
-    _register(monkeypatch, "static", StaticOutputPreprocessor)
-    monkeypatch.setattr(StaticOutputPreprocessor, "output", output)
+    _register(monkeypatch, "static", StaticOutputDataProcessor)
+    monkeypatch.setattr(StaticOutputDataProcessor, "output", output)
 
     with pytest.raises(error_type, match=message):
-        PreprocessorRunner.run(dataset, {"generated": "static"})
+        DataProcessorRunner.run(dataset, {"generated": "static"})
 
 
 @pytest.mark.parametrize(
     "name",
-    ["missing", "external.package:Preprocessor"],
+    ["missing", "external.package:DataProcessor"],
 )
 def test_rejects_names_outside_builtin_registry(
     dataset: pd.DataFrame,
@@ -286,5 +286,5 @@ def test_rejects_names_outside_builtin_registry(
 ) -> None:
     """Reject unknown aliases and external module entrypoints."""
 
-    with pytest.raises(AttributeError, match="Unknown preprocessor"):
-        PreprocessorRunner.run(dataset, {"generated": name})
+    with pytest.raises(AttributeError, match="Unknown data processor"):
+        DataProcessorRunner.run(dataset, {"generated": name})

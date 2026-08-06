@@ -35,7 +35,7 @@ def _config_data(source: str) -> dict[str, Any]:
             "actual_q": None,
             "position_error": "position_error",
         },
-        "output_features": "actual_effort",
+        "output_features": {"actual_effort": None},
         "mapping": {
             "arm": {
                 "inputs": ["shoulder", "elbow"],
@@ -101,7 +101,7 @@ def _aligned_dataset() -> pd.DataFrame:
     )
 
 
-def test_training_task_runs_loader_preprocessor_then_mapping(
+def test_training_task_runs_loader_data_processor_then_mapping(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -120,6 +120,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         "backend": "newton",
         "usd_path": str(usd_path),
     }
+    config_data["output_features"] = {"torque_residual": "torque_residual"}
     config = TrainingConfig.model_validate(config_data)
 
     def load(source: str, *, dt: float) -> pd.DataFrame:
@@ -136,13 +137,19 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
     def preprocess(
         dataset: pd.DataFrame,
-        preprocessors: Mapping[str, Optional[str]],
+        data_processors: Mapping[str, Optional[str]],
     ) -> pd.DataFrame:
         """Generate the configured position-error feature."""
 
+        if data_processors == config.output_features:
+            events.append("process-output")
+            result = dataset.copy(deep=False)
+            result["shoulder/torque_residual"] = result["shoulder/actual_effort"]
+            result["elbow/torque_residual"] = result["elbow/actual_effort"]
+            return result
         assert dataset is loaded
-        assert preprocessors == config.input_features
-        events.append("preprocess")
+        assert data_processors == config.input_features
+        events.append("process-input")
         result = dataset.copy(deep=False)
         result["shoulder/position_error"] = (
             result["shoulder/command_q"] - result["shoulder/actual_q"]
@@ -221,7 +228,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         initialize_context,
     )
     monkeypatch.setattr(
-        "anchor_bench.tasks.train.task.PreprocessorRunner.run",
+        "anchor_bench.tasks.train.task.DataProcessorRunner.run",
         preprocess,
     )
     monkeypatch.setattr(
@@ -243,7 +250,8 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
     assert events == [
         "load:dataset.parquet:0.02",
         f"simulation:newton:{usd_path}",
-        "preprocess",
+        "process-input",
+        "process-output",
         "train",
         "validate",
         "save",
@@ -264,8 +272,8 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         (trajectories["sequence"] == 0) & (trajectories["kind"] == "target")
     ]
     assert wave_targets["feature"].drop_duplicates().tolist() == [
-        "elbow/actual_effort",
-        "shoulder/actual_effort",
+        "elbow/torque_residual",
+        "shoulder/torque_residual",
     ]
     assert [(sequence.experiment, sequence.name) for sequence in prepared] == [
         ("wave", "arm"),
