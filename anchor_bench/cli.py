@@ -27,6 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the task even when its output is already complete.",
     )
+    parser.add_argument(
+        "--output",
+        help="Use this folder for task artifacts instead of a generated hash folder.",
+    )
     return parser
 
 
@@ -35,7 +39,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        TaskRunner().run(args.config, force=args.force)
+        TaskRunner().run(args.config, force=args.force, output=args.output)
     except (AnchorBenchError, ValidationError) as error:
         parser.error(str(error))
 

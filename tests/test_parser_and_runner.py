@@ -94,6 +94,22 @@ def test_runner_constructs_and_runs_registered_task(config_path):
     assert isinstance(seen[0], ActuatorSysIdConfig)
 
 
+def test_runner_uses_explicit_output_folder(config_path, tmp_path):
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self) -> Path:
+            return self.output_directory
+
+    requested_output = tmp_path / "named-output"
+    result = TaskRunner({"actuator_sys_id": RecordingTask}).run(
+        str(config_path),
+        output=requested_output,
+    )
+
+    assert result == requested_output
+    assert (result / "config.yaml").is_file()
+    assert (result / ".completed").is_file()
+
+
 def test_runner_skips_completed_task_unless_forced(config_path):
     run_count = 0
 

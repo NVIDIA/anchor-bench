@@ -16,16 +16,29 @@ def test_cli_runs_config(tmp_path, monkeypatch):
     assert main(["--config", str(config_path)]) == 0
 
 
-def test_cli_passes_force_to_task_runner(tmp_path, monkeypatch):
+def test_cli_passes_force_and_output_to_task_runner(tmp_path, monkeypatch):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(VALID_YAML, encoding="utf-8")
     calls = []
 
-    def run(self, path, *, force=False):
-        calls.append((path, force))
+    output_path = tmp_path / "named-output"
+
+    def run(self, path, *, force=False, output=None):
+        calls.append((path, force, output))
         return tmp_path / "output"
 
     monkeypatch.setattr("anchor_bench.cli.TaskRunner.run", run)
 
-    assert main(["--config", str(config_path), "--force"]) == 0
-    assert calls == [(str(config_path), True)]
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "--force",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    assert calls == [(str(config_path), True, str(output_path))]

@@ -16,12 +16,15 @@ def get_or_create_output_folder(
     config: BaseModel,
     *,
     output_root: Optional[Union[str, Path]] = None,
+    output_folder: Optional[Union[str, Path]] = None,
 ) -> Tuple[Path, bool]:
     """Get or initialize an output folder and report whether it is complete."""
 
-    output_root = output_root or resolve_repo_root() / "output"
-    folder_name = _hash_name(config)
-    output_folder = Path(output_root).expanduser() / folder_name
+    if output_folder is None:
+        output_root = output_root or resolve_repo_root() / "output"
+        output_folder = Path(output_root).expanduser() / _hash_name(config)
+    else:
+        output_folder = Path(output_folder).expanduser()
     try:
         output_folder.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
