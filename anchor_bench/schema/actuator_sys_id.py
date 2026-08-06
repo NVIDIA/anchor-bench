@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isclose
 from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
@@ -13,6 +14,7 @@ from anchor_bench.schema.dataset import ParquetDatasetConfig
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
 PositiveInteger: TypeAlias = Annotated[StrictInt, Field(ge=1)]
+CmaesPopulationSize: TypeAlias = Annotated[StrictInt, Field(ge=2)]
 NonNegativeInteger: TypeAlias = Annotated[StrictInt, Field(ge=0)]
 PositiveNumber: TypeAlias = Annotated[JsonNumber, Field(gt=0.0)]
 NonNegativeNumber: TypeAlias = Annotated[JsonNumber, Field(ge=0.0)]
@@ -70,6 +72,22 @@ class JointParameterGroup(StrictBaseModel):
             raise ValueError("joint names must be unique within a parameter group")
         return names
 
+    @model_validator(mode="after")
+    def physical_parameter_bounds_must_be_nonnegative(self) -> JointParameterGroup:
+        bounds = {
+            "stiffness": self.controller.stiffness,
+            "damping": self.controller.damping,
+            "armature": self.parameters.armature,
+            "dry_friction": self.parameters.dry_friction,
+            "viscous_friction": self.parameters.viscous_friction,
+        }
+        negative = [name for name, bound in bounds.items() if bound.lower < 0]
+        if negative:
+            raise ValueError(
+                "actuator parameter bounds must be nonnegative: " + ", ".join(negative)
+            )
+        return self
+
 
 class WarpMujocoSolverConfig(StrictBaseModel):
     type: Literal["warp_mujoco"]
@@ -98,14 +116,14 @@ class ActuatorSysIdConfig(BaseConfig):
     joint_parameters: Annotated[List[JointParameterGroup], Field(min_length=1)]
     optimizer: CmaesOptimizerConfig
     simulation: NewtonSimulationConfig
-    num_envs: PositiveInteger = 64
+    num_envs: CmaesPopulationSize = 64
     buffer_time: NonNegativeNumber = 0.0
     seed: NonNegativeInteger = 0
     output_dir: NonEmptyString = "outputs/actuator_sys_id"
     dataset: ParquetDatasetConfig
 
     @model_validator(mode="after")
-    def joint_names_must_be_globally_unique(self) -> ActuatorSysIdConfig:
+    def validate_task_invariants(self) -> ActuatorSysIdConfig:
         names = [
             name
             for parameter_group in self.joint_parameters
@@ -113,4 +131,11 @@ class ActuatorSysIdConfig(BaseConfig):
         ]
         if len(names) != len(set(names)):
             raise ValueError("joint names must be unique across parameter groups")
+        dataset_dt = float(self.dataset.resampling.dt)
+        control_dt = 1.0 / self.simulation.control_freq
+        if not isclose(dataset_dt, control_dt, rel_tol=1.0e-9, abs_tol=1.0e-12):
+            raise ValueError(
+                "dataset resampling dt must match the simulation control timestep: "
+                f"{dataset_dt} != {control_dt}"
+            )
         return self

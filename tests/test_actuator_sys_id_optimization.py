@@ -98,6 +98,21 @@ def test_parameter_space_uses_deterministic_order_and_initials(tmp_path):
         }
     )
 
+    with pytest.raises(ValueError, match="at least one dimension"):
+        space.normalize(np.asarray(0.0))
+    with pytest.raises(ValueError, match="within their bounds"):
+        space.normalize(np.asarray([31.0, 5.0, 0.05, 0.5, 1.0]))
+
+
+def test_trajectory_requires_a_state_transition():
+    with pytest.raises(ValueError, match="at least two samples"):
+        Trajectory(
+            experiment="single-sample",
+            joint_names=["hip"],
+            commanded_position=np.asarray([[0.0]]),
+            measured_position=np.asarray([[0.0]]),
+        )
+
 
 def test_objective_decodes_population_before_evaluation(tmp_path):
     config = _config(tmp_path)
