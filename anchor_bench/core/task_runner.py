@@ -54,7 +54,7 @@ class TaskRunner:
 
         completion_marker = output_directory / COMPLETION_MARKER
         completion_marker.unlink(missing_ok=True)
-        task_output = task_class(config, output_directory).run()
+        task_output = task_class(config).run(output_directory)
         if task_output != output_directory:
             raise RuntimeError(
                 f"{task_class.__name__}.run() returned {task_output}, expected "

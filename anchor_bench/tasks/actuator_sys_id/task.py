@@ -18,7 +18,7 @@ from anchor_bench.tasks.base_task import BaseTask
 class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
     """Fit actuator parameters by replaying recorded commands in Newton."""
 
-    def run(self) -> Path:
+    def run(self, output_directory: Path) -> Path:
         joint_names = [
             joint for group in self.config.joint_parameters for joint in group.names
         ]
@@ -47,9 +47,9 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             )
 
         write_artifacts(
-            self.output_directory,
+            output_directory,
             best_parameters=parameter_space.decode(optimizer.best_candidate),
             best_mse=optimizer.best_score,
             history=history,
         )
-        return self.output_directory
+        return output_directory
