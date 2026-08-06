@@ -10,8 +10,10 @@ from torch import nn
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     MODEL_REGISTRY,
+    FeatureNormalization,
     GruModel,
     ModelOutput,
+    NormalizationStatistics,
     Trainer,
     get_model,
 )
@@ -61,6 +63,38 @@ def test_gru_model_returns_one_prediction_per_timestep() -> None:
     next_output = model(torch.zeros(5, 1, 3), output.state)
     assert next_output.predictions.shape == (5, 1, 2)
     assert next_output.state.shape == output.state.shape
+
+
+def test_normalized_model_keeps_inference_in_physical_units() -> None:
+    """Normalize raw inputs and restore model outputs before returning them."""
+
+    statistics = NormalizationStatistics(
+        inputs=FeatureNormalization(
+            method="standard",
+            mean=(10.0,),
+            standard_deviation=(2.0,),
+        ),
+        outputs=FeatureNormalization(
+            method="standard",
+            mean=(100.0,),
+            standard_deviation=(5.0,),
+        ),
+    )
+
+    class IdentityModel(nn.Module):
+        """Return normalized inputs as normalized predictions."""
+
+        def forward(
+            self,
+            inputs: torch.Tensor,
+            hidden: torch.Tensor | None = None,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            return inputs, torch.ones(1)
+
+    predictions, hidden = statistics.wrap(IdentityModel())(torch.tensor([[[12.0]]]))
+
+    assert predictions.item() == 105.0
+    assert hidden.item() == 1.0
 
 
 @pytest.mark.parametrize(
@@ -221,6 +255,10 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
     )
     assert checkpoint["epoch"] == 4
     assert [entry["epoch"] for entry in checkpoint["history"]] == [1, 2, 3, 4]
+    assert checkpoint["normalization"] == {
+        "inputs": {"method": "none", "mean": (0.0,), "standard_deviation": (1.0,)},
+        "outputs": {"method": "none", "mean": (0.0,), "standard_deviation": (1.0,)},
+    }
     assert checkpoint["config"]["training"]["checkpoint"] == {"every_n_epochs": 2}
     assert checkpoint["model_state_dict"].keys() == trainer.model.state_dict().keys()
     assert checkpoint["optimizer_state_dict"]["state"]

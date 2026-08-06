@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from anchor_bench.schema.training import LossConfig, OptimizerConfig, TrainingConfig
 from anchor_bench.tasks.train.data import SequenceDataset, create_data_loaders
 from anchor_bench.tasks.train.model_registry import get_model
+from anchor_bench.tasks.train.normalization import NormalizationStatistics
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 
 
@@ -34,6 +35,7 @@ class TrainingResult:
 
     model: nn.Module
     history: list[EpochLoss]
+    normalization: NormalizationStatistics
     artifact_path: Optional[Path] = None
 
 
@@ -101,7 +103,11 @@ class Trainer:
             if checkpoint is not None and epoch % checkpoint.every_n_epochs == 0:
                 self._save_checkpoint(epoch, history)
         self.model.eval()
-        return TrainingResult(model=self.model, history=history)
+        return TrainingResult(
+            model=self.model,
+            history=history,
+            normalization=self.data_loaders.normalization,
+        )
 
     def _save_checkpoint(
         self,
@@ -124,6 +130,7 @@ class Trainer:
                 },
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "history": [asdict(entry) for entry in history],
+                "normalization": asdict(self.data_loaders.normalization),
                 "config": self.config.model_dump(mode="json", exclude_none=True),
             },
             temporary_path,

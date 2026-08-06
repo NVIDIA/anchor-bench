@@ -82,6 +82,10 @@ def valid_config_data():
             "augmentation": {
                 "input_noise_std": 0.01,
             },
+            "normalization": {
+                "inputs": "standard",
+                "outputs": "standard",
+            },
         },
         "search": {
             "schema_version": 1,
@@ -139,6 +143,8 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.simulation.usd_path == "assets/robots/so101.usd"
     assert isinstance(config.model, GruModelConfig)
     assert isinstance(config.training.loss, HuberLossConfig)
+    assert config.training.normalization.inputs == "standard"
+    assert config.training.normalization.outputs == "standard"
     assert config.search is not None
     assert isinstance(
         config.search.search_space["model.hidden_size"],
@@ -176,6 +182,23 @@ def test_simulation_defaults_to_newton(valid_config_data):
     config = TrainingConfig.model_validate(data)
 
     assert config.simulation.backend == "newton"
+
+
+def test_normalization_defaults_to_standard(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["training"].pop("normalization")
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.training.normalization.inputs == "standard"
+    assert config.training.normalization.outputs == "standard"
+
+
+def test_normalization_rejects_unknown_method(valid_config_data):
+    valid_config_data["training"]["normalization"]["inputs"] = "robust"
+
+    with pytest.raises(ValidationError, match="normalization"):
+        TrainingConfig.model_validate(valid_config_data)
 
 
 def test_requires_simulation(valid_config_data):

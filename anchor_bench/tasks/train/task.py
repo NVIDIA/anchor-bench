@@ -130,7 +130,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
         validation_results = ValidatorRunner.run(
             self.config.validation.validators,
-            model=result.model,
+            model=result.normalization.wrap(result.model),
             validation_dataset=validation_dataset,
         )
 
