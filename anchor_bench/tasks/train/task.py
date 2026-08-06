@@ -128,9 +128,15 @@ class TrainingTask(BaseTask[TrainingConfig]):
             validation_sequences,
         )
 
+        feedback = getattr(result, "feedback", None)
+        validation_model = (
+            result.normalization.wrap(result.model)
+            if feedback is None
+            else result.normalization.wrap(result.model, feedback)
+        )
         validation_results = ValidatorRunner.run(
             self.config.validation.validators,
-            model=result.normalization.wrap(result.model),
+            model=validation_model,
             validation_dataset=validation_dataset,
         )
 

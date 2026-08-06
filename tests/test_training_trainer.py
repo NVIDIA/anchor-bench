@@ -88,13 +88,13 @@ def test_normalized_model_keeps_inference_in_physical_units() -> None:
             self,
             inputs: torch.Tensor,
             hidden: torch.Tensor | None = None,
-        ) -> tuple[torch.Tensor, torch.Tensor]:
-            return inputs, torch.ones(1)
+        ) -> ModelOutput[torch.Tensor]:
+            return ModelOutput(predictions=inputs, state=torch.ones(1))
 
-    predictions, hidden = statistics.wrap(IdentityModel())(torch.tensor([[[12.0]]]))
+    result = statistics.wrap(IdentityModel())(torch.tensor([[[12.0]]]))
 
-    assert predictions.item() == 105.0
-    assert hidden.item() == 1.0
+    assert result.predictions.item() == 105.0
+    assert result.state.item() == 1.0
 
 
 @pytest.mark.parametrize(
@@ -278,3 +278,46 @@ def test_trainer_requires_directory_when_checkpointing() -> None:
             [_sequence("wave", [float(value) for value in range(20)])],
             device="cpu",
         )
+
+
+def test_trainer_feeds_prior_prediction_into_configured_input() -> None:
+    """Use the configured initial value, then raw prior model predictions."""
+
+    config_data = _config_data()
+    config_data["input_features"]["feedback"] = None
+    config_data["training"]["feedback"] = {
+        "input": "feedback",
+        "output": "target",
+        "source": "prediction",
+        "initial_value": 2.0,
+    }
+    config = TrainingConfig.model_validate(config_data)
+    sequence = _sequence("wave", [0.0, 0.0, 0.0, 0.0])
+    sequence.inputs["joint/feedback"] = 99.0
+    trainer = Trainer(config, [sequence], device="cpu")
+
+    class RecordingModel(nn.Module):
+        """Predict one more than the feedback input and record each step."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[float] = []
+
+        def forward(
+            self,
+            inputs: torch.Tensor,
+            state: torch.Tensor | None = None,
+        ) -> ModelOutput[torch.Tensor]:
+            self.seen.append(float(inputs[0, 0, 1]))
+            return ModelOutput(
+                predictions=inputs[:, :, 1:2] + 1.0,
+                state=torch.ones(1),
+            )
+
+    model = RecordingModel()
+    trainer.model = model
+
+    predictions = trainer._forward(torch.zeros(1, 3, 2))
+
+    assert model.seen == [2.0, 3.0, 4.0]
+    assert predictions.flatten().tolist() == [3.0, 4.0, 5.0]

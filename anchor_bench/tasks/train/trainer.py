@@ -16,7 +16,10 @@ from torch.utils.data import DataLoader
 from anchor_bench.schema.training import LossConfig, OptimizerConfig, TrainingConfig
 from anchor_bench.tasks.train.data import SequenceDataset, create_data_loaders
 from anchor_bench.tasks.train.model_registry import get_model
-from anchor_bench.tasks.train.normalization import NormalizationStatistics
+from anchor_bench.tasks.train.normalization import (
+    AutoregressiveFeedback,
+    NormalizationStatistics,
+)
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 
 
@@ -37,6 +40,7 @@ class TrainingResult:
     history: list[EpochLoss]
     normalization: NormalizationStatistics
     artifact_path: Optional[Path] = None
+    feedback: AutoregressiveFeedback | None = None
 
 
 class Trainer:
@@ -83,6 +87,11 @@ class Trainer:
             config.training.optimizer,
             self.model.parameters(),
         )
+        self.autoregressive_feedback = _create_autoregressive_feedback(
+            config,
+            dataset,
+            self.data_loaders.normalization,
+        )
 
     def train(self) -> TrainingResult:
         """Run the configured epoch loop and return its model and history."""
@@ -107,6 +116,7 @@ class Trainer:
             model=self.model,
             history=history,
             normalization=self.data_loaders.normalization,
+            feedback=self.autoregressive_feedback,
         )
 
     def _save_checkpoint(
@@ -151,8 +161,8 @@ class Trainer:
                 inputs = inputs + torch.randn_like(inputs) * noise
 
             self.optimizer.zero_grad(set_to_none=True)
-            output = self.model(inputs)
-            loss = self.loss_function(output.predictions, targets)
+            predictions = self._forward(inputs)
+            loss = self.loss_function(predictions, targets)
             loss.backward()
             nn.utils.clip_grad_norm_(
                 self.model.parameters(),
@@ -186,8 +196,7 @@ class Trainer:
             for inputs, targets in data_loader:
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
-                output = self.model(inputs)
-                loss = self.loss_function(output.predictions, targets)
+                loss = self.loss_function(self._forward(inputs), targets)
                 batch_size = inputs.shape[0]
                 total_loss += float(loss) * batch_size
                 sample_count += batch_size
@@ -195,6 +204,101 @@ class Trainer:
         if sample_count == 0:
             return None
         return total_loss / sample_count
+
+    def _forward(self, inputs: Tensor) -> Tensor:
+        """Run a batch, feeding configured prior predictions into later steps."""
+
+        feedback = self.autoregressive_feedback
+        if feedback is None:
+            return self.model(inputs).predictions
+
+        input_mean = inputs.new_tensor(feedback.input_mean)
+        input_std = inputs.new_tensor(feedback.input_standard_deviation)
+        output_mean = inputs.new_tensor(feedback.output_mean)
+        output_std = inputs.new_tensor(feedback.output_standard_deviation)
+        previous_physical = inputs.new_full(
+            (inputs.shape[0], 1, output_mean.numel()),
+            feedback.initial_value,
+        )
+        state = None
+        predictions = []
+        for timestep in range(inputs.shape[1]):
+            previous_normalized = (previous_physical - input_mean) / input_std
+            step_inputs = torch.cat(
+                (
+                    inputs[:, timestep : timestep + 1, : feedback.input_start],
+                    previous_normalized,
+                    inputs[:, timestep : timestep + 1, feedback.input_stop :],
+                ),
+                dim=-1,
+            )
+            output = self.model(step_inputs, state)
+            predictions.append(output.predictions)
+            state = output.state
+            predicted_feedback = output.predictions[
+                :, :, feedback.output_start : feedback.output_stop
+            ]
+            previous_physical = predicted_feedback * output_std + output_mean
+        return torch.cat(predictions, dim=1)
+
+
+def _create_autoregressive_feedback(
+    config: TrainingConfig,
+    sequences: Sequence[MappedTrainingSequence],
+    normalization: NormalizationStatistics,
+) -> AutoregressiveFeedback | None:
+    """Resolve configured feedback columns and their physical transforms."""
+
+    feedback = config.training.feedback
+    if feedback is None:
+        return None
+
+    first = sequences[0]
+    input_positions = [
+        index
+        for index, column in enumerate(first.inputs.columns)
+        if column.endswith(f"/{feedback.input}")
+    ]
+    output_positions = [
+        index
+        for index, column in enumerate(first.targets.columns)
+        if column.endswith(f"/{feedback.output}")
+    ]
+    if not input_positions or not output_positions:
+        raise ValueError("Configured feedback has no mapped input or output columns.")
+    input_start, input_stop = input_positions[0], input_positions[-1] + 1
+    output_start, output_stop = output_positions[0], output_positions[-1] + 1
+    if input_positions != list(range(input_start, input_stop)):
+        raise ValueError("Feedback input columns must be contiguous.")
+    if output_positions != list(range(output_start, output_stop)):
+        raise ValueError("Feedback output columns must be contiguous.")
+
+    input_entities = [
+        column.rsplit("/", 1)[0]
+        for column in first.inputs.columns[input_start:input_stop]
+    ]
+    output_entities = [
+        column.rsplit("/", 1)[0]
+        for column in first.targets.columns[output_start:output_stop]
+    ]
+    if input_entities != output_entities:
+        raise ValueError(
+            "Feedback input entities must exactly match its ordered output entities."
+        )
+
+    inputs = normalization.inputs
+    outputs = normalization.outputs
+    return AutoregressiveFeedback(
+        input_start=input_start,
+        input_stop=input_stop,
+        output_start=output_start,
+        output_stop=output_stop,
+        input_mean=inputs.mean[input_start:input_stop],
+        input_standard_deviation=inputs.standard_deviation[input_start:input_stop],
+        output_mean=outputs.mean[output_start:output_stop],
+        output_standard_deviation=outputs.standard_deviation[output_start:output_stop],
+        initial_value=float(feedback.initial_value),
+    )
 
 
 def _create_loss(config: LossConfig) -> nn.Module:

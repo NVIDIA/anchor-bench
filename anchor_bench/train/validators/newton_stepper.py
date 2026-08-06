@@ -74,6 +74,9 @@ class _NewtonStepper:
                 modes[self._indices[joint][1]] = int(newton.JointTargetMode.EFFORT)
             model.joint_target_mode.assign(modes)
         self._solver = solver_type(model)
+        self._bias_solver: Any = None
+        self._bias_state: _ReplayState | None = None
+        self._bias_values: dict[str, float] = {}
 
     def reset(
         self,
@@ -132,6 +135,72 @@ class _NewtonStepper:
                 kd,
             )
         )
+
+    def dynamic_bias(self, joint: str, state: _ReplayState) -> float:
+        """Evaluate MuJoCo qfrc_bias at the current replay state."""
+
+        if self._bias_solver is None:
+            self._initialize_dynamic_bias()
+        if self._bias_state is not state:
+            solver = self._bias_solver
+            solver.mj_data.qpos[:] = self._bias_default_qpos
+            solver.mj_data.qvel[:] = 0.0
+            for name, value in state.position.items():
+                if name not in self._bias_indices:
+                    continue
+                q_address, _, dof_address = self._bias_indices[name]
+                solver.mj_data.qpos[q_address] = (
+                    float(value) + self._bias_dof_ref[dof_address]
+                )
+            for name, value in state.velocity.items():
+                if name in self._bias_indices:
+                    solver.mj_data.qvel[self._bias_indices[name][1]] = float(value)
+            self._mujoco.mj_forward(solver.mj_model, solver.mj_data)
+            self._bias_values = {
+                name: float(solver.mj_data.qfrc_bias[indices[1]])
+                for name, indices in self._bias_indices.items()
+            }
+            self._bias_state = state
+        return self._bias_values[joint]
+
+    def _initialize_dynamic_bias(self) -> None:
+        """Create an independent CPU MuJoCo view for bias evaluation."""
+
+        self._mujoco = import_module("mujoco")
+        solver_type = type(self._solver)
+        solver = solver_type(
+            self._model,
+            use_mujoco_cpu=True,
+            disable_contacts=True,
+        )
+        missing = [
+            name
+            for name in ("mj_model", "mj_data", "mj_q_start", "mj_qd_start")
+            if getattr(solver, name, None) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                "Newton replay qfrc_bias requires MuJoCo model access; missing: "
+                + ", ".join(missing)
+                + "."
+            )
+        q_starts = np.asarray(solver.mj_q_start.numpy(), dtype=np.int64)
+        qd_starts = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
+        labels = list(self._model.joint_label)
+        self._bias_indices = {
+            name: (int(q_starts[index]), int(qd_starts[index]), indices[1])
+            for name, indices in self._indices.items()
+            for index in [labels.index(name)]
+            if int(q_starts[index]) >= 0 and int(qd_starts[index]) >= 0
+        }
+        source = getattr(getattr(self._model, "mujoco", None), "dof_ref", None)
+        self._bias_dof_ref = (
+            np.zeros(int(self._model.joint_dof_count), dtype=np.float64)
+            if source is None
+            else np.asarray(source.numpy(), dtype=np.float64)
+        )
+        self._bias_default_qpos = np.array(solver.mj_data.qpos, copy=True)
+        self._bias_solver = solver
 
     def _write_control(
         self,

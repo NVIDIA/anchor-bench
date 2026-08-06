@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any, Dict, List
 
+import numpy as np
 import pandas as pd
 
 from anchor_bench.train.data_processors.base import BaseDataProcessor
@@ -45,7 +47,6 @@ def _joint_parameters(
 ) -> Dict[str, float]:
     """Read one per-DOF model field for dataset entities."""
 
-    labels = model.joint_label
     dof_starts = model.joint_qd_start.numpy()
     model_values = getattr(model, field, None)
     if model_values is None:
@@ -54,10 +55,7 @@ def _joint_parameters(
 
     parameters = {}
     for entity in entities:
-        if entity not in labels:
-            raise ValueError(f"USD model does not contain joint {entity!r}.")
-
-        joint_index = labels.index(entity)
+        joint_index = _joint_index(model, entity)
         dof_start = int(dof_starts[joint_index])
         dof_end = int(dof_starts[joint_index + 1])
         if dof_end - dof_start != 1:
@@ -67,6 +65,31 @@ def _joint_parameters(
 
         parameters[entity] = float(values[dof_start])
     return parameters
+
+
+def _joint_index(model: Any, entity: str) -> int:
+    """Resolve one dataset entity to a unique Newton joint."""
+
+    labels = list(model.joint_label)
+    exact = [
+        index
+        for index, label in enumerate(labels)
+        if label == entity or label.endswith(f"/{entity}")
+    ]
+    if len(exact) == 1:
+        return exact[0]
+
+    normalized = entity.rsplit("/", 1)[-1].removesuffix("_joint")
+    matches = [
+        index
+        for index, label in enumerate(labels)
+        if label.rsplit("/", 1)[-1].removesuffix("_joint") == normalized
+    ]
+    if not matches:
+        raise ValueError(f"USD model does not contain joint {entity!r}.")
+    if len(matches) > 1:
+        raise ValueError(f"USD model does not contain a unique joint for {entity!r}.")
+    return matches[0]
 
 
 def _entity_columns(entities: List[str], features: List[str]) -> List[str]:
@@ -211,3 +234,104 @@ class ResidualTorqueDataProcessor(BaseDataProcessor):
             )
 
         return pd.DataFrame(residuals, index=self.dataset.index)
+
+
+class PreviousTorqueDataProcessor(BaseDataProcessor):
+    """Generate shifted measured torque for fitting feedback normalization."""
+
+    def process(self) -> pd.DataFrame:
+        """Shift effort within each experiment and initialize it at zero."""
+
+        if "experiment" not in self.dataset.index.names:
+            raise ValueError("Previous torque requires an experiment index.")
+        entities = _feature_entities(self.dataset, "actual_effort")
+        columns = _entity_columns(entities, ["actual_effort"])
+        shifted = (
+            self.dataset[columns]
+            .groupby(
+                level="experiment",
+                sort=False,
+            )
+            .shift(fill_value=0.0)
+        )
+        shifted.columns = [f"{entity}/previous_torque" for entity in entities]
+        return shifted
+
+
+class DynamicBiasDataProcessor(BaseDataProcessor):
+    """Generate MuJoCo ``qfrc_bias`` from recorded position and velocity."""
+
+    def process(self) -> pd.DataFrame:
+        """Evaluate bias at every recorded state without advancing simulation."""
+
+        entities = _feature_entities(self.dataset, "actual_q")
+        _require_entity_columns(self.dataset, entities, ["actual_q", "actual_dq"])
+        model = self.simulation_context.model
+
+        newton = import_module("newton")
+        mujoco = import_module("mujoco")
+        solver_type = getattr(getattr(newton, "solvers", None), "SolverMuJoCo", None)
+        if solver_type is None:
+            raise RuntimeError("qfrc_bias requires newton.solvers.SolverMuJoCo.")
+        solver = solver_type(model, use_mujoco_cpu=True, disable_contacts=True)
+        missing = [
+            name
+            for name in ("mj_model", "mj_data", "mj_q_start", "mj_qd_start")
+            if getattr(solver, name, None) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                "qfrc_bias requires SolverMuJoCo model access; missing: "
+                + ", ".join(missing)
+                + "."
+            )
+
+        joint_indices = [_joint_index(model, entity) for entity in entities]
+        mj_q_start = np.asarray(solver.mj_q_start.numpy(), dtype=np.int64)
+        mj_qd_start = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
+        q_addresses = np.asarray(
+            [mj_q_start[index] for index in joint_indices],
+            dtype=np.int64,
+        )
+        qd_addresses = np.asarray(
+            [mj_qd_start[index] for index in joint_indices],
+            dtype=np.int64,
+        )
+        if np.any(q_addresses < 0) or np.any(qd_addresses < 0):
+            raise ValueError("qfrc_bias entities must have MuJoCo coordinates.")
+
+        joint_qd_start = np.asarray(model.joint_qd_start.numpy(), dtype=np.int64)
+        dof_addresses = np.asarray(
+            [joint_qd_start[index] for index in joint_indices],
+            dtype=np.int64,
+        )
+        dof_ref_source = getattr(getattr(model, "mujoco", None), "dof_ref", None)
+        dof_ref = (
+            np.zeros(int(model.joint_dof_count), dtype=np.float64)
+            if dof_ref_source is None
+            else np.asarray(dof_ref_source.numpy(), dtype=np.float64)
+        )
+
+        positions = self.dataset[_entity_columns(entities, ["actual_q"])].to_numpy(
+            dtype=np.float64, copy=False
+        )
+        velocities = self.dataset[_entity_columns(entities, ["actual_dq"])].to_numpy(
+            dtype=np.float64, copy=False
+        )
+        default_qpos = np.array(solver.mj_data.qpos, dtype=np.float64, copy=True)
+        values = np.empty((len(self.dataset), len(entities)), dtype=np.float64)
+        for row in range(len(self.dataset)):
+            solver.mj_data.qpos[:] = default_qpos
+            solver.mj_data.qvel[:] = 0.0
+            solver.mj_data.qpos[q_addresses] = positions[row] + dof_ref[dof_addresses]
+            solver.mj_data.qvel[qd_addresses] = velocities[row]
+            mujoco.mj_forward(solver.mj_model, solver.mj_data)
+            values[row] = solver.mj_data.qfrc_bias[qd_addresses]
+
+        if not np.all(np.isfinite(values)):
+            raise ValueError("SolverMuJoCo produced non-finite qfrc_bias values.")
+        return pd.DataFrame(
+            values,
+            columns=[f"{entity}/qfrc_bias" for entity in entities],
+            index=self.dataset.index,
+        )
