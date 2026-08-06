@@ -10,7 +10,6 @@ import newton
 import numpy as np
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
-from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import Trajectory
 
@@ -20,21 +19,18 @@ MIN_JOINT_RANGE_RADIANS = 1.0e-3
 def usd_trajectory_accuracy(
     usd_file: Union[str, Path],
     trajectory_file: Union[str, Path],
+    config: ActuatorSysIdConfig,
 ) -> float:
     """Return the USD robot's measured-trajectory accuracy as a percentage.
 
-    Simulation and dataset settings come from ``config.yaml`` beside the USD.
-    Accuracy is 100 minus mean per-joint normalized RMSE, clipped to 0–100.
-    Near-static joints are excluded because their normalized error is unstable.
+    ``config`` supplies the simulation, dataset, and joint settings; its USD and
+    dataset paths are replaced by ``usd_file`` and ``trajectory_file``. Accuracy
+    is 100 minus mean per-joint normalized RMSE, clipped to 0–100. Near-static
+    joints are excluded because their normalized error is unstable.
     """
 
     usd_path = Path(usd_file).expanduser().resolve()
     trajectory_path = Path(trajectory_file).expanduser().resolve()
-    config_path = usd_path.parent / "config.yaml"
-    config = parse(config_path)
-    if not isinstance(config, ActuatorSysIdConfig):
-        raise TypeError(f"Expected an actuator_sys_id config at {config_path}.")
-
     evaluation_config = config.model_copy(
         update={
             "simulation": config.simulation.model_copy(

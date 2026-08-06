@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.parse import parse
 from tests.integration.cli_runner import CliResult
 from tests.integration.usd_trajectory import usd_trajectory_accuracy
 
@@ -42,13 +44,17 @@ def test_runs_actuator_sysid_config(
     assert result.exit_code == 0, result.stderr or result.stdout
     assert all((TEST_DIRECTORY / artifact).is_file() for artifact in EXPECTED_ARTIFACTS)
 
+    config = parse(CONFIG_PATH)
+    assert isinstance(config, ActuatorSysIdConfig)
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,
         EVALUATION_TRAJECTORY_PATH,
+        config,
     )
     identified_accuracy = usd_trajectory_accuracy(
         IDENTIFIED_USD_PATH,
         EVALUATION_TRAJECTORY_PATH,
+        config,
     )
 
     assert identified_accuracy > source_accuracy, (
