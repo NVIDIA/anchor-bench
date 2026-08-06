@@ -40,7 +40,7 @@ def valid_config_data():
             "velocity": "joint_velocity",
             "command": None,
         },
-        "output_features": "joint_effort",
+        "output_features": {"joint_effort": None},
         "mapping": {
             "actuator": {
                 "inputs": ["position", "velocity", "command"],
@@ -65,7 +65,7 @@ def valid_config_data():
             "sequence": {
                 "length": 32,
                 "stride": 8,
-                "hidden_state": "carry",
+                "hidden_state": "reset",
             },
             "optimizer": {
                 "type": "adamw",
@@ -81,6 +81,10 @@ def valid_config_data():
             },
             "augmentation": {
                 "input_noise_std": 0.01,
+            },
+            "normalization": {
+                "inputs": "standard",
+                "outputs": "standard",
             },
         },
         "search": {
@@ -107,7 +111,7 @@ def valid_config_data():
                 },
                 "training.sequence.hidden_state": {
                     "data_type": "categorical",
-                    "values": ["reset", "carry"],
+                    "values": ["reset"],
                 },
             },
         },
@@ -134,10 +138,13 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.dataset.resampling.dt == 0.02
     assert config.dataset.resampling.time_range == "intersection"
     assert config.dataset.resampling.interpolation == "linear"
+    assert config.output_features == {"joint_effort": None}
     assert config.simulation.backend == "newton"
     assert config.simulation.usd_path == "assets/robots/so101.usd"
     assert isinstance(config.model, GruModelConfig)
     assert isinstance(config.training.loss, HuberLossConfig)
+    assert config.training.normalization.inputs == "standard"
+    assert config.training.normalization.outputs == "standard"
     assert config.search is not None
     assert isinstance(
         config.search.search_space["model.hidden_size"],
@@ -177,6 +184,23 @@ def test_simulation_defaults_to_newton(valid_config_data):
     assert config.simulation.backend == "newton"
 
 
+def test_normalization_defaults_to_standard(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["training"].pop("normalization")
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.training.normalization.inputs == "standard"
+    assert config.training.normalization.outputs == "standard"
+
+
+def test_normalization_rejects_unknown_method(valid_config_data):
+    valid_config_data["training"]["normalization"]["inputs"] = "robust"
+
+    with pytest.raises(ValidationError, match="normalization"):
+        TrainingConfig.model_validate(valid_config_data)
+
+
 def test_requires_simulation(valid_config_data):
     data = deepcopy(valid_config_data)
     data.pop("simulation")
@@ -186,9 +210,11 @@ def test_requires_simulation(valid_config_data):
         TrainingConfig.model_validate(data)
 
 
-def test_rejects_blank_preprocessor_name(valid_config_data):
+@pytest.mark.parametrize("feature_group", ["input_features", "output_features"])
+def test_rejects_blank_data_processor_name(valid_config_data, feature_group):
     data = deepcopy(valid_config_data)
-    data["input_features"]["position"] = ""
+    feature = next(iter(data[feature_group]))
+    data[feature_group][feature] = ""
 
     with pytest.raises(
         ValidationError, match="String should have at least 1 character"
@@ -296,8 +322,8 @@ def test_search_rejects_parameter_name_without_object_path(valid_config_data):
 def test_search_rejects_duplicate_categorical_values(valid_config_data):
     data = deepcopy(valid_config_data)
     data["search"]["search_space"]["training.sequence.hidden_state"]["values"] = [
-        "carry",
-        "carry",
+        "reset",
+        "reset",
     ]
 
     with pytest.raises(
@@ -400,4 +426,40 @@ def test_model_rejects_coerced_training_integer(valid_config_data):
     data["training"]["epochs"] = "100"
 
     with pytest.raises(ValidationError):
+        TrainingConfig.model_validate(data)
+
+
+def test_training_accepts_checkpoint_interval(valid_config_data) -> None:
+    """Parse an optional positive checkpoint interval."""
+
+    data = deepcopy(valid_config_data)
+    data["training"]["checkpoint"] = {"every_n_epochs": 5}
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.training.checkpoint is not None
+    assert config.training.checkpoint.every_n_epochs == 5
+
+
+@pytest.mark.parametrize("interval", [0, -1])
+def test_training_rejects_non_positive_checkpoint_interval(
+    valid_config_data,
+    interval,
+) -> None:
+    """Require checkpoint intervals to advance by at least one epoch."""
+
+    data = deepcopy(valid_config_data)
+    data["training"]["checkpoint"] = {"every_n_epochs": interval}
+
+    with pytest.raises(ValidationError):
+        TrainingConfig.model_validate(data)
+
+
+def test_training_rejects_null_checkpoint(valid_config_data) -> None:
+    """Require checkpointing to be omitted rather than null."""
+
+    data = deepcopy(valid_config_data)
+    data["training"]["checkpoint"] = None
+
+    with pytest.raises(ValidationError, match="checkpoint cannot be null"):
         TrainingConfig.model_validate(data)

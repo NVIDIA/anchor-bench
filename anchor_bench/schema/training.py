@@ -87,16 +87,22 @@ class GruModelConfig(StrictBaseModel):
     output: ModelOutputConfig
 
 
+ModelConfig: TypeAlias = GruModelConfig
+
+
 class SequenceConfig(StrictBaseModel):
     length: PositiveInteger
     stride: PositiveInteger
-    hidden_state: Literal["reset", "carry"]
+    hidden_state: Literal["reset"]
 
 
 class AdamwOptimizerConfig(StrictBaseModel):
     type: Literal["adamw"]
     learning_rate: PositiveNumber
     weight_decay: NonNegativeNumber
+
+
+OptimizerConfig: TypeAlias = AdamwOptimizerConfig
 
 
 class MseLossConfig(StrictBaseModel):
@@ -126,6 +132,17 @@ class AugmentationConfig(StrictBaseModel):
     input_noise_std: NonNegativeNumber
 
 
+class CheckpointConfig(StrictBaseModel):
+    every_n_epochs: PositiveInteger
+
+
+class NormalizationConfig(StrictBaseModel):
+    """Select normalization independently for model inputs and outputs."""
+
+    inputs: Literal["none", "standard"] = "standard"
+    outputs: Literal["none", "standard"] = "standard"
+
+
 class TrainingParametersConfig(StrictBaseModel):
     """Settings shared by all supported network architectures."""
 
@@ -134,10 +151,18 @@ class TrainingParametersConfig(StrictBaseModel):
     seed: NonNegativeInteger
     validation_ratio: Annotated[JsonNumber, Field(ge=0.0, lt=1.0)]
     sequence: SequenceConfig
-    optimizer: AdamwOptimizerConfig
+    optimizer: OptimizerConfig
     loss: LossConfig
     gradient: GradientConfig
     augmentation: AugmentationConfig
+    normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
+    checkpoint: Optional[CheckpointConfig] = None
+
+    @model_validator(mode="after")
+    def reject_explicit_null_checkpoint(self) -> TrainingParametersConfig:
+        if "checkpoint" in self.model_fields_set and self.checkpoint is None:
+            raise ValueError("checkpoint cannot be null")
+        return self
 
 
 class SearchObjectiveConfig(StrictBaseModel):
@@ -251,12 +276,15 @@ class TrainingConfig(BaseConfig):
         Dict[str, Optional[NonEmptyString]],
         Field(min_length=1),
     ]
-    output_features: NonEmptyString
+    output_features: Annotated[
+        Dict[str, Optional[NonEmptyString]],
+        Field(min_length=1),
+    ]
     mapping: Annotated[
         Dict[str, NetworkMappingConfig],
         Field(min_length=1),
     ]
-    model: GruModelConfig
+    model: ModelConfig
     training: TrainingParametersConfig
     search: Optional[SearchConfig] = None
     validation: TrainingValidationConfig

@@ -3,6 +3,7 @@
 from anchor_bench.core.artifacts import (
     get_or_create_output_folder,
     resolve_repo_root,
+    write_yaml,
 )
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
@@ -14,4 +15,5 @@ __all__ = [
     "TaskRunner",
     "get_or_create_output_folder",
     "resolve_repo_root",
+    "write_yaml",
 ]

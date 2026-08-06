@@ -1,13 +1,18 @@
-"""Feature preprocessors used by GRU actuator training."""
+"""Feature data processors used by GRU actuator training."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List
 
-import numpy as np
 import pandas as pd
 
-from anchor_bench.train.preprocessors.base import BasePreprocessor
+from anchor_bench.train.data_processors.base import BaseDataProcessor
+from anchor_bench.train.utils import (
+    friction_torque,
+    position_error,
+    solver_pd,
+    torque_residual,
+)
 
 
 def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:
@@ -16,7 +21,7 @@ def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:
     missing = [column for column in columns if column not in dataset.columns]
     if missing:
         names = ", ".join(missing)
-        raise ValueError(f"Dataset is missing preprocessor columns: {names}.")
+        raise ValueError(f"Dataset is missing data processor columns: {names}.")
 
 
 def _feature_entities(dataset: pd.DataFrame, feature: str) -> List[str]:
@@ -80,21 +85,7 @@ def _require_entity_columns(
     _require_columns(dataset, _entity_columns(entities, features))
 
 
-def _solver_pd(
-    dataset: pd.DataFrame,
-    entity: str,
-    kp: Mapping[str, float],
-    kd: Mapping[str, float],
-) -> pd.Series:
-    """Calculate solver PD torque for one robot entity."""
-
-    return (
-        kp[entity] * dataset[f"{entity}/position_error"]
-        - kd[entity] * dataset[f"{entity}/actual_dq"]
-    )
-
-
-class PositionErrorPreprocessor(BasePreprocessor):
+class PositionErrorDataProcessor(BaseDataProcessor):
     """Generate commanded-minus-measured position for every commanded entity."""
 
     def process(self) -> pd.DataFrame:
@@ -117,9 +108,9 @@ class PositionErrorPreprocessor(BasePreprocessor):
 
         return pd.DataFrame(
             {
-                f"{entity}/position_error": (
-                    self.dataset[f"{entity}/command_q"]
-                    - self.dataset[f"{entity}/actual_q"]
+                f"{entity}/position_error": position_error(
+                    self.dataset[f"{entity}/command_q"],
+                    self.dataset[f"{entity}/actual_q"],
                 )
                 for entity in entities
             },
@@ -127,10 +118,10 @@ class PositionErrorPreprocessor(BasePreprocessor):
         )
 
 
-class SolverPDPreprocessor(BasePreprocessor):
+class SolverPDDataProcessor(BaseDataProcessor):
     """Generate solver PD torque from precomputed position-error columns.
 
-    The dataset must first be processed by :class:`PositionErrorPreprocessor`.
+    The dataset must first be processed by :class:`PositionErrorDataProcessor`.
     """
 
     def __init__(self, dataset: pd.DataFrame) -> None:
@@ -153,11 +144,11 @@ class SolverPDPreprocessor(BasePreprocessor):
 
         return pd.DataFrame(
             {
-                f"{entity}/solver_pd": _solver_pd(
-                    self.dataset,
-                    entity,
-                    self.kp,
-                    self.kd,
+                f"{entity}/solver_pd": solver_pd(
+                    self.dataset[f"{entity}/position_error"],
+                    self.dataset[f"{entity}/actual_dq"],
+                    self.kp[entity],
+                    self.kd[entity],
                 )
                 for entity in self.entities
             },
@@ -165,10 +156,10 @@ class SolverPDPreprocessor(BasePreprocessor):
         )
 
 
-class ResidualTorquePreprocessor(BasePreprocessor):
+class ResidualTorqueDataProcessor(BaseDataProcessor):
     """Generate residual torque from precomputed position-error columns.
 
-    The dataset must first be processed by :class:`PositionErrorPreprocessor`.
+    The dataset must first be processed by :class:`PositionErrorDataProcessor`.
     """
 
     def __init__(self, dataset: pd.DataFrame) -> None:
@@ -202,19 +193,21 @@ class ResidualTorquePreprocessor(BasePreprocessor):
         residuals = {}
         for entity in self.entities:
             velocity = self.dataset[f"{entity}/actual_dq"]
-            direction = np.sign(velocity)
-            solver_pd = _solver_pd(
-                self.dataset,
-                entity,
-                self.kp,
-                self.kd,
+            solver_effort = solver_pd(
+                self.dataset[f"{entity}/position_error"],
+                velocity,
+                self.kp[entity],
+                self.kd[entity],
             )
-            friction = (
-                self.dry_friction[entity] * direction
-                + self.viscous_friction[entity] * velocity
+            friction_effort = friction_torque(
+                velocity,
+                self.dry_friction[entity],
+                self.viscous_friction[entity],
             )
-            residuals[f"{entity}/torque_residual"] = (
-                self.dataset[f"{entity}/actual_effort"] - solver_pd - friction
+            residuals[f"{entity}/torque_residual"] = torque_residual(
+                self.dataset[f"{entity}/actual_effort"],
+                solver_effort,
+                friction_effort,
             )
 
         return pd.DataFrame(residuals, index=self.dataset.index)

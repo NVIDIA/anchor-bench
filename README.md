@@ -8,17 +8,17 @@ actuator tooling.
 
 The currently implemented functionality is limited to:
 
-- parsing and strictly validating `actuator_sys_id` YAML configurations;
+- parsing and strictly validating `actuator_sys_id` and `training` YAML
+  configurations;
 - dispatching validated configurations through the task runner;
 - loading local or HTTP(S) Parquet datasets and resampling their signals onto a
-  uniform time grid; and
+  uniform time grid;
+- preparing mapped training trajectories as Parquet artifacts; and
 - loading a USD model and its initial state through the optional Newton runtime.
 
-The actuator system-identification optimizer and simulator execution pipeline
-is not wired in yet. The training module does not contain a training task.
-Running a valid `actuator_sys_id` configuration currently validates and
-dispatches it, then exits successfully without running optimization or writing
-result artifacts.
+The actuator system-identification pipeline fits actuator parameters by
+evaluating CMA-ES populations in replicated Newton worlds and writes the best
+parameters and optimization history to the task output directory.
 
 ## Installation
 
@@ -69,8 +69,8 @@ Use `--help` to display the available option:
 uv run anchor-bench --help
 ```
 
-Only the `actuator_sys_id` configuration type is currently registered. A
-minimal complete configuration looks like this:
+The `actuator_sys_id` and `training` configuration types are registered. A
+minimal actuator configuration looks like this:
 
 ```yaml
 type: actuator_sys_id
@@ -94,6 +94,7 @@ optimizer:
   epsilon: 0.001
 simulation:
   type: newton
+  usd_path: assets/robots/test.usd
   physics_freq: 1000
   control_freq: 200
   render_freq: 60
@@ -103,8 +104,10 @@ simulation:
     line_search_iterations: 4
 dataset:
   type: parquet
-  commanded_state: {path: runs/commanded.parquet}
-  measured_state: {path: runs/measured.parquet}
+  source: runs/actuator.parquet
+  resampling:
+    type: uniform
+    dt: 0.005
 ```
 
 Configuration objects are strict: unknown fields, coerced values, invalid
@@ -125,6 +128,11 @@ dataset = DatasetLoader.load("recording.parquet", dt=0.02)
 Input data must contain `time_ns`, `experiment`, `field`, and `value` columns.
 The returned data frame uses `(experiment, time_ns)` as its index and one column
 per signal field.
+
+The training task maps those signal columns into recurrent input and target
+trajectories and writes them to `trajectories.parquet` in its output directory.
+The artifact is long-form, with `sequence`, `mapping`, `kind`, `experiment`,
+`time_ns`, `feature`, and `value` columns.
 
 ## Newton model loading
 

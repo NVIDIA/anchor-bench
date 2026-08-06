@@ -1,4 +1,4 @@
-"""Execute configured training preprocessors."""
+"""Execute configured training data processors."""
 
 from __future__ import annotations
 
@@ -7,29 +7,29 @@ from typing import Mapping, Optional
 import pandas as pd
 
 
-class PreprocessorRunner:
-    """Execute configured built-in preprocessors in declaration order."""
+class DataProcessorRunner:
+    """Execute configured built-in data processors in declaration order."""
 
     @staticmethod
     def run(
         dataset: pd.DataFrame,
-        preprocessors: Mapping[str, Optional[str]],
+        data_processors: Mapping[str, Optional[str]],
     ) -> pd.DataFrame:
         """Return a shallow dataset copy with generated features appended."""
 
-        import anchor_bench.train.preprocessors as preprocessor_registry
+        import anchor_bench.train.data_processors as data_processor_registry
 
         result = dataset.copy(deep=False)
-        for feature, preprocessor_name in preprocessors.items():
-            if preprocessor_name is None:
+        for feature, data_processor_name in data_processors.items():
+            if data_processor_name is None:
                 continue
 
-            preprocessor = getattr(preprocessor_registry, preprocessor_name)
-            generated = PreprocessorRunner._validate_result(
+            data_processor = getattr(data_processor_registry, data_processor_name)
+            generated = DataProcessorRunner._validate_result(
                 result,
-                preprocessor(result).process(),
+                data_processor(result).process(),
                 feature,
-                preprocessor_name,
+                data_processor_name,
             )
 
             result[generated.columns] = generated
@@ -41,25 +41,25 @@ class PreprocessorRunner:
         dataset: pd.DataFrame,
         generated: object,
         feature: str,
-        preprocessor_name: str,
+        data_processor_name: str,
     ) -> pd.DataFrame:
         """Validate generated columns before attaching them to the dataset."""
 
         if not isinstance(generated, pd.DataFrame):
             raise TypeError(
-                f"Preprocessor {preprocessor_name!r} must return a DataFrame."
+                f"DataProcessor {data_processor_name!r} must return a DataFrame."
             )
         if generated.empty:
             raise ValueError(
-                f"Preprocessor {preprocessor_name!r} returned an empty DataFrame."
+                f"DataProcessor {data_processor_name!r} returned an empty DataFrame."
             )
         if not generated.index.equals(dataset.index):
             raise ValueError(
-                f"Preprocessor {preprocessor_name!r} returned a different index."
+                f"DataProcessor {data_processor_name!r} returned a different index."
             )
         if not generated.columns.is_unique:
             raise ValueError(
-                f"Preprocessor {preprocessor_name!r} returned duplicate columns."
+                f"DataProcessor {data_processor_name!r} returned duplicate columns."
             )
 
         collisions = [
@@ -78,7 +78,7 @@ class PreprocessorRunner:
         if unexpected:
             names = ", ".join(map(str, unexpected))
             raise ValueError(
-                f"Preprocessor {preprocessor_name!r} returned columns unrelated "
+                f"DataProcessor {data_processor_name!r} returned columns unrelated "
                 f"to feature {feature!r}: {names}."
             )
         return generated

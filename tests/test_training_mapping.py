@@ -18,6 +18,8 @@ def dataset() -> pd.DataFrame:
             "elbow/actual_q": [2.0, 2.1],
             "shoulder/position_error": [0.1, 0.2],
             "elbow/position_error": [0.3, 0.4],
+            "shoulder/torque_residual": [0.5, 0.6],
+            "elbow/torque_residual": [0.7, 0.8],
             "shoulder/actual_effort": [3.0, 3.1],
             "elbow/actual_effort": [4.0, 4.1],
         },
@@ -31,7 +33,7 @@ def test_prepares_siso_mapping(dataset: pd.DataFrame) -> None:
     sequences = TrainingTask._map_features(
         dataset,
         input_features=["actual_q", "position_error"],
-        output_feature="actual_effort",
+        output_features=["actual_effort"],
         mappings={
             "shoulder": EntityMapping(
                 inputs=["shoulder"],
@@ -66,7 +68,7 @@ def test_prepares_mimo_mapping_in_feature_major_order(
     sequences = TrainingTask._map_features(
         dataset,
         input_features=["actual_q", "position_error"],
-        output_feature="actual_effort",
+        output_features=["actual_effort", "torque_residual"],
         mappings={
             "arm": EntityMapping(
                 inputs=["shoulder", "elbow"],
@@ -84,6 +86,8 @@ def test_prepares_mimo_mapping_in_feature_major_order(
     assert sequences[0].targets.columns.tolist() == [
         "elbow/actual_effort",
         "shoulder/actual_effort",
+        "elbow/torque_residual",
+        "shoulder/torque_residual",
     ]
 
 
@@ -95,7 +99,7 @@ def test_prepares_shared_siso_as_separate_ordered_sequences(
     sequences = TrainingTask._map_features(
         dataset,
         input_features=["actual_q", "position_error"],
-        output_feature="actual_effort",
+        output_features=["actual_effort"],
         mappings={
             "elbow": EntityMapping(inputs=["elbow"], outputs=["elbow"]),
             "shoulder": EntityMapping(
@@ -130,7 +134,7 @@ def test_orders_sequences_by_experiment_then_mapping(
     sequences = TrainingTask._map_features(
         pd.concat([dataset, second_experiment]),
         input_features=["actual_q"],
-        output_feature="actual_effort",
+        output_features=["actual_effort"],
         mappings={
             "elbow": EntityMapping(inputs=["elbow"], outputs=["elbow"]),
             "shoulder": EntityMapping(
@@ -164,7 +168,7 @@ def test_rejects_missing_mapped_columns(dataset: pd.DataFrame) -> None:
         TrainingTask._map_features(
             dataset,
             input_features=["actual_q", "command_q"],
-            output_feature="actual_effort",
+            output_features=["actual_effort"],
             mappings={
                 "arm": EntityMapping(
                     inputs=["shoulder", "wrist"],
@@ -181,7 +185,7 @@ def test_reports_shared_missing_column_once(dataset: pd.DataFrame) -> None:
         TrainingTask._map_features(
             dataset,
             input_features=["actual_effort"],
-            output_feature="actual_effort",
+            output_features=["actual_effort"],
             mappings={
                 "wrist": EntityMapping(
                     inputs=["wrist"],
@@ -205,7 +209,7 @@ def test_rejects_different_shared_mapping_widths(
         TrainingTask._map_features(
             dataset,
             input_features=["actual_q"],
-            output_feature="actual_effort",
+            output_features=["actual_effort"],
             mappings={
                 "shoulder": EntityMapping(
                     inputs=["shoulder"],

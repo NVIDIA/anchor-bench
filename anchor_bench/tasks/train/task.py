@@ -3,15 +3,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Sequence
+from math import isfinite
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
+import optuna
 import pandas as pd
 
 from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.data import DatasetLoader
-from anchor_bench.schema.training import TrainingConfig
+from anchor_bench.schema.training import (
+    CategoricalSearchParameter,
+    FloatSearchParameter,
+    IntegerSearchParameter,
+    SearchParameter,
+    TrainingConfig,
+)
 from anchor_bench.tasks.base_task import BaseTask
-from anchor_bench.tasks.train.preprocessor_runner import PreprocessorRunner
+from anchor_bench.tasks.train.data_processor_runner import DataProcessorRunner
+
+if TYPE_CHECKING:
+    from anchor_bench.tasks.train.trainer import TrainingResult
+
+TRAJECTORIES_FILENAME = "trajectories.parquet"
 
 
 @dataclass(frozen=True)
@@ -32,13 +46,32 @@ class MappedTrainingSequence:
     targets: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class SearchTrial:
+    """Record one completed search trial."""
+
+    number: int
+    parameters: Mapping[str, Any]
+    value: float
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Return the best training run and the complete trial history."""
+
+    training_result: TrainingResult
+    best_config: TrainingConfig
+    validation_sequences: tuple[MappedTrainingSequence, ...]
+    objective_metric: str
+    objective_direction: str
+    best_trial: int
+    best_value: float
+    best_parameters: Mapping[str, Any]
+    trials: tuple[SearchTrial, ...]
+
+
 class TrainingTask(BaseTask[TrainingConfig]):
-    """Prepare aligned datasets for network training."""
-
-    def __init__(self, config: TrainingConfig) -> None:
-        """Initialize training-data preparation from validated configuration."""
-
-        self.config = config
+    """Prepare data, train the configured network, and persist trajectories."""
 
     @classmethod
     def name(cls) -> str:
@@ -46,36 +79,237 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
         return "training"
 
-    def run(self) -> list[MappedTrainingSequence]:
-        """Load, preprocess, and map configured training sequences."""
+    def run(self) -> Path:
+        """Train the network and persist its mapped trajectories."""
 
         dataset = DatasetLoader.load(
             self.config.dataset.source,
             dt=float(self.config.dataset.resampling.dt),
         )
 
-        if any(self.config.input_features.values()):
-            simulation = self.config.simulation
-            create_simulation_context(simulation.backend, simulation.usd_path)
+        simulation = self.config.simulation
+        create_simulation_context(simulation.backend, simulation.usd_path)
 
-        dataset = PreprocessorRunner.run(dataset, self.config.input_features)
+        dataset = DataProcessorRunner.run(dataset, self.config.input_features)
+        dataset = DataProcessorRunner.run(dataset, self.config.output_features)
         mappings = {
             name: EntityMapping(inputs=mapping.inputs, outputs=mapping.outputs)
             for name, mapping in self.config.mapping.items()
         }
-        return self._map_features(
+        sequences = self._map_features(
             dataset,
             input_features=list(self.config.input_features),
-            output_feature=self.config.output_features,
+            output_features=list(self.config.output_features),
             mappings=mappings,
         )
+        from anchor_bench.tasks.train.trainer import Trainer
+
+        search_result = None
+        if self.config.search is None:
+            trainer = Trainer(
+                self.config,
+                sequences,
+                checkpoint_directory=self.output_directory / "checkpoints",
+            )
+            result = trainer.train()
+            validation_sequences = trainer.data_loaders.validation_sequences
+            artifact_config = self.config
+        else:
+            search_result = self._search(sequences)
+            result = search_result.training_result
+            validation_sequences = search_result.validation_sequences
+            artifact_config = search_result.best_config
+
+        from anchor_bench.tasks.train.data import create_validation_dataset
+        from anchor_bench.tasks.train.validator_runner import ValidatorRunner
+
+        validation_dataset = create_validation_dataset(
+            dataset,
+            validation_sequences,
+        )
+
+        validation_results = ValidatorRunner.run(
+            self.config.validation.validators,
+            model=result.normalization.wrap(result.model),
+            validation_dataset=validation_dataset,
+        )
+
+        from anchor_bench.tasks.train.artifacts import save_training_artifacts
+
+        save_training_artifacts(
+            result,
+            sequences,
+            validation_results,
+            artifact_config,
+            self.output_directory,
+            search_result=search_result,
+        )
+        self._write_trajectories(
+            sequences,
+            self.output_directory / TRAJECTORIES_FILENAME,
+        )
+        return self.output_directory
+
+    def _search(
+        self,
+        sequences: Sequence[MappedTrainingSequence],
+    ) -> SearchResult:
+        """Wrap repeated trainer executions in the configured Optuna loop."""
+
+        search = self.config.search
+        if search is None:
+            raise RuntimeError("Training search configuration is missing.")
+        if search.objective.metric != "validation_loss":
+            raise ValueError(
+                "Search currently supports only the 'validation_loss' objective."
+            )
+
+        study = optuna.create_study(
+            direction=search.objective.direction,
+            sampler=optuna.samplers.TPESampler(seed=self.config.training.seed),
+        )
+        trials = []
+        best: (
+            tuple[
+                float,
+                TrainingResult,
+                TrainingConfig,
+                tuple[MappedTrainingSequence, ...],
+                Mapping[str, Any],
+                int,
+            ]
+            | None
+        ) = None
+
+        def objective(trial: optuna.Trial) -> float:
+            """Train and score one sampled configuration."""
+
+            from anchor_bench.tasks.train.trainer import Trainer
+
+            nonlocal best
+            trial_config, parameters = self._trial_config(trial)
+            trainer = Trainer(
+                trial_config,
+                sequences,
+                checkpoint_directory=(
+                    self.output_directory / "checkpoints" / f"trial-{trial.number:04d}"
+                ),
+            )
+            result = trainer.train()
+            value = self._validation_loss(result)
+            if not isfinite(value):
+                raise optuna.TrialPruned("Validation loss is not finite.")
+            trials.append(
+                SearchTrial(
+                    number=trial.number,
+                    parameters=parameters,
+                    value=value,
+                )
+            )
+            if best is None or self._is_better(value, best[0]):
+                best = (
+                    value,
+                    result,
+                    trial_config,
+                    trainer.data_loaders.validation_sequences,
+                    parameters,
+                    trial.number,
+                )
+            return value
+
+        study.optimize(objective, n_trials=search.trials)
+        if best is None:
+            raise RuntimeError("Hyperparameter search did not complete any trials.")
+
+        value, result, config, held_out, parameters, trial_number = best
+        return SearchResult(
+            training_result=result,
+            best_config=config,
+            validation_sequences=held_out,
+            objective_metric=search.objective.metric,
+            objective_direction=search.objective.direction,
+            best_trial=trial_number,
+            best_value=value,
+            best_parameters=parameters,
+            trials=tuple(trials),
+        )
+
+    def _trial_config(
+        self,
+        trial: optuna.Trial,
+    ) -> tuple[TrainingConfig, dict[str, Any]]:
+        """Sample dotted YAML fields and revalidate the resulting config."""
+
+        search = self.config.search
+        if search is None:
+            raise RuntimeError("Training search configuration is missing.")
+        data = self.config.model_dump(mode="python", exclude_none=True)
+        data.pop("search", None)
+        parameters = {}
+        for path, parameter in search.search_space.items():
+            value = _suggest(trial, path, parameter)
+            _set_path(data, path, value)
+            parameters[path] = value
+        return TrainingConfig.model_validate(data), parameters
+
+    def _is_better(self, value: float, current: float) -> bool:
+        """Compare objective values using the configured direction."""
+
+        search = self.config.search
+        if search is None:
+            raise RuntimeError("Training search configuration is missing.")
+        if search.objective.direction == "minimize":
+            return value < current
+        return value > current
+
+    @staticmethod
+    def _validation_loss(result: TrainingResult) -> float:
+        """Return the final validation loss associated with the returned model."""
+
+        if not result.history or result.history[-1].validation is None:
+            raise ValueError(
+                "Search objective 'validation_loss' requires validation windows."
+            )
+        return float(result.history[-1].validation)
+
+    @staticmethod
+    def _write_trajectories(
+        sequences: Sequence[MappedTrainingSequence],
+        path: Path,
+    ) -> None:
+        """Write mapped inputs and targets to one long-form Parquet artifact."""
+
+        records = []
+        for sequence_index, sequence in enumerate(sequences):
+            for kind, values in (
+                ("input", sequence.inputs),
+                ("target", sequence.targets),
+            ):
+                index_names = [name for name in values.index.names if name is not None]
+                if len(index_names) != values.index.nlevels:
+                    raise ValueError(
+                        "Mapped trajectory index levels must all have names."
+                    )
+                frame = values.reset_index().melt(
+                    id_vars=index_names,
+                    var_name="feature",
+                    value_name="value",
+                )
+                frame.insert(0, "kind", kind)
+                frame.insert(0, "mapping", sequence.name)
+                frame.insert(0, "sequence", sequence_index)
+                records.append(frame)
+
+        if not records:
+            raise ValueError("Training did not produce any mapped trajectories.")
+        pd.concat(records, ignore_index=True).to_parquet(path, index=False)
 
     @staticmethod
     def _map_features(
         dataset: pd.DataFrame,
         *,
         input_features: Sequence[str],
-        output_feature: str,
+        output_features: Sequence[str],
         mappings: Mapping[str, EntityMapping],
     ) -> list[MappedTrainingSequence]:
         """Prepare one ordered training sequence for every configured mapping."""
@@ -86,7 +320,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
             input_columns, output_columns = TrainingTask._resolve_mapping_columns(
                 dataset,
                 input_features=input_features,
-                output_feature=output_feature,
+                output_features=output_features,
                 mapping=mapping,
             )
             resolved_mappings.append((name, input_columns, output_columns))
@@ -144,7 +378,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         dataset: pd.DataFrame,
         *,
         input_features: Sequence[str],
-        output_feature: str,
+        output_features: Sequence[str],
         mapping: EntityMapping,
     ) -> tuple[list[str], list[str]]:
         """Resolve and validate one mapping's ordered dataset columns."""
@@ -154,7 +388,11 @@ class TrainingTask(BaseTask[TrainingConfig]):
             for feature in input_features
             for entity in mapping.inputs
         ]
-        output_columns = [f"{entity}/{output_feature}" for entity in mapping.outputs]
+        output_columns = [
+            f"{entity}/{feature}"
+            for feature in output_features
+            for entity in mapping.outputs
+        ]
         required_columns = list(dict.fromkeys(input_columns + output_columns))
         missing_columns = [
             column for column in required_columns if column not in dataset.columns
@@ -176,3 +414,45 @@ class TrainingTask(BaseTask[TrainingConfig]):
         inputs = dataset.loc[:, input_columns].copy()
         targets = dataset.loc[:, output_columns].copy()
         return inputs, targets
+
+
+def _suggest(
+    trial: optuna.Trial,
+    name: str,
+    parameter: SearchParameter,
+) -> Any:
+    """Sample one typed search parameter through Optuna."""
+
+    if isinstance(parameter, CategoricalSearchParameter):
+        return trial.suggest_categorical(name, parameter.values)
+    if isinstance(parameter, IntegerSearchParameter):
+        return trial.suggest_int(
+            name,
+            parameter.min,
+            parameter.max,
+            step=parameter.step or 1,
+            log=parameter.scale == "log",
+        )
+    if isinstance(parameter, FloatSearchParameter):
+        return trial.suggest_float(
+            name,
+            float(parameter.min),
+            float(parameter.max),
+            step=None if parameter.step is None else float(parameter.step),
+            log=parameter.scale == "log",
+        )
+    raise TypeError(f"Unsupported search parameter {name!r}.")
+
+
+def _set_path(data: dict[str, Any], path: str, value: Any) -> None:
+    """Set one existing dotted configuration path."""
+
+    parts = path.split(".")
+    current: Any = data
+    for part in parts[:-1]:
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"Search parameter path {path!r} does not exist.")
+        current = current[part]
+    if not isinstance(current, dict) or parts[-1] not in current:
+        raise ValueError(f"Search parameter path {path!r} does not exist.")
+    current[parts[-1]] = value

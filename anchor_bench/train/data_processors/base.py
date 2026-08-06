@@ -9,7 +9,7 @@ import pandas as pd
 from anchor_bench.core.simulation import SimulationContext
 
 
-class BasePreprocessor(ABC):
+class BaseDataProcessor(ABC):
     """Base class for generating features from a resampled dataset."""
 
     def __init__(self, dataset: pd.DataFrame) -> None:

@@ -43,7 +43,7 @@ dataset:
   source: runs/actuator.parquet
   resampling:
     type: uniform
-    dt: 0.002
+    dt: 0.005
 """
 
 
@@ -82,7 +82,7 @@ def test_runner_constructs_and_runs_registered_task(config_path):
     class RecordingTask(BaseTask[ActuatorSysIdConfig]):
         def run(self) -> Path:
             seen.append(self.config)
-            return Path(self.config.output_dir)
+            return self.output_directory
 
     assert RecordingTask.name() == "actuator_sys_id"
     result = TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))
@@ -101,7 +101,7 @@ def test_runner_skips_completed_task_unless_forced(config_path):
         def run(self) -> Path:
             nonlocal run_count
             run_count += 1
-            return Path(self.config.output_dir)
+            return self.output_directory
 
     runner = TaskRunner({"actuator_sys_id": RecordingTask})
     first_output = runner.run(str(config_path))
@@ -124,7 +124,7 @@ def test_forced_failure_removes_previous_completion_marker(config_path):
         def run(self) -> Path:
             if should_fail:
                 raise RuntimeError("task failed")
-            return Path(self.config.output_dir)
+            return self.output_directory
 
     runner = TaskRunner({"actuator_sys_id": FailableTask})
     output_directory = runner.run(str(config_path))
@@ -135,6 +135,15 @@ def test_forced_failure_removes_previous_completion_marker(config_path):
         runner.run(str(config_path), force=True)
 
     assert not (output_directory / ".completed").exists()
+
+
+def test_runner_rejects_a_task_returning_the_wrong_output_directory(config_path):
+    class MisdirectedTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self) -> Path:
+            return self.output_directory.parent
+
+    with pytest.raises(RuntimeError, match="expected its assigned output directory"):
+        TaskRunner({"actuator_sys_id": MisdirectedTask}).run(str(config_path))
 
 
 def test_base_task_rejects_multiple_inheritance():
