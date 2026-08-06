@@ -11,6 +11,7 @@ from anchor_bench.tasks.train import (
     MappedTrainingSequence,
     SequenceDataset,
     create_data_loaders,
+    create_validation_dataset,
 )
 
 
@@ -143,6 +144,21 @@ def test_data_loaders_split_before_windowing_without_timestep_leakage() -> None:
     assert [
         sequence.inputs.iloc[:, 0].tolist() for sequence in loaders.validation_sequences
     ] == [[6.0, 7.0], [106.0, 107.0]]
+
+    processed = pd.DataFrame(
+        {
+            "raw/command_q": [float(value) for value in range(8)]
+            + [float(value) for value in range(100, 108)]
+        },
+        index=pd.MultiIndex.from_tuples(
+            [("first", value) for value in range(8)]
+            + [("second", value) for value in range(8)],
+            names=["experiment", "time_ns"],
+        ),
+    )
+    validation = create_validation_dataset(processed, loaders.validation_sequences)
+    assert validation.sequences == tuple(loaders.validation_sequences)
+    assert validation.dataframe["raw/command_q"].tolist() == [6.0, 7.0, 106.0, 107.0]
 
     inputs, targets = next(iter(loaders.train))
     assert inputs.shape == (3, 2, 1)

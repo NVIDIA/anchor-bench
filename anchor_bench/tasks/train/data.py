@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
+import pandas as pd
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
@@ -89,6 +90,42 @@ class TrainingDataLoaders:
     train: DataLoader[tuple[Tensor, Tensor]]
     validation: DataLoader[tuple[Tensor, Tensor]]
     validation_sequences: tuple[MappedTrainingSequence, ...]
+
+
+@dataclass(frozen=True)
+class ValidationDataset:
+    """Provide validators with model sequences and complete processed signals."""
+
+    sequences: tuple[MappedTrainingSequence, ...]
+    dataframe: pd.DataFrame
+
+
+def create_validation_dataset(
+    dataset: pd.DataFrame,
+    sequences: Sequence[MappedTrainingSequence],
+) -> ValidationDataset:
+    """Select the complete processed rows used by held-out sequences."""
+
+    indices: dict[object, pd.Index] = {}
+    for sequence in sequences:
+        previous = indices.setdefault(sequence.experiment, sequence.inputs.index)
+        if not previous.equals(sequence.inputs.index):
+            raise ValueError(
+                f"Validation mappings for experiment {sequence.experiment!r} "
+                "must share the same index."
+            )
+
+    frames = []
+    for experiment, index in indices.items():
+        if not index.isin(dataset.index).all():
+            raise ValueError(
+                f"Validation rows for experiment {experiment!r} are missing "
+                "from the processed dataset."
+            )
+        frames.append(dataset.reindex(index))
+
+    dataframe = pd.concat(frames) if frames else dataset.iloc[0:0]
+    return ValidationDataset(tuple(sequences), dataframe)
 
 
 def create_data_loaders(

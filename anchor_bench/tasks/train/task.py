@@ -119,12 +119,18 @@ class TrainingTask(BaseTask[TrainingConfig]):
             validation_sequences = search_result.validation_sequences
             artifact_config = search_result.best_config
 
+        from anchor_bench.tasks.train.data import create_validation_dataset
         from anchor_bench.tasks.train.validator_runner import ValidatorRunner
+
+        validation_dataset = create_validation_dataset(
+            dataset,
+            validation_sequences,
+        )
 
         validation_results = ValidatorRunner.run(
             self.config.validation.validators,
             model=result.model,
-            validation_dataset=validation_sequences,
+            validation_dataset=validation_dataset,
         )
 
         from anchor_bench.tasks.train.artifacts import save_training_artifacts

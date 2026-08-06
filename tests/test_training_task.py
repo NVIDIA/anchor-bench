@@ -10,7 +10,11 @@ import yaml
 
 from anchor_bench.core.task_runner import TASKS, TaskRunner
 from anchor_bench.schema.training import TrainingConfig
-from anchor_bench.tasks.train import MappedTrainingSequence, TrainingTask
+from anchor_bench.tasks.train import (
+    MappedTrainingSequence,
+    TrainingTask,
+    ValidationDataset,
+)
 
 
 def _config_data(source: str) -> dict[str, Any]:
@@ -150,7 +154,6 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
     prepared: list[MappedTrainingSequence] = []
     trained_model = object()
-    held_out_dataset = object()
     validation_results = [object()]
 
     class StubTrainer:
@@ -168,7 +171,7 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
             assert training_config is config
             assert checkpoint_directory.name == "checkpoints"
             prepared.extend(dataset)
-            self.data_loaders = SimpleNamespace(validation_sequences=held_out_dataset)
+            self.data_loaders = SimpleNamespace(validation_sequences=tuple(dataset))
 
         def train(self) -> SimpleNamespace:
             """Record training execution."""
@@ -186,7 +189,10 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
 
         assert validators == config.validation.validators
         assert model is trained_model
-        assert validation_dataset is held_out_dataset
+        assert isinstance(validation_dataset, ValidationDataset)
+        assert validation_dataset.sequences == tuple(prepared)
+        assert "shoulder/command_q" in validation_dataset.dataframe
+        assert "elbow/command_q" in validation_dataset.dataframe
         events.append("validate")
         return validation_results
 
@@ -291,21 +297,19 @@ def test_training_task_initializes_simulation_for_validators(
         lambda backend, path: simulation_calls.append((backend, path)),
     )
 
-    validation_dataset = object()
-
     class StubTrainer:
         """Avoid running PyTorch in the validator initialization test."""
 
         def __init__(
             self,
             config: object,
-            dataset: object,
+            dataset: Sequence[MappedTrainingSequence],
             *,
             checkpoint_directory: Path,
         ) -> None:
             """Accept the prepared training inputs."""
 
-            self.data_loaders = SimpleNamespace(validation_sequences=validation_dataset)
+            self.data_loaders = SimpleNamespace(validation_sequences=tuple(dataset))
             assert checkpoint_directory.name == "checkpoints"
 
         def train(self) -> SimpleNamespace:
