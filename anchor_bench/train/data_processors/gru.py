@@ -47,6 +47,7 @@ def _joint_parameters(
 ) -> Dict[str, float]:
     """Read one per-DOF model field for dataset entities."""
 
+    labels = list(model.joint_label)
     dof_starts = model.joint_qd_start.numpy()
     model_values = getattr(model, field, None)
     if model_values is None:
@@ -55,7 +56,7 @@ def _joint_parameters(
 
     parameters = {}
     for entity in entities:
-        joint_index = _joint_index(model, entity)
+        joint_index = labels.index(entity)
         dof_start = int(dof_starts[joint_index])
         dof_end = int(dof_starts[joint_index + 1])
         if dof_end - dof_start != 1:
@@ -65,31 +66,6 @@ def _joint_parameters(
 
         parameters[entity] = float(values[dof_start])
     return parameters
-
-
-def _joint_index(model: Any, entity: str) -> int:
-    """Resolve one dataset entity to a unique Newton joint."""
-
-    labels = list(model.joint_label)
-    exact = [
-        index
-        for index, label in enumerate(labels)
-        if label == entity or label.endswith(f"/{entity}")
-    ]
-    if len(exact) == 1:
-        return exact[0]
-
-    normalized = entity.rsplit("/", 1)[-1].removesuffix("_joint")
-    matches = [
-        index
-        for index, label in enumerate(labels)
-        if label.rsplit("/", 1)[-1].removesuffix("_joint") == normalized
-    ]
-    if not matches:
-        raise ValueError(f"USD model does not contain joint {entity!r}.")
-    if len(matches) > 1:
-        raise ValueError(f"USD model does not contain a unique joint for {entity!r}.")
-    return matches[0]
 
 
 def _entity_columns(entities: List[str], features: List[str]) -> List[str]:
@@ -286,7 +262,8 @@ class DynamicBiasDataProcessor(BaseDataProcessor):
                 + "."
             )
 
-        joint_indices = [_joint_index(model, entity) for entity in entities]
+        labels = list(model.joint_label)
+        joint_indices = [labels.index(entity) for entity in entities]
         mj_q_start = np.asarray(solver.mj_q_start.numpy(), dtype=np.int64)
         mj_qd_start = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
         q_addresses = np.asarray(
