@@ -128,9 +128,10 @@ class TrainingTask(BaseTask[TrainingConfig]):
             validation_sequences,
         )
 
+        validation_model = result.normalization.wrap(result.model)
         validation_results = ValidatorRunner.run(
             self.config.validation.validators,
-            model=result.normalization.wrap(result.model),
+            model=validation_model,
             validation_dataset=validation_dataset,
         )
 

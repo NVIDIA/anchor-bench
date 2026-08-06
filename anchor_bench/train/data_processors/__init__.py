@@ -6,6 +6,8 @@ from anchor_bench.train.data_processors.base import BaseDataProcessor
 
 DATA_PROCESSORS = {
     "position_error": (".gru", "PositionErrorDataProcessor"),
+    "previous_torque": (".gru", "PreviousTorqueDataProcessor"),
+    "qfrc_bias": (".gru", "DynamicBiasDataProcessor"),
     "solver_pd": (".gru", "SolverPDDataProcessor"),
     "torque_residual": (".gru", "ResidualTorqueDataProcessor"),
 }

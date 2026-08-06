@@ -394,6 +394,7 @@ class NewtonReplayValidator(BaseValidator):
             simulated[signal][0] = frame.loc[frame.index[0], output_columns]
 
         model_state = None
+        previous_effort = {joint: 0.0 for joint in stepper.output_joints}
         timestamps = sequence.command.index.get_level_values("time_ns").to_numpy(
             dtype=np.int64
         )
@@ -414,7 +415,7 @@ class NewtonReplayValidator(BaseValidator):
             }
             features = np.asarray(
                 [
-                    self._live_inputs(columns, state, command, stepper)
+                    self._live_inputs(columns, state, command, stepper, previous_effort)
                     for columns in input_columns
                 ],
                 dtype=np.float32,
@@ -425,6 +426,7 @@ class NewtonReplayValidator(BaseValidator):
                 model_state,
             )
             effort = _route_effort(predictions, sequence.mappings)
+            previous_effort = effort
             state = stepper.step(command=command, effort=effort, dt=dt)
             for signal, values in (
                 ("position", state.position),
@@ -441,6 +443,7 @@ class NewtonReplayValidator(BaseValidator):
         state: _ReplayState,
         command: Mapping[str, float],
         stepper: _NewtonStepper,
+        previous_effort: Mapping[str, float],
     ) -> np.ndarray:
         values = []
         for column in columns:
@@ -461,6 +464,10 @@ class NewtonReplayValidator(BaseValidator):
                 value = position_error(command[joint], state.position[joint])
             elif feature == "solver_pd":
                 value = stepper.solver_pd(joint, command[joint], state)
+            elif feature == "qfrc_bias":
+                value = stepper.dynamic_bias(joint, state)
+            elif feature == "previous_torque":
+                value = previous_effort[joint]
             else:
                 raise ValueError(
                     f"Newton replay cannot rebuild input feature {feature!r}."

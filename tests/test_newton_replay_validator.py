@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Mapping
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ class FakeModel:
         self.evaluated = True
 
 
-class FakeStepper:
+class FakeStepper(newton_validator._NewtonStepper):
     """Provide deterministic stepping without importing Newton."""
 
     instances: ClassVar[list[FakeStepper]] = []
@@ -64,9 +64,9 @@ class FakeStepper:
     def reset(
         self,
         *,
-        position: dict[str, float],
-        velocity: dict[str, float],
-        command: dict[str, float],
+        position: Mapping[str, float],
+        velocity: Mapping[str, float],
+        command: Mapping[str, float],
     ) -> newton_validator._ReplayState:
         """Reset to the supplied measured state."""
 
@@ -78,8 +78,8 @@ class FakeStepper:
     def step(
         self,
         *,
-        command: dict[str, float],
-        effort: dict[str, float],
+        command: Mapping[str, float],
+        effort: Mapping[str, float],
         dt: float,
     ) -> newton_validator._ReplayState:
         """Integrate effort directly for predictable test trajectories."""
@@ -99,6 +99,15 @@ class FakeStepper:
         """Return a simple live position error."""
 
         return command - state.position[joint]
+
+    def dynamic_bias(
+        self,
+        joint: str,
+        state: newton_validator._ReplayState,
+    ) -> float:
+        """Return a deterministic live dynamic-bias value."""
+
+        return state.position[joint] + 7.0
 
     def close(self) -> None:
         """Record resource cleanup."""
@@ -332,3 +341,28 @@ def test_rejects_invalid_timestamps(
 
     with pytest.raises(ValueError, match=message):
         validator.validate(FakeModel(), _validation_dataset(invalid))
+
+
+def test_rebuilds_dynamic_bias_and_previous_prediction_inputs() -> None:
+    """Build full-torque runtime features from live replay state."""
+
+    stepper = FakeStepper(
+        object(),
+        output_joints=("joint",),
+        residual=False,
+        substeps=1,
+    )
+    state = newton_validator._ReplayState(
+        position={"joint": 2.0},
+        velocity={"joint": 3.0},
+    )
+
+    values = NewtonReplayValidator._live_inputs(
+        ["joint/qfrc_bias", "joint/previous_torque"],
+        state,
+        {"joint": 4.0},
+        stepper,
+        {"joint": 5.0},
+    )
+
+    assert values.tolist() == [9.0, 5.0]

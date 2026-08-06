@@ -83,6 +83,25 @@ class Trainer:
             config.training.optimizer,
             self.model.parameters(),
         )
+        feedback = config.training.feedback
+        if feedback is None:
+            self.feedback_indices = None
+        else:
+            inputs = tuple(
+                index
+                for index, column in enumerate(dataset[0].inputs.columns)
+                if column.endswith(f"/{feedback.input}")
+            )
+            outputs = tuple(
+                index
+                for index, column in enumerate(dataset[0].targets.columns)
+                if column.endswith(f"/{feedback.output}")
+            )
+            if not inputs or len(inputs) != len(outputs):
+                raise ValueError(
+                    "Feedback input and output must map to the same number of columns."
+                )
+            self.feedback_indices = (inputs, outputs)
 
     def train(self) -> TrainingResult:
         """Run the configured epoch loop and return its model and history."""
@@ -151,8 +170,8 @@ class Trainer:
                 inputs = inputs + torch.randn_like(inputs) * noise
 
             self.optimizer.zero_grad(set_to_none=True)
-            output = self.model(inputs)
-            loss = self.loss_function(output.predictions, targets)
+            predictions = self._forward(inputs)
+            loss = self.loss_function(predictions, targets)
             loss.backward()
             nn.utils.clip_grad_norm_(
                 self.model.parameters(),
@@ -186,8 +205,7 @@ class Trainer:
             for inputs, targets in data_loader:
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
-                output = self.model(inputs)
-                loss = self.loss_function(output.predictions, targets)
+                loss = self.loss_function(self._forward(inputs), targets)
                 batch_size = inputs.shape[0]
                 total_loss += float(loss) * batch_size
                 sample_count += batch_size
@@ -195,6 +213,43 @@ class Trainer:
         if sample_count == 0:
             return None
         return total_loss / sample_count
+
+    def _forward(self, inputs: Tensor) -> Tensor:
+        """Run a batch, feeding configured prior predictions into later steps."""
+
+        feedback = self.config.training.feedback
+        indices = self.feedback_indices
+        if feedback is None or indices is None:
+            return self.model(inputs).predictions
+
+        input_indices, output_indices = indices
+        normalization = self.data_loaders.normalization
+
+        def selected(values: tuple[float, ...], indices: tuple[int, ...]) -> Tensor:
+            return inputs.new_tensor(tuple(values[index] for index in indices))
+
+        input_mean = selected(normalization.inputs.mean, input_indices)
+        input_std = selected(normalization.inputs.standard_deviation, input_indices)
+        output_mean = selected(normalization.outputs.mean, output_indices)
+        output_std = selected(normalization.outputs.standard_deviation, output_indices)
+        previous_physical = inputs.new_full(
+            (inputs.shape[0], 1, len(input_indices)),
+            feedback.initial_value,
+        )
+        state = None
+        predictions = []
+        for timestep in range(inputs.shape[1]):
+            step_inputs = inputs[:, timestep : timestep + 1].clone()
+            step_inputs[:, :, input_indices] = (
+                previous_physical - input_mean
+            ) / input_std
+            output = self.model(step_inputs, state)
+            predictions.append(output.predictions)
+            state = output.state
+            previous_physical = (
+                output.predictions[:, :, output_indices] * output_std + output_mean
+            )
+        return torch.cat(predictions, dim=1)
 
 
 def _create_loss(config: LossConfig) -> nn.Module:

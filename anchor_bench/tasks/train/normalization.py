@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 import numpy as np
 from torch import Tensor, nn
+
+from anchor_bench.tasks.train.models import ModelOutput
 
 if TYPE_CHECKING:
     from anchor_bench.tasks.train.task import MappedTrainingSequence
@@ -63,24 +65,20 @@ class _PhysicalUnitModel(nn.Module):
         model: nn.Module,
         statistics: NormalizationStatistics,
     ) -> None:
-        """Retain the trained model and its fitted normalization statistics."""
+        """Retain the trained model and its normalization statistics."""
 
         super().__init__()
         self.model = model
         self.statistics = statistics
 
-    def forward(
-        self,
-        inputs: Tensor,
-        hidden: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor, state: Any = None) -> ModelOutput[Any]:
         """Run inference while keeping the caller in physical units."""
 
         normalized_inputs = self.statistics.inputs.normalize_tensor(inputs)
-        predictions, next_hidden = self.model(normalized_inputs, hidden)
-        return (
-            self.statistics.outputs.denormalize_tensor(predictions),
-            next_hidden,
+        output = self.model(normalized_inputs, state)
+        return ModelOutput(
+            predictions=self.statistics.outputs.denormalize_tensor(output.predictions),
+            state=output.state,
         )
 
 

@@ -143,6 +143,14 @@ class NormalizationConfig(StrictBaseModel):
     outputs: Literal["none", "standard"] = "standard"
 
 
+class FeedbackConfig(StrictBaseModel):
+    """Feed one predicted output feature into a later input timestep."""
+
+    input: NonEmptyString
+    output: NonEmptyString
+    initial_value: JsonNumber = 0.0
+
+
 class TrainingParametersConfig(StrictBaseModel):
     """Settings shared by all supported network architectures."""
 
@@ -156,12 +164,17 @@ class TrainingParametersConfig(StrictBaseModel):
     gradient: GradientConfig
     augmentation: AugmentationConfig
     normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
+    feedback: Optional[FeedbackConfig] = None
     checkpoint: Optional[CheckpointConfig] = None
 
     @model_validator(mode="after")
-    def reject_explicit_null_checkpoint(self) -> TrainingParametersConfig:
-        if "checkpoint" in self.model_fields_set and self.checkpoint is None:
-            raise ValueError("checkpoint cannot be null")
+    def reject_explicit_null_fields(self) -> TrainingParametersConfig:
+        for field_name in ("feedback", "checkpoint"):
+            if (
+                field_name in self.model_fields_set
+                and getattr(self, field_name) is None
+            ):
+                raise ValueError(f"{field_name} cannot be null")
         return self
 
 
@@ -297,4 +310,14 @@ class TrainingConfig(BaseConfig):
                 and getattr(self, field_name) is None
             ):
                 raise ValueError(f"{field_name} cannot be null")
+        feedback = self.training.feedback
+        if feedback is not None:
+            if feedback.input not in self.input_features:
+                raise ValueError(
+                    f"feedback input {feedback.input!r} is not an input feature"
+                )
+            if feedback.output not in self.output_features:
+                raise ValueError(
+                    f"feedback output {feedback.output!r} is not an output feature"
+                )
         return self
