@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Callable
-
-from torch import nn
+from typing import Any, Callable
 
 from anchor_bench.schema.training import ModelConfig
-from anchor_bench.tasks.train.models import GruModel
+from anchor_bench.tasks.train.models import BaseModel, GruModel
 
-MODEL_REGISTRY: dict[str, Callable[..., nn.Module]] = {
+MODEL_REGISTRY: dict[str, Callable[..., BaseModel[Any]]] = {
     "gru": GruModel,
 }
 
@@ -19,7 +17,7 @@ def get_model(
     *,
     input_size: int,
     output_size: int,
-) -> nn.Module:
+) -> BaseModel[Any]:
     """Instantiate the model selected by the training configuration."""
 
     try:

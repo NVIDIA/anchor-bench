@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from anchor_bench.tasks.train.data import ValidationDataset
+from anchor_bench.tasks.train.models import ModelOutput
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 from anchor_bench.train.utils import position_error
 from anchor_bench.train.validators.base import (
@@ -392,7 +393,7 @@ class NewtonReplayValidator(BaseValidator):
         ):
             simulated[signal][0] = frame.loc[frame.index[0], output_columns]
 
-        hidden = None
+        model_state = None
         timestamps = sequence.command.index.get_level_values("time_ns").to_numpy(
             dtype=np.int64
         )
@@ -418,7 +419,11 @@ class NewtonReplayValidator(BaseValidator):
                 ],
                 dtype=np.float32,
             )[:, np.newaxis, :]
-            predictions, hidden = self._predict(model, features, hidden)
+            predictions, model_state = self._predict(
+                model,
+                features,
+                model_state,
+            )
             effort = _route_effort(predictions, sequence.mappings)
             state = stepper.step(command=command, effort=effort, dt=dt)
             for signal, values in (
@@ -467,7 +472,7 @@ class NewtonReplayValidator(BaseValidator):
     def _predict(
         model: Any,
         features: np.ndarray,
-        hidden: Any,
+        state: Any,
     ) -> tuple[np.ndarray, Any]:
         torch = import_module("torch")
         parameters = getattr(model, "parameters", lambda: iter(()))()
@@ -475,16 +480,13 @@ class NewtonReplayValidator(BaseValidator):
         device = None if first_parameter is None else first_parameter.device
         tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
         with torch.inference_mode():
-            result = model(tensor, hidden)
-        if not isinstance(result, tuple) or len(result) != 2:
-            raise TypeError(
-                "Newton replay models must return (predictions, next_hidden)."
-            )
-        output, next_hidden = result
-        values = output[:, -1, :].detach().cpu().numpy()
+            result = model(tensor, state)
+        if not isinstance(result, ModelOutput):
+            raise TypeError("Newton replay models must return ModelOutput.")
+        values = result.predictions[:, -1, :].detach().cpu().numpy()
         if values.ndim != 2 or not np.all(np.isfinite(values)):
             raise ValueError("Newton replay model returned invalid predictions.")
-        return values, next_hidden
+        return values, result.state
 
 
 def _route_effort(

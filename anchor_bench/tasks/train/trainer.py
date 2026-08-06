@@ -144,8 +144,8 @@ class Trainer:
                 inputs = inputs + torch.randn_like(inputs) * noise
 
             self.optimizer.zero_grad(set_to_none=True)
-            predictions, _ = self.model(inputs)
-            loss = self.loss_function(predictions, targets)
+            output = self.model(inputs)
+            loss = self.loss_function(output.predictions, targets)
             loss.backward()
             nn.utils.clip_grad_norm_(
                 self.model.parameters(),
@@ -179,8 +179,8 @@ class Trainer:
             for inputs, targets in data_loader:
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
-                predictions, _ = self.model(inputs)
-                loss = self.loss_function(predictions, targets)
+                output = self.model(inputs)
+                loss = self.loss_function(output.predictions, targets)
                 batch_size = inputs.shape[0]
                 total_loss += float(loss) * batch_size
                 sample_count += batch_size

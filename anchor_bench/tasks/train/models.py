@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Generic, TypeVar
+
 import torch
 from torch import Tensor, nn
 
 from anchor_bench.schema.training import GruModelConfig
 
+StateT = TypeVar("StateT")
 
-class GruModel(nn.Module):
+
+@dataclass(frozen=True)
+class ModelOutput(Generic[StateT]):
+    """Return predictions and model-specific state from one forward pass."""
+
+    predictions: Tensor
+    state: StateT
+
+
+class BaseModel(nn.Module, ABC, Generic[StateT]):
+    """Common prediction and model-state interface for trainable networks."""
+
+    @abstractmethod
+    def forward(
+        self,
+        inputs: Tensor,
+        state: StateT | None = None,
+    ) -> ModelOutput[StateT]:
+        """Return predictions and state for a model-specific forward pass."""
+        raise NotImplementedError
+
+
+class GruModel(BaseModel[Tensor]):
     """Predict every timestep with a GRU and linear output layer."""
 
     output_scale: Tensor
@@ -41,13 +68,13 @@ class GruModel(nn.Module):
     def forward(
         self,
         inputs: Tensor,
-        hidden: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
-        """Return timestep predictions and the next recurrent hidden state."""
+        state: Tensor | None = None,
+    ) -> ModelOutput[Tensor]:
+        """Return timestep predictions and the next recurrent state."""
 
-        recurrent, next_hidden = self.recurrent(inputs, hidden)
+        recurrent, next_state = self.recurrent(inputs, state)
         predictions = self.activation(self.output(recurrent)) * self.output_scale
-        return predictions, next_hidden
+        return ModelOutput(predictions=predictions, state=next_state)
 
 
 def _activation(name: str) -> nn.Module:

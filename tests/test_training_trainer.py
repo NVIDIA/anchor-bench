@@ -11,6 +11,7 @@ from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     MODEL_REGISTRY,
     GruModel,
+    ModelOutput,
     Trainer,
     get_model,
 )
@@ -47,15 +48,19 @@ def test_gru_model_returns_one_prediction_per_timestep() -> None:
         model.output.weight.zero_()
         model.output.bias.fill_(1.0)
 
-    predictions, hidden = model(torch.zeros(5, 7, 3))
+    output = model(torch.zeros(5, 7, 3))
 
     expected = torch.tanh(torch.tensor(1.0)).item() * 2.0
-    assert predictions.shape == (5, 7, 2)
-    assert hidden.shape == (2, 5, 4)
-    assert torch.allclose(predictions, torch.full_like(predictions, expected))
-    next_predictions, next_hidden = model(torch.zeros(5, 1, 3), hidden)
-    assert next_predictions.shape == (5, 1, 2)
-    assert next_hidden.shape == hidden.shape
+    assert isinstance(output, ModelOutput)
+    assert output.predictions.shape == (5, 7, 2)
+    assert output.state.shape == (2, 5, 4)
+    assert torch.allclose(
+        output.predictions,
+        torch.full_like(output.predictions, expected),
+    )
+    next_output = model(torch.zeros(5, 1, 3), output.state)
+    assert next_output.predictions.shape == (5, 1, 2)
+    assert next_output.state.shape == output.state.shape
 
 
 @pytest.mark.parametrize(

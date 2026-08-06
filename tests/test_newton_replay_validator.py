@@ -27,7 +27,7 @@ class FakeModel:
         """Start outside evaluation mode."""
 
         self.evaluated = False
-        self.hidden_inputs: list[object] = []
+        self.state_inputs: list[object] = []
 
     def eval(self) -> None:
         """Record that validation selected evaluation mode."""
@@ -126,13 +126,13 @@ def replay_dependencies(monkeypatch: pytest.MonkeyPatch) -> object:
     def predict(
         model: FakeModel,
         features: np.ndarray,
-        hidden: int | None,
+        state: int | None,
     ) -> tuple[np.ndarray, int]:
         """Return the live feature while recording recurrent-state flow."""
 
-        model.hidden_inputs.append(hidden)
-        next_hidden = 1 if hidden is None else hidden + 1
-        return features[:, 0, :1], next_hidden
+        model.state_inputs.append(state)
+        next_state = 1 if state is None else state + 1
+        return features[:, 0, :1], next_state
 
     monkeypatch.setattr(
         NewtonReplayValidator,
@@ -231,7 +231,7 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
 
     stepper = FakeStepper.instances[0]
     assert model.evaluated
-    assert model.hidden_inputs == [None, 1]
+    assert model.state_inputs == [None, 1]
     assert stepper.residual is False
     assert stepper.substeps == 4
     assert stepper.reset_count == 1
@@ -246,7 +246,7 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
     assert result.metrics["experiment/wave/position/joint/rmse"] == 0.0
 
 
-def test_resets_hidden_state_between_experiments() -> None:
+def test_resets_model_state_between_experiments() -> None:
     """Start every validation experiment with an empty recurrent state."""
 
     model = FakeModel()
@@ -261,7 +261,7 @@ def test_resets_hidden_state_between_experiments() -> None:
         _validation_dataset(_sequence(), _sequence(experiment="step")),
     )
 
-    assert model.hidden_inputs == [None, 1, None, 1]
+    assert model.state_inputs == [None, 1, None, 1]
     assert FakeStepper.instances[0].reset_count == 2
 
 
