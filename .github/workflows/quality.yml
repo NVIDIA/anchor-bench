@@ -33,8 +33,10 @@ jobs:
         run: python -m ruff format --check
       - name: Type check
         run: python -m pyright
-      - name: Unit and integration tests
-        run: python -m pytest -o "addopts=" --cov=anchor_bench --cov-report=term-missing --cov-report=json:coverage.json
+      - name: Unit tests
+        run: python -m pytest --cov=anchor_bench --cov-report=term-missing --cov-report=json:coverage.json
+      - name: Integration tests
+        run: python -m pytest -m integration
       - name: Generate badges
         # Any file generated under badges/ is published to the badges branch.
         run: |
