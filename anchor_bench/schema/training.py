@@ -148,7 +148,6 @@ class FeedbackConfig(StrictBaseModel):
 
     input: NonEmptyString
     output: NonEmptyString
-    source: Literal["prediction"]
     initial_value: JsonNumber = 0.0
 
 

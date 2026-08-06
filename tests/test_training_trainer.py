@@ -289,7 +289,6 @@ def test_trainer_feeds_prior_prediction_into_configured_input() -> None:
     config_data["training"]["feedback"] = {
         "input": "feedback",
         "output": "target",
-        "source": "prediction",
         "initial_value": 2.0,
     }
     config = TrainingConfig.model_validate(config_data)
