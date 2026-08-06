@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -46,11 +46,15 @@ class Trainer:
         dataset: Sequence[MappedTrainingSequence],
         *,
         device: Optional[torch.device | str] = None,
+        checkpoint_directory: Optional[Path] = None,
     ) -> None:
         """Create the model, loss function, optimizer, and data loaders."""
 
         _set_seed(config.training.seed)
         self.config = config
+        self.checkpoint_directory = checkpoint_directory
+        if config.training.checkpoint is not None and checkpoint_directory is None:
+            raise ValueError("Checkpointing requires a checkpoint directory.")
         self.data_loaders = create_data_loaders(dataset, config)
         train_dataset = self.data_loaders.train.dataset
         if not isinstance(train_dataset, SequenceDataset):
@@ -93,8 +97,38 @@ class Trainer:
                 )
             )
 
+            checkpoint = self.config.training.checkpoint
+            if checkpoint is not None and epoch % checkpoint.every_n_epochs == 0:
+                self._save_checkpoint(epoch, history)
         self.model.eval()
         return TrainingResult(model=self.model, history=history)
+
+    def _save_checkpoint(
+        self,
+        epoch: int,
+        history: Sequence[EpochLoss],
+    ) -> None:
+        """Atomically save one resumable epoch checkpoint."""
+
+        if self.checkpoint_directory is None:
+            raise RuntimeError("Checkpoint directory unexpectedly disappeared.")
+        self.checkpoint_directory.mkdir(parents=True, exist_ok=True)
+        path = self.checkpoint_directory / f"epoch-{epoch:06d}.pt"
+        temporary_path = path.with_suffix(".tmp")
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": {
+                    name: tensor.detach().cpu()
+                    for name, tensor in self.model.state_dict().items()
+                },
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "history": [asdict(entry) for entry in history],
+                "config": self.config.model_dump(mode="json", exclude_none=True),
+            },
+            temporary_path,
+        )
+        temporary_path.replace(path)
 
     def _train_epoch(self) -> float:
         """Update model weights for every training batch."""

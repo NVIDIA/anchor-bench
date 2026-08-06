@@ -61,6 +61,7 @@ def test_search_trains_trials_and_retains_best_model(
 
     dataset = [_sequence("experiment", [0.0, 1.0])]
     trained_configs = []
+    checkpoint_directories = []
 
     class ScoredModel(nn.Linear):
         """Attach the sampled score to a small real module."""
@@ -76,9 +77,12 @@ def test_search_trains_trials_and_retains_best_model(
             self,
             config: TrainingConfig,
             sequences: Sequence[MappedTrainingSequence],
+            *,
+            checkpoint_directory: Path,
         ) -> None:
             trained_configs.append(config)
             self.config = config
+            checkpoint_directories.append(checkpoint_directory)
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 
         def train(self) -> TrainingResult:
@@ -94,6 +98,14 @@ def test_search_trains_trials_and_retains_best_model(
 
     assert len(trained_configs) == 3
     assert all(config.search is None for config in trained_configs)
+    assert [path.name for path in checkpoint_directories] == [
+        "trial-0000",
+        "trial-0001",
+        "trial-0002",
+    ]
+    assert all(
+        path.parent == tmp_path / "checkpoints" for path in checkpoint_directories
+    )
     assert len(result.trials) == 3
     assert result.best_value == min(trial.value for trial in result.trials)
     assert (
@@ -118,6 +130,8 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
             self,
             _config: TrainingConfig,
             sequences: Sequence[MappedTrainingSequence],
+            *,
+            checkpoint_directory: Path,
         ) -> None:
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 

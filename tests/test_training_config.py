@@ -401,3 +401,39 @@ def test_model_rejects_coerced_training_integer(valid_config_data):
 
     with pytest.raises(ValidationError):
         TrainingConfig.model_validate(data)
+
+
+def test_training_accepts_checkpoint_interval(valid_config_data) -> None:
+    """Parse an optional positive checkpoint interval."""
+
+    data = deepcopy(valid_config_data)
+    data["training"]["checkpoint"] = {"every_n_epochs": 5}
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.training.checkpoint is not None
+    assert config.training.checkpoint.every_n_epochs == 5
+
+
+@pytest.mark.parametrize("interval", [0, -1])
+def test_training_rejects_non_positive_checkpoint_interval(
+    valid_config_data,
+    interval,
+) -> None:
+    """Require checkpoint intervals to advance by at least one epoch."""
+
+    data = deepcopy(valid_config_data)
+    data["training"]["checkpoint"] = {"every_n_epochs": interval}
+
+    with pytest.raises(ValidationError):
+        TrainingConfig.model_validate(data)
+
+
+def test_training_rejects_null_checkpoint(valid_config_data) -> None:
+    """Require checkpointing to be omitted rather than null."""
+
+    data = deepcopy(valid_config_data)
+    data["training"]["checkpoint"] = None
+
+    with pytest.raises(ValidationError, match="checkpoint cannot be null"):
+        TrainingConfig.model_validate(data)

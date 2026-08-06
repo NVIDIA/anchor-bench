@@ -132,6 +132,10 @@ class AugmentationConfig(StrictBaseModel):
     input_noise_std: NonNegativeNumber
 
 
+class CheckpointConfig(StrictBaseModel):
+    every_n_epochs: PositiveInteger
+
+
 class TrainingParametersConfig(StrictBaseModel):
     """Settings shared by all supported network architectures."""
 
@@ -144,6 +148,13 @@ class TrainingParametersConfig(StrictBaseModel):
     loss: LossConfig
     gradient: GradientConfig
     augmentation: AugmentationConfig
+    checkpoint: Optional[CheckpointConfig] = None
+
+    @model_validator(mode="after")
+    def reject_explicit_null_checkpoint(self) -> TrainingParametersConfig:
+        if "checkpoint" in self.model_fields_set and self.checkpoint is None:
+            raise ValueError("checkpoint cannot be null")
+        return self
 
 
 class SearchObjectiveConfig(StrictBaseModel):
