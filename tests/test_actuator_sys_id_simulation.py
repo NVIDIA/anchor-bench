@@ -6,6 +6,7 @@ from typing import cast
 import newton
 import numpy as np
 
+from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import simulation as simulation_module
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
@@ -181,3 +182,52 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
         "iterations": 10,
         "ls_iterations": 4,
     }
+
+
+def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch):
+    class FakeArray:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=np.float32)
+
+        def assign(self, values):
+            self.values = np.asarray(values, dtype=np.float32)
+
+    class FakeSolver:
+        def __init__(self):
+            self.reset_states = []
+
+        def reset(self, state):
+            self.reset_states.append(state)
+            state.joint_q.assign([-1.0, -1.0])
+            state.joint_qd.assign([1.0, 1.0])
+
+    state_in = SimpleNamespace(
+        joint_q=FakeArray([0.0, 0.0]),
+        joint_qd=FakeArray([0.0, 0.0]),
+    )
+    state_out = SimpleNamespace(
+        joint_q=FakeArray([0.0, 0.0]),
+        joint_qd=FakeArray([0.0, 0.0]),
+    )
+    solver = FakeSolver()
+    context = SimpleNamespace(
+        model=object(),
+        solver=solver,
+        state_in=state_in,
+        state_out=state_out,
+    )
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator._simulation_context = cast(NewtonSimulationContext, context)
+    evaluator._base_q = np.asarray([0.0, 0.0], dtype=np.float32)
+    evaluator._base_qd = np.asarray([0.0, 0.0], dtype=np.float32)
+    evaluator._joint_q_indices = np.asarray([[0], [1]])
+    evaluator._joint_dof_indices = np.asarray([[0], [1]])
+    monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
+
+    evaluator._reset(np.asarray([0.75], dtype=np.float32))
+
+    assert solver.reset_states == [state_in]
+    np.testing.assert_allclose(state_in.joint_q.values, [0.75, 0.75])
+    np.testing.assert_allclose(state_out.joint_q.values, [0.75, 0.75])
+    np.testing.assert_allclose(state_in.joint_qd.values, [0.0, 0.0])
+    np.testing.assert_allclose(state_out.joint_qd.values, [0.0, 0.0])

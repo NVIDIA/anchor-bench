@@ -201,6 +201,7 @@ class NewtonPopulationEvaluator:
         joint_q[self._joint_q_indices] = measured_position[np.newaxis, :]
         joint_qd[self._joint_dof_indices] = 0.0
         context = self._simulation_context
+        context.solver.reset(context.state_in)
         for state in (context.state_in, context.state_out):
             state_joint_q = state.joint_q
             state_joint_qd = state.joint_qd
@@ -214,9 +215,6 @@ class NewtonPopulationEvaluator:
                 state_joint_qd,
                 state,
             )
-        reset = getattr(context.solver, "reset", None)
-        if callable(reset):
-            reset(context.state_in)
 
     def _set_targets(self, command: np.ndarray) -> None:
         targets = np.array(self._base_targets, copy=True)
