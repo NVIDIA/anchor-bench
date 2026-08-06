@@ -14,6 +14,7 @@ from anchor_bench.tasks.train import (
     MappedTrainingSequence,
     TrainingResult,
     TrainingTask,
+    fit_normalization,
 )
 from tests.test_training_data import _config_data, _sequence
 
@@ -60,6 +61,11 @@ def test_search_trains_trials_and_retains_best_model(
     """Revalidate sampled configs and retain the lowest validation-loss run."""
 
     dataset = [_sequence("experiment", [0.0, 1.0])]
+    normalization = fit_normalization(
+        dataset,
+        inputs="none",
+        outputs="none",
+    )
     trained_configs = []
     checkpoint_directories = []
 
@@ -90,6 +96,7 @@ def test_search_trains_trials_and_retains_best_model(
             return TrainingResult(
                 model=ScoredModel(value),
                 history=[EpochLoss(epoch=1, training=value + 1.0, validation=value)],
+                normalization=normalization,
             )
 
     monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
@@ -123,6 +130,11 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
     """Allow a finite trial to win after the first trial returns NaN."""
 
     dataset = [_sequence("experiment", [0.0, 1.0])]
+    normalization = fit_normalization(
+        dataset,
+        inputs="none",
+        outputs="none",
+    )
     validation_losses = iter([float("nan"), 2.0, 1.0])
 
     class StubTrainer:
@@ -140,6 +152,7 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
             return TrainingResult(
                 model=nn.Linear(1, 1),
                 history=[EpochLoss(epoch=1, training=1.0, validation=value)],
+                normalization=normalization,
             )
 
     monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
@@ -168,9 +181,15 @@ def test_search_rejects_unknown_parameter_path(tmp_path: Path) -> None:
 def test_search_requires_validation_loss() -> None:
     """Reject completed trials without a held-out objective value."""
 
+    sequences = [_sequence("experiment", [0.0, 1.0])]
     result = TrainingResult(
         model=nn.Linear(1, 1),
         history=[EpochLoss(epoch=1, training=1.0, validation=None)],
+        normalization=fit_normalization(
+            sequences,
+            inputs="none",
+            outputs="none",
+        ),
     )
 
     with pytest.raises(ValueError, match="requires validation windows"):

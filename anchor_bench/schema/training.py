@@ -136,6 +136,13 @@ class CheckpointConfig(StrictBaseModel):
     every_n_epochs: PositiveInteger
 
 
+class NormalizationConfig(StrictBaseModel):
+    """Select normalization independently for model inputs and outputs."""
+
+    inputs: Literal["none", "standard"] = "standard"
+    outputs: Literal["none", "standard"] = "standard"
+
+
 class TrainingParametersConfig(StrictBaseModel):
     """Settings shared by all supported network architectures."""
 
@@ -148,6 +155,7 @@ class TrainingParametersConfig(StrictBaseModel):
     loss: LossConfig
     gradient: GradientConfig
     augmentation: AugmentationConfig
+    normalization: NormalizationConfig = Field(default_factory=NormalizationConfig)
     checkpoint: Optional[CheckpointConfig] = None
 
     @model_validator(mode="after")

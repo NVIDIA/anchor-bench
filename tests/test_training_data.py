@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 import torch
@@ -68,6 +69,7 @@ def _config_data() -> dict[str, Any]:
             "loss": {"type": "mse"},
             "gradient": {"clip_norm": 1.0},
             "augmentation": {"input_noise_std": 0.0},
+            "normalization": {"inputs": "none", "outputs": "none"},
         },
         "validation": {
             "validators": [
@@ -163,6 +165,51 @@ def test_data_loaders_split_before_windowing_without_timestep_leakage() -> None:
     inputs, targets = next(iter(loaders.train))
     assert inputs.shape == (3, 2, 1)
     assert targets.shape == (3, 2, 1)
+
+
+def test_data_loaders_fit_standard_normalization_on_training_split_only() -> None:
+    """Fit training statistics and retain held-out sequences in physical units."""
+
+    config_data = _config_data()
+    config_data["training"]["normalization"] = {
+        "inputs": "standard",
+        "outputs": "standard",
+    }
+    config = TrainingConfig.model_validate(config_data)
+    loaders = create_data_loaders(
+        [_sequence("experiment", [float(value) for value in range(8)])],
+        config,
+    )
+
+    expected_standard_deviation = float(np.std(np.arange(6, dtype=float)))
+    assert loaders.normalization.inputs.mean == (2.5,)
+    assert loaders.normalization.inputs.standard_deviation == pytest.approx(
+        (expected_standard_deviation,)
+    )
+    assert loaders.normalization.outputs.mean == (1002.5,)
+    assert loaders.normalization.outputs.standard_deviation == pytest.approx(
+        (expected_standard_deviation,)
+    )
+
+    train_dataset = loaders.train.dataset
+    validation_dataset = loaders.validation.dataset
+    assert isinstance(train_dataset, SequenceDataset)
+    assert isinstance(validation_dataset, SequenceDataset)
+    train_inputs, train_targets = train_dataset[0]
+    validation_inputs, validation_targets = validation_dataset[0]
+    assert train_inputs[:, 0].tolist() == pytest.approx(
+        [(value - 2.5) / expected_standard_deviation for value in (0.0, 1.0)]
+    )
+    assert train_targets[:, 0].tolist() == pytest.approx(
+        [(value - 1002.5) / expected_standard_deviation for value in (1000.0, 1001.0)]
+    )
+    assert validation_inputs[:, 0].tolist() == pytest.approx(
+        [(value - 2.5) / expected_standard_deviation for value in (6.0, 7.0)]
+    )
+    assert validation_targets[:, 0].tolist() == pytest.approx(
+        [(value - 1002.5) / expected_standard_deviation for value in (1006.0, 1007.0)]
+    )
+    assert loaders.validation_sequences[0].inputs.iloc[:, 0].tolist() == [6.0, 7.0]
 
 
 def test_sequence_dataset_rejects_inconsistent_tensor_widths() -> None:
