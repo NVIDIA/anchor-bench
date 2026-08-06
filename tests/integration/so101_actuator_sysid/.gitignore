@@ -1,0 +1,9 @@
+.completed
+best_params.yaml
+optimization_log.csv
+run_summary.yaml
+identified.usda
+!so101.usd
+!trajectories/
+!trajectories/train-random-waypoints.parquet
+!trajectories/heldout-square-pattern.parquet
