@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from anchor_bench.tasks.train.task import MappedTrainingSequence
+from anchor_bench.train.utils import position_error
 from anchor_bench.train.validators.base import (
     BaseValidator,
     ValidationResult,
@@ -439,7 +440,7 @@ class NewtonReplayValidator(BaseValidator):
             elif feature == "command_q":
                 value = command[joint]
             elif feature == "position_error":
-                value = command[joint] - state.position[joint]
+                value = position_error(command[joint], state.position[joint])
             elif feature == "solver_pd":
                 value = stepper.solver_pd(joint, command[joint], state)
             else:

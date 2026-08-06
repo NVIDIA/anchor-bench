@@ -47,6 +47,15 @@ def save_training_artifacts(
             "format_version": 1,
             "model_type": config.model.type,
             "seed": config.training.seed,
+            "input_features": [
+                {
+                    "name": feature,
+                    "preprocessor": preprocessor,
+                }
+                for feature, preprocessor in config.input_features.items()
+            ],
+            "output_feature": config.output_features,
+            "simulation": config.simulation.model_dump(mode="json"),
             "mappings": _feature_layouts(sequences),
         },
     )
