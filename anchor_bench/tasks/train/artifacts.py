@@ -38,6 +38,10 @@ def save_training_artifacts(
         [asdict(entry) for entry in result.history],
     )
     write_yaml(
+        output_folder / "normalization.yaml",
+        asdict(result.normalization),
+    )
+    write_yaml(
         output_folder / "validation.yaml",
         [asdict(validation_result) for validation_result in validation_results],
     )

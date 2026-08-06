@@ -10,6 +10,7 @@ from anchor_bench.tasks.train import (
     SearchResult,
     SearchTrial,
     TrainingResult,
+    fit_normalization,
     save_training_artifacts,
 )
 from anchor_bench.train.validators import ValidationResult
@@ -23,22 +24,28 @@ def test_save_training_artifacts_writes_portable_run(
 
     config = TrainingConfig.model_validate(_config_data())
     model = GruModel(config.model, input_size=1, output_size=1)
+    sequences = [
+        _sequence("first", [0.0, 1.0]),
+        _sequence("second", [2.0, 3.0]),
+    ]
     result = TrainingResult(
         model=model,
         history=[
             EpochLoss(epoch=1, training=2.0, validation=3.0),
             EpochLoss(epoch=2, training=1.0, validation=None),
         ],
+        normalization=fit_normalization(
+            sequences,
+            inputs=config.training.normalization.inputs,
+            outputs=config.training.normalization.outputs,
+        ),
     )
 
     output_folder = tmp_path / "artifacts"
     output_folder.mkdir()
     saved_output_folder = save_training_artifacts(
         result,
-        [
-            _sequence("first", [0.0, 1.0]),
-            _sequence("second", [2.0, 3.0]),
-        ],
+        sequences,
         [
             ValidationResult(
                 name="held-out loss",
@@ -62,6 +69,18 @@ def test_save_training_artifacts_writes_portable_run(
             "metrics": {"loss": 0.25},
         }
     ]
+    assert yaml.safe_load((output_folder / "normalization.yaml").read_text()) == {
+        "inputs": {
+            "method": "none",
+            "mean": [0.0],
+            "standard_deviation": [1.0],
+        },
+        "outputs": {
+            "method": "none",
+            "mean": [0.0],
+            "standard_deviation": [1.0],
+        },
+    }
     assert yaml.safe_load((output_folder / "metadata.yaml").read_text()) == {
         "format_version": 1,
         "model_type": "gru",
@@ -104,12 +123,17 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
     """Persist the objective, trials, parameters, and winning configuration."""
 
     config = TrainingConfig.model_validate(_config_data())
+    sequences = [_sequence("first", [0.0, 1.0])]
     model = GruModel(config.model, input_size=1, output_size=1)
     training_result = TrainingResult(
         model=model,
         history=[EpochLoss(epoch=1, training=2.0, validation=1.0)],
+        normalization=fit_normalization(
+            sequences,
+            inputs=config.training.normalization.inputs,
+            outputs=config.training.normalization.outputs,
+        ),
     )
-    sequences = [_sequence("first", [0.0, 1.0])]
     search_result = SearchResult(
         training_result=training_result,
         best_config=config,

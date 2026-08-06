@@ -184,7 +184,10 @@ def test_training_task_runs_loader_data_processor_then_mapping(
             """Record training execution."""
 
             events.append("train")
-            return SimpleNamespace(model=trained_model)
+            return SimpleNamespace(
+                model=trained_model,
+                normalization=SimpleNamespace(wrap=lambda model: model),
+            )
 
     def validate(
         validators: object,
@@ -323,7 +326,10 @@ def test_training_task_initializes_simulation_for_validators(
         def train(self) -> SimpleNamespace:
             """Return an inert training result."""
 
-            return SimpleNamespace(model=object())
+            return SimpleNamespace(
+                model=object(),
+                normalization=SimpleNamespace(wrap=lambda model: model),
+            )
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.trainer.Trainer",

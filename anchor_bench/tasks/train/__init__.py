@@ -11,6 +11,11 @@ from anchor_bench.tasks.train.data import (
 from anchor_bench.tasks.train.data_processor_runner import DataProcessorRunner
 from anchor_bench.tasks.train.model_registry import MODEL_REGISTRY, get_model
 from anchor_bench.tasks.train.models import BaseModel, GruModel, ModelOutput
+from anchor_bench.tasks.train.normalization import (
+    FeatureNormalization,
+    NormalizationStatistics,
+    fit_normalization,
+)
 from anchor_bench.tasks.train.task import (
     EntityMapping,
     MappedTrainingSequence,
@@ -31,9 +36,11 @@ __all__ = [
     "DataProcessorRunner",
     "EntityMapping",
     "EpochLoss",
+    "FeatureNormalization",
     "GruModel",
     "MappedTrainingSequence",
     "ModelOutput",
+    "NormalizationStatistics",
     "SearchResult",
     "SearchTrial",
     "SequenceDataset",
@@ -45,6 +52,7 @@ __all__ = [
     "ValidatorRunner",
     "create_data_loaders",
     "create_validation_dataset",
+    "fit_normalization",
     "get_model",
     "save_training_artifacts",
 ]

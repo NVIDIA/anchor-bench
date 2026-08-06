@@ -12,6 +12,11 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
 from anchor_bench.schema.training import TrainingConfig
+from anchor_bench.tasks.train.normalization import (
+    FeatureNormalization,
+    NormalizationStatistics,
+    fit_normalization,
+)
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 
 
@@ -24,6 +29,8 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
         *,
         window_length: int,
         stride: int,
+        input_normalization: FeatureNormalization | None = None,
+        target_normalization: FeatureNormalization | None = None,
     ) -> None:
         """Convert mapped sequences to tensors and index their valid windows."""
 
@@ -49,12 +56,14 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
                     f"{expected_shape[0]}->{expected_shape[1]}."
                 )
 
-            inputs = torch.from_numpy(
-                sequence.inputs.to_numpy(dtype=np.float32, copy=True)
-            )
-            targets = torch.from_numpy(
-                sequence.targets.to_numpy(dtype=np.float32, copy=True)
-            )
+            input_values = sequence.inputs.to_numpy(dtype=np.float64, copy=True)
+            target_values = sequence.targets.to_numpy(dtype=np.float64, copy=True)
+            if input_normalization is not None:
+                input_values = input_normalization.normalize_array(input_values)
+            if target_normalization is not None:
+                target_values = target_normalization.normalize_array(target_values)
+            inputs = torch.from_numpy(input_values.astype(np.float32, copy=False))
+            targets = torch.from_numpy(target_values.astype(np.float32, copy=False))
             sequence_index = len(self._sequences)
             self._sequences.append((inputs, targets))
             self._window_indices.extend(
@@ -90,6 +99,7 @@ class TrainingDataLoaders:
     train: DataLoader[tuple[Tensor, Tensor]]
     validation: DataLoader[tuple[Tensor, Tensor]]
     validation_sequences: tuple[MappedTrainingSequence, ...]
+    normalization: NormalizationStatistics
 
 
 @dataclass(frozen=True)
@@ -139,9 +149,16 @@ def create_data_loaders(
         sequences,
         validation_ratio=float(training.validation_ratio),
     )
+    normalization = fit_normalization(
+        train_sequences,
+        inputs=training.normalization.inputs,
+        outputs=training.normalization.outputs,
+    )
     dataset_arguments = {
         "window_length": training.sequence.length,
         "stride": training.sequence.stride,
+        "input_normalization": normalization.inputs,
+        "target_normalization": normalization.outputs,
     }
     train_dataset = SequenceDataset(train_sequences, **dataset_arguments)
     validation_dataset = SequenceDataset(validation_sequences, **dataset_arguments)
@@ -160,6 +177,7 @@ def create_data_loaders(
             shuffle=False,
         ),
         validation_sequences=tuple(validation_sequences),
+        normalization=normalization,
     )
 
 
