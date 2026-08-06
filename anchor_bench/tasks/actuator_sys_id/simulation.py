@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isclose
 from typing import ClassVar, Dict, List, Sequence, Tuple
 
 import newton
@@ -36,6 +37,12 @@ class NewtonPopulationEvaluator:
         self.num_envs = config.num_envs
         self.physics_dt = 1.0 / config.simulation.physics_freq
         self.control_dt = 1.0 / config.simulation.control_freq
+        dataset_dt = float(config.dataset.resampling.dt)
+        if not isclose(dataset_dt, self.control_dt, rel_tol=1.0e-9, abs_tol=1.0e-12):
+            raise ValueError(
+                "dataset resampling dt must match the simulation control timestep: "
+                f"{dataset_dt} != {self.control_dt}"
+            )
         self.control_substeps = (
             config.simulation.physics_freq // config.simulation.control_freq
         )
@@ -167,24 +174,26 @@ class NewtonPopulationEvaluator:
     def _evaluate_trajectory(self, trajectory: Trajectory) -> np.ndarray:
         if trajectory.joint_names != self.joint_names:
             raise ValueError("trajectory joints do not match the Newton evaluator")
+        if trajectory.measured_position.shape[0] < 2:
+            raise ValueError("trajectory must contain at least two samples")
         self._reset(trajectory.measured_position[0])
         first_command = trajectory.commanded_position[0]
         for _ in range(self.buffer_steps):
             self._set_targets(first_command)
             self._step_control_interval()
 
+        commanded = np.asarray(trajectory.commanded_position, dtype=np.float32)
+        sample_indices = np.arange(commanded.shape[0], dtype=np.int64)[:, np.newaxis]
+        source_indices = np.maximum(
+            0,
+            sample_indices - self.delay_steps[np.newaxis, :],
+        )
+        delayed_commands = np.take_along_axis(commanded, source_indices, axis=0)
+
         scores = np.zeros(self.num_envs, dtype=np.float64)
-        for sample_index, measured in enumerate(trajectory.measured_position):
-            delayed = np.asarray(
-                [
-                    trajectory.commanded_position[max(0, sample_index - int(delay))][
-                        joint_index
-                    ]
-                    for joint_index, delay in enumerate(self.delay_steps)
-                ],
-                dtype=np.float32,
-            )
-            self._set_targets(delayed)
+        measured_positions = trajectory.measured_position[1:]
+        for sample_index, measured in enumerate(measured_positions):
+            self._set_targets(delayed_commands[sample_index])
             self._step_control_interval()
             state_joint_q = self._simulation_context.state_in.joint_q
             if state_joint_q is None:
@@ -193,7 +202,7 @@ class NewtonPopulationEvaluator:
             simulated = joint_q[self._joint_q_indices]
             error = simulated - measured[np.newaxis, :]
             scores += np.mean(np.square(error), axis=1)
-        return scores / trajectory.measured_position.shape[0]
+        return scores / measured_positions.shape[0]
 
     def _reset(self, measured_position: np.ndarray) -> None:
         joint_q = np.array(self._base_q, copy=True)
@@ -311,6 +320,8 @@ def _model_joint_indices(
             if q_starts[joint_index + 1] - q_starts[joint_index] != 1:
                 raise ValueError(f"joint {joint_name!r} is not scalar")
             if dof_starts[joint_index + 1] - dof_starts[joint_index] != 1:
+                raise ValueError(f"joint {joint_name!r} is not scalar")
+            if target_starts[joint_index + 1] - target_starts[joint_index] != 1:
                 raise ValueError(f"joint {joint_name!r} is not scalar")
             q_indices[world_index, local_index] = q_starts[joint_index]
             dof_indices[world_index, local_index] = dof_starts[joint_index]

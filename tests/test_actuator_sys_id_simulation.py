@@ -5,10 +5,12 @@ from typing import cast
 
 import newton
 import numpy as np
+import pytest
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import simulation as simulation_module
+from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import (
     NewtonPopulationEvaluator,
@@ -16,7 +18,7 @@ from anchor_bench.tasks.actuator_sys_id.simulation import (
 )
 
 
-def _config(tmp_path):
+def _config(tmp_path, *, dataset_dt=0.005):
     return ActuatorSysIdConfig.model_validate(
         {
             "type": "actuator_sys_id",
@@ -66,7 +68,7 @@ def _config(tmp_path):
             "dataset": {
                 "type": "parquet",
                 "source": "actuator.parquet",
-                "resampling": {"type": "uniform", "dt": 0.005},
+                "resampling": {"type": "uniform", "dt": dataset_dt},
             },
         }
     )
@@ -87,7 +89,7 @@ def test_newton_joint_mapping_separates_state_and_target_layouts():
             joint_world=FakeArray([0, 0, 1, 1]),
             joint_q_start=FakeArray([0, 7, 8, 15, 16]),
             joint_qd_start=FakeArray([0, 6, 7, 13, 14]),
-            joint_target_q_start=FakeArray([0, 6, 7, 13, 14]),
+            joint_target_q_start=FakeArray([0, 5, 6, 11, 12]),
         ),
     )
 
@@ -99,7 +101,37 @@ def test_newton_joint_mapping_separates_state_and_target_layouts():
 
     np.testing.assert_array_equal(q_indices, [[7], [15]])
     np.testing.assert_array_equal(dof_indices, [[6], [13]])
-    np.testing.assert_array_equal(target_indices, [[6], [13]])
+    np.testing.assert_array_equal(target_indices, [[5], [11]])
+
+
+def test_newton_joint_mapping_rejects_non_scalar_targets():
+    class FakeArray:
+        def __init__(self, values):
+            self.values = np.asarray(values)
+
+        def numpy(self):
+            return self.values
+
+    model = cast(
+        "newton.Model",
+        SimpleNamespace(
+            joint_label=["root", "hip", "root", "hip"],
+            joint_world=FakeArray([0, 0, 1, 1]),
+            joint_q_start=FakeArray([0, 7, 8, 15, 16]),
+            joint_qd_start=FakeArray([0, 6, 7, 13, 14]),
+            joint_target_q_start=FakeArray([0, 5, 7, 12, 14]),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="joint 'hip' is not scalar"):
+        _model_joint_indices(model, ["hip"], 2)
+
+
+def test_newton_evaluator_rejects_dataset_timestep_mismatch(tmp_path):
+    config = _config(tmp_path, dataset_dt=0.01)
+
+    with pytest.raises(ValueError, match="resampling dt must match"):
+        NewtonPopulationEvaluator(config, create_parameter_space(config))
 
 
 def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
@@ -168,12 +200,8 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
     evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
 
     assert evaluator._simulation_context is context
-    assert not hasattr(evaluator, "_model")
-    assert not hasattr(evaluator, "_solver")
-    assert not hasattr(evaluator, "_state_in")
-    assert not hasattr(evaluator, "_state_out")
-    assert not hasattr(evaluator, "_control")
-    assert not hasattr(evaluator, "_contacts")
+    assert evaluator._simulation_context.control is context.control
+    np.testing.assert_allclose(evaluator._base_targets, [0.0, 0.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
     assert context.solver_options == {
@@ -222,12 +250,164 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
     evaluator._base_qd = np.asarray([0.0, 0.0], dtype=np.float32)
     evaluator._joint_q_indices = np.asarray([[0], [1]])
     evaluator._joint_dof_indices = np.asarray([[0], [1]])
-    monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
+    fk_calls = []
+    monkeypatch.setattr(
+        simulation_module.newton,
+        "eval_fk",
+        lambda *args: fk_calls.append(args),
+    )
 
     evaluator._reset(np.asarray([0.75], dtype=np.float32))
 
     assert solver.reset_states == [state_in]
+    assert fk_calls == [
+        (context.model, state_in.joint_q, state_in.joint_qd, state_in),
+        (context.model, state_out.joint_q, state_out.joint_qd, state_out),
+    ]
     np.testing.assert_allclose(state_in.joint_q.values, [0.75, 0.75])
     np.testing.assert_allclose(state_out.joint_q.values, [0.75, 0.75])
     np.testing.assert_allclose(state_in.joint_qd.values, [0.0, 0.0])
     np.testing.assert_allclose(state_out.joint_qd.values, [0.0, 0.0])
+
+
+def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
+    monkeypatch,
+):
+    class FakeArray:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=np.float32)
+
+        def numpy(self):
+            return self.values
+
+        def assign(self, values):
+            self.values = np.asarray(values, dtype=np.float32)
+
+    class FakeSolver:
+        def __init__(self):
+            self.reset_states = []
+            self.changed_flags = []
+
+        def reset(self, state):
+            self.reset_states.append(state)
+
+        def notify_model_changed(self, flags):
+            self.changed_flags.append(flags)
+
+    class FakeContext:
+        def __init__(self):
+            self.model = SimpleNamespace(
+                joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_target_ke=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_target_kd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_armature=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_friction=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_damping=FakeArray([0.0, 0.0, 0.0, 0.0]),
+            )
+            self.state_in = SimpleNamespace(
+                joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+            )
+            self.state_out = SimpleNamespace(
+                joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+            )
+            self.control = SimpleNamespace(
+                joint_target_pos=FakeArray([-9.0] * 6),
+            )
+            self.solver = FakeSolver()
+            self.step_dts = []
+            self.target_history = []
+            self._simulated_positions = iter(
+                (
+                    [2.0, 3.0, 3.0, 4.0],
+                    [3.0, 4.0, 4.0, 5.0],
+                )
+            )
+
+        def step(self, *, dt):
+            self.step_dts.append(dt)
+            self.target_history.append(
+                np.array(self.control.joint_target_pos.numpy(), copy=True)
+            )
+            if len(self.step_dts) % 2 == 0:
+                self.state_in.joint_q.assign(next(self._simulated_positions))
+
+    context = FakeContext()
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.joint_names = ["hip", "knee"]
+    evaluator.num_envs = 2
+    evaluator.physics_dt = 0.001
+    evaluator.control_substeps = 2
+    evaluator.buffer_steps = 0
+    evaluator.delay_steps = np.asarray([0, 1], dtype=np.int64)
+    evaluator._simulation_context = cast(NewtonSimulationContext, context)
+    evaluator._joint_q_indices = np.asarray([[0, 1], [2, 3]])
+    evaluator._joint_dof_indices = np.asarray([[0, 1], [2, 3]])
+    evaluator._joint_target_indices = np.asarray([[1, 2], [4, 5]])
+    evaluator._base_q = np.zeros(4, dtype=np.float32)
+    evaluator._base_qd = np.zeros(4, dtype=np.float32)
+    evaluator._base_targets = np.full(6, -9.0, dtype=np.float32)
+    monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
+
+    population: list[Candidate] = [
+        {
+            "hip": {
+                "stiffness": 1.0,
+                "damping": 2.0,
+                "armature": 3.0,
+                "dry_friction": 4.0,
+                "viscous_friction": 5.0,
+            },
+            "knee": {
+                "stiffness": 11.0,
+                "damping": 12.0,
+                "armature": 13.0,
+                "dry_friction": 14.0,
+                "viscous_friction": 15.0,
+            },
+        },
+        {
+            "hip": {
+                "stiffness": 21.0,
+                "damping": 22.0,
+                "armature": 23.0,
+                "dry_friction": 24.0,
+                "viscous_friction": 25.0,
+            },
+            "knee": {
+                "stiffness": 31.0,
+                "damping": 32.0,
+                "armature": 33.0,
+                "dry_friction": 34.0,
+                "viscous_friction": 35.0,
+            },
+        },
+    ]
+    trajectory = Trajectory(
+        experiment=object(),
+        joint_names=["hip", "knee"],
+        commanded_position=np.asarray([[10.0, 100.0], [20.0, 200.0], [30.0, 300.0]]),
+        measured_position=np.asarray([[1.0, 2.0], [2.0, 3.0], [3.0, 4.0]]),
+    )
+
+    scores = evaluator.evaluate(population, [trajectory])
+
+    np.testing.assert_allclose(scores, [0.0, 1.0])
+    np.testing.assert_allclose(context.model.joint_target_ke.values, [1, 11, 21, 31])
+    np.testing.assert_allclose(context.model.joint_target_kd.values, [2, 12, 22, 32])
+    np.testing.assert_allclose(context.model.joint_armature.values, [3, 13, 23, 33])
+    np.testing.assert_allclose(context.model.joint_friction.values, [4, 14, 24, 34])
+    np.testing.assert_allclose(context.model.joint_damping.values, [5, 15, 25, 35])
+    expected_targets = np.asarray(
+        [
+            [-9.0, 10.0, 100.0, -9.0, 10.0, 100.0],
+            [-9.0, 20.0, 100.0, -9.0, 20.0, 100.0],
+        ]
+    )
+    np.testing.assert_allclose(context.target_history[::2], expected_targets)
+    np.testing.assert_allclose(context.target_history[1::2], expected_targets)
+    np.testing.assert_allclose(context.step_dts, [0.001] * 4)
+    assert context.solver.reset_states == [context.state_in]
+    assert len(context.solver.changed_flags) == 1
