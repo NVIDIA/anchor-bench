@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -91,6 +92,12 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
         stop = start + self._window_length
         return inputs[start:stop], targets[start:stop]
 
+    @property
+    def sequences(self) -> tuple[tuple[Tensor, Tensor], ...]:
+        """Return complete normalized sequences for stateful training."""
+
+        return tuple(self._sequences)
+
 
 @dataclass(frozen=True)
 class TrainingDataLoaders:
@@ -148,6 +155,7 @@ def create_data_loaders(
     train_sequences, validation_sequences = _split_sequences(
         sequences,
         validation_ratio=float(training.validation_ratio),
+        seed=training.seed,
     )
     normalization = fit_normalization(
         train_sequences,
@@ -156,20 +164,18 @@ def create_data_loaders(
     )
     dataset_arguments = {
         "window_length": training.sequence.length,
-        "stride": training.sequence.stride,
+        "stride": training.sequence.length,
         "input_normalization": normalization.inputs,
         "target_normalization": normalization.outputs,
     }
     train_dataset = SequenceDataset(train_sequences, **dataset_arguments)
     validation_dataset = SequenceDataset(validation_sequences, **dataset_arguments)
-    generator = torch.Generator().manual_seed(training.seed)
 
     return TrainingDataLoaders(
         train=DataLoader(
             train_dataset,
             batch_size=training.batch_size,
-            shuffle=len(train_dataset) > 0,
-            generator=generator,
+            shuffle=False,
         ),
         validation=DataLoader(
             validation_dataset,
@@ -185,29 +191,27 @@ def _split_sequences(
     sequences: Sequence[MappedTrainingSequence],
     *,
     validation_ratio: float,
+    seed: int,
 ) -> tuple[list[MappedTrainingSequence], list[MappedTrainingSequence]]:
-    """Split each sequence before windowing so train and validation never overlap."""
+    """Hold out complete experiments so recurrent trajectories never leak."""
 
-    train_sequences = []
-    validation_sequences = []
-    for sequence in sequences:
-        split = int(len(sequence.inputs) * (1.0 - validation_ratio))
-        train_sequences.append(_slice_sequence(sequence, stop=split))
-        validation_sequences.append(_slice_sequence(sequence, start=split))
-    return train_sequences, validation_sequences
-
-
-def _slice_sequence(
-    sequence: MappedTrainingSequence,
-    *,
-    start: int | None = None,
-    stop: int | None = None,
-) -> MappedTrainingSequence:
-    """Create a mapped sequence view over one contiguous timestep range."""
-
-    return MappedTrainingSequence(
-        experiment=sequence.experiment,
-        name=sequence.name,
-        inputs=sequence.inputs.iloc[start:stop],
-        targets=sequence.targets.iloc[start:stop],
-    )
+    experiments = list(dict.fromkeys(sequence.experiment for sequence in sequences))
+    if validation_ratio == 0.0:
+        return list(sequences), []
+    if len(experiments) < 2:
+        return list(sequences), []
+    random.Random(seed).shuffle(experiments)
+    validation_count = max(1, round(len(experiments) * validation_ratio))
+    validation_count = min(validation_count, len(experiments) - 1)
+    validation_experiments = set(experiments[:validation_count])
+    training = [
+        sequence
+        for sequence in sequences
+        if sequence.experiment not in validation_experiments
+    ]
+    validation = [
+        sequence
+        for sequence in sequences
+        if sequence.experiment in validation_experiments
+    ]
+    return training, validation

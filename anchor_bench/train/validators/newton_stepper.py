@@ -40,23 +40,29 @@ class _NewtonStepper:
         q_starts = model.joint_q_start.numpy()
         dof_starts = model.joint_qd_start.numpy()
         target_starts = model.joint_target_q_start.numpy()
-        self._indices = {
-            joint: (
+        self._indices = {}
+        self._model_indices = {}
+        for index, label in enumerate(model.joint_label):
+            if not (
+                int(q_starts[index + 1] - q_starts[index]) == 1
+                and int(dof_starts[index + 1] - dof_starts[index]) == 1
+                and int(target_starts[index + 1] - target_starts[index]) == 1
+            ):
+                continue
+            joint = label
+            if joint in self._indices:
+                raise ValueError(f"Newton model has duplicate scalar joint {joint!r}.")
+            self._indices[joint] = (
                 int(q_starts[index]),
                 int(dof_starts[index]),
                 int(target_starts[index]),
             )
-            for index, joint in enumerate(model.joint_label)
-            if int(q_starts[index + 1] - q_starts[index]) == 1
-            and int(dof_starts[index + 1] - dof_starts[index]) == 1
-            and int(target_starts[index + 1] - target_starts[index]) == 1
-        }
+            self._model_indices[joint] = index
         missing = sorted(set(output_joints) - self._indices.keys())
         if missing:
             raise ValueError(
                 "Newton model is missing scalar joints: " + ", ".join(missing)
             )
-
         solver_type = getattr(getattr(newton, "solvers", None), "SolverMuJoCo", None)
         if solver_type is None:
             raise RuntimeError("Newton replay requires newton.solvers.SolverMuJoCo.")
@@ -66,6 +72,8 @@ class _NewtonStepper:
         self._control = model.control()
         self.output_joints = output_joints
         self._substeps = substeps
+        self._stiffness = np.asarray(model.joint_target_ke.numpy()).copy()
+        self._damping = np.asarray(model.joint_target_kd.numpy()).copy()
         self._original_modes: np.ndarray | None = None
         if not residual:
             modes = np.asarray(model.joint_target_mode.numpy()).copy()
@@ -73,6 +81,14 @@ class _NewtonStepper:
             for joint in output_joints:
                 modes[self._indices[joint][1]] = int(newton.JointTargetMode.EFFORT)
             model.joint_target_mode.assign(modes)
+            stiffness = self._stiffness.copy()
+            damping = self._damping.copy()
+            for joint in output_joints:
+                dof = self._indices[joint][1]
+                stiffness[dof] = 0.0
+                damping[dof] = 0.0
+            model.joint_target_ke.assign(stiffness)
+            model.joint_target_kd.assign(damping)
         self._solver = solver_type(model)
         self._bias_solver: Any = None
         self._bias_state: _ReplayState | None = None
@@ -85,6 +101,8 @@ class _NewtonStepper:
         velocity: Mapping[str, float],
         command: Mapping[str, float],
     ) -> _ReplayState:
+        """Restore the exact recorded generalized state."""
+
         unknown = sorted(
             (set(position) | set(velocity) | set(command)) - self._indices.keys()
         )
@@ -93,11 +111,11 @@ class _NewtonStepper:
                 "Newton replay contains unknown joints: " + ", ".join(unknown)
             )
         q = self._joint_array(self._model.joint_q, position, 0)
-        qd = self._joint_array(self._state_0.joint_qd, velocity, 1, clear=True)
+        recorded_qd = self._joint_array(self._state_0.joint_qd, velocity, 1, clear=True)
         self._solver.reset(self._state_0)
         for state in (self._state_0, self._state_1):
             state.joint_q.assign(q)
-            state.joint_qd.assign(qd)
+            state.joint_qd.assign(recorded_qd)
         self._write_control(command, {})
         return self._read_state()
 
@@ -125,8 +143,8 @@ class _NewtonStepper:
 
     def solver_pd(self, joint: str, command: float, state: _ReplayState) -> float:
         dof = self._indices[joint][1]
-        kp = float(self._model.joint_target_ke.numpy()[dof])
-        kd = float(self._model.joint_target_kd.numpy()[dof])
+        kp = float(self._stiffness[dof])
+        kd = float(self._damping[dof])
         return float(
             calculate_solver_pd(
                 position_error(command, state.position[joint]),
@@ -188,11 +206,10 @@ class _NewtonStepper:
             )
         q_starts = np.asarray(solver.mj_q_start.numpy(), dtype=np.int64)
         qd_starts = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
-        labels = list(self._model.joint_label)
         self._bias_indices = {
             name: (int(q_starts[index]), int(qd_starts[index]), indices[1])
             for name, indices in self._indices.items()
-            for index in [labels.index(name)]
+            for index in [self._model_indices[name]]
             if int(q_starts[index]) >= 0 and int(qd_starts[index]) >= 0
         }
         source = getattr(getattr(self._model, "mujoco", None), "dof_ref", None)
@@ -244,3 +261,5 @@ class _NewtonStepper:
     def close(self) -> None:
         if self._original_modes is not None:
             self._model.joint_target_mode.assign(self._original_modes)
+            self._model.joint_target_ke.assign(self._stiffness)
+            self._model.joint_target_kd.assign(self._damping)

@@ -61,10 +61,8 @@ class Trainer:
         train_dataset = self.data_loaders.train.dataset
         if not isinstance(train_dataset, SequenceDataset):
             raise TypeError("Training loader must contain a SequenceDataset.")
-        if len(train_dataset) == 0:
-            raise ValueError(
-                "Training data does not contain a complete training sequence window."
-            )
+        if not train_dataset.sequences:
+            raise ValueError("Training data does not contain any mapped sequences.")
 
         self.device = torch.device(
             device
@@ -157,99 +155,157 @@ class Trainer:
         temporary_path.replace(path)
 
     def _train_epoch(self) -> float:
-        """Update model weights for every training batch."""
+        """Update model weights while carrying state through each motion."""
 
-        self.model.train()
-        total_loss = 0.0
-        sample_count = 0
-        for inputs, targets in self.data_loaders.train:
-            inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
-            noise = float(self.config.training.augmentation.input_noise_std)
-            if noise > 0.0:
-                inputs = inputs + torch.randn_like(inputs) * noise
-
-            self.optimizer.zero_grad(set_to_none=True)
-            predictions = self._forward(inputs)
-            loss = self.loss_function(predictions, targets)
-            loss.backward()
-            nn.utils.clip_grad_norm_(
-                self.model.parameters(),
-                float(self.config.training.gradient.clip_norm),
-            )
-            self.optimizer.step()
-
-            batch_size = inputs.shape[0]
-            total_loss += float(loss.detach()) * batch_size
-            sample_count += batch_size
-
-        if sample_count == 0:
-            raise RuntimeError("Training loader unexpectedly produced no batches.")
-        return total_loss / sample_count
+        loss = self._run_stateful_epoch(
+            self._sequence_dataset(self.data_loaders.train),
+            training=True,
+        )
+        if loss is None:
+            raise RuntimeError("Training dataset unexpectedly contains no chunks.")
+        return loss
 
     def _validate_epoch(self) -> Optional[float]:
-        """Measure validation loss without updating model weights."""
+        """Measure validation loss while carrying state through each motion."""
 
-        self.model.eval()
-        return self._evaluate(self.data_loaders.validation)
+        return self._run_stateful_epoch(
+            self._sequence_dataset(self.data_loaders.validation),
+            training=False,
+        )
 
-    def _evaluate(
+    def _run_stateful_epoch(
         self,
-        data_loader: DataLoader[tuple[Tensor, Tensor]],
+        dataset: SequenceDataset,
+        *,
+        training: bool,
     ) -> Optional[float]:
-        """Return the sample-weighted loss for one data loader."""
+        """Run complete motions with state carried across contiguous chunks."""
 
+        self.model.train(training)
         total_loss = 0.0
-        sample_count = 0
-        with torch.no_grad():
-            for inputs, targets in data_loader:
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
-                loss = self.loss_function(self._forward(inputs), targets)
-                batch_size = inputs.shape[0]
-                total_loss += float(loss) * batch_size
-                sample_count += batch_size
+        chunk_count = 0
+        chunk_length = self.config.training.sequence.length
+        batch_size = self.config.training.batch_size
+        noise = float(self.config.training.augmentation.input_noise_std)
+        sequences_by_length: dict[int, list[tuple[Tensor, Tensor]]] = {}
+        for sequence in dataset.sequences:
+            sequences_by_length.setdefault(len(sequence[0]), []).append(sequence)
 
-        if sample_count == 0:
+        with torch.set_grad_enabled(training):
+            for sequences in sequences_by_length.values():
+                for batch_start in range(0, len(sequences), batch_size):
+                    batch = sequences[batch_start : batch_start + batch_size]
+                    inputs = torch.stack([item[0] for item in batch]).to(self.device)
+                    targets = torch.stack([item[1] for item in batch]).to(self.device)
+                    state: Tensor | None = None
+                    previous_physical: Tensor | None = None
+
+                    for start in range(0, inputs.shape[1], chunk_length):
+                        stop = start + chunk_length
+                        input_chunk = inputs[:, start:stop]
+                        target_chunk = targets[:, start:stop]
+                        if training and noise > 0.0:
+                            input_chunk = (
+                                input_chunk + torch.randn_like(input_chunk) * noise
+                            )
+
+                        if training:
+                            self.optimizer.zero_grad(set_to_none=True)
+                        predictions, state, previous_physical = (
+                            self._forward_with_state(
+                                input_chunk,
+                                state=state,
+                                previous_physical=previous_physical,
+                            )
+                        )
+                        loss = self.loss_function(predictions, target_chunk)
+                        if training:
+                            loss.backward()
+                            nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                float(self.config.training.gradient.clip_norm),
+                            )
+                            self.optimizer.step()
+                            state = state.detach()
+                            if previous_physical is not None:
+                                previous_physical = previous_physical.detach()
+
+                        total_loss += float(loss.detach())
+                        chunk_count += 1
+
+        if chunk_count == 0:
             return None
-        return total_loss / sample_count
+        return total_loss / chunk_count
 
-    def _forward(self, inputs: Tensor) -> Tensor:
-        """Run a batch, feeding configured prior predictions into later steps."""
+    @staticmethod
+    def _sequence_dataset(
+        data_loader: DataLoader[tuple[Tensor, Tensor]],
+    ) -> SequenceDataset:
+        """Return the sequence dataset stored in a configured loader."""
+
+        dataset = data_loader.dataset
+        if not isinstance(dataset, SequenceDataset):
+            raise TypeError("Training loader must contain a SequenceDataset.")
+        return dataset
+
+    def _forward_with_state(
+        self,
+        inputs: Tensor,
+        *,
+        state: Tensor | None = None,
+        previous_physical: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
+        """Run a batch while preserving recurrent and feedback state."""
 
         feedback = self.config.training.feedback
         indices = self.feedback_indices
         if feedback is None or indices is None:
-            return self.model(inputs).predictions
+            output = self.model(inputs, state)
+            if output.state is None:
+                raise RuntimeError("GRU model did not return recurrent state.")
+            return output.predictions, output.state, None
 
         input_indices, output_indices = indices
         normalization = self.data_loaders.normalization
 
-        def selected(values: tuple[float, ...], indices: tuple[int, ...]) -> Tensor:
-            return inputs.new_tensor(tuple(values[index] for index in indices))
+        def selected(
+            values: tuple[float, ...], selected_indices: tuple[int, ...]
+        ) -> Tensor:
+            """Select normalization values for configured feedback columns."""
+
+            return inputs.new_tensor(tuple(values[index] for index in selected_indices))
 
         input_mean = selected(normalization.inputs.mean, input_indices)
-        input_std = selected(normalization.inputs.standard_deviation, input_indices)
-        output_mean = selected(normalization.outputs.mean, output_indices)
-        output_std = selected(normalization.outputs.standard_deviation, output_indices)
-        previous_physical = inputs.new_full(
-            (inputs.shape[0], 1, len(input_indices)),
-            feedback.initial_value,
+        input_std = selected(
+            normalization.inputs.standard_deviation,
+            input_indices,
         )
-        state = None
+        output_mean = selected(normalization.outputs.mean, output_indices)
+        output_std = selected(
+            normalization.outputs.standard_deviation,
+            output_indices,
+        )
+        if previous_physical is None:
+            previous_physical = inputs.new_full(
+                (inputs.shape[0], 1, len(input_indices)),
+                feedback.initial_value,
+            )
+        feedback_value = previous_physical
         predictions = []
         for timestep in range(inputs.shape[1]):
             step_inputs = inputs[:, timestep : timestep + 1].clone()
-            step_inputs[:, :, input_indices] = (
-                previous_physical - input_mean
-            ) / input_std
+            step_inputs[:, :, input_indices] = (feedback_value - input_mean) / input_std
             output = self.model(step_inputs, state)
+            if output.state is None:
+                raise RuntimeError("GRU model did not return recurrent state.")
             predictions.append(output.predictions)
             state = output.state
-            previous_physical = (
+            feedback_value = (
                 output.predictions[:, :, output_indices] * output_std + output_mean
             )
-        return torch.cat(predictions, dim=1)
+        if state is None:
+            raise RuntimeError("GRU input sequence must not be empty.")
+        return torch.cat(predictions, dim=1), state, feedback_value
 
 
 def _create_loss(config: LossConfig) -> nn.Module:

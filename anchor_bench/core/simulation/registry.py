@@ -15,6 +15,8 @@ SIMULATION_CONTEXTS: dict[str, type[SimulationContext[Any, Any]]] = {
 def create_simulation_context(
     backend: str,
     usd_path: str,
+    *,
+    fixed_base: bool = False,
 ) -> SimulationContext[Any, Any]:
     """Create the simulation context registered for a configured backend."""
 
@@ -22,4 +24,4 @@ def create_simulation_context(
         context_type = SIMULATION_CONTEXTS[backend]
     except KeyError as error:
         raise ValueError(f"Unknown simulation backend {backend!r}.") from error
-    return context_type(usd_path)
+    return context_type(usd_path, fixed_base=fixed_base)

@@ -145,16 +145,12 @@ def test_trainer_builds_configured_optimizer() -> None:
 def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run optimizer updates inside the batch loop and collect epoch losses."""
+    """Run optimizer updates for each contiguous chunk and collect losses."""
 
     config_data = _config_data()
     config_data["training"]["epochs"] = 2
     config_data["training"]["batch_size"] = 2
-    config_data["training"]["sequence"] = {
-        "length": 2,
-        "stride": 2,
-        "hidden_state": "reset",
-    }
+    config_data["training"]["sequence"] = {"length": 2}
     config = TrainingConfig.model_validate(config_data)
     trainer = Trainer(
         config,
@@ -170,14 +166,16 @@ def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
 
     result = trainer.train()
 
-    assert step.call_count == config.training.epochs * len(trainer.data_loaders.train)
+    assert step.call_count == config.training.epochs * len(
+        trainer._sequence_dataset(trainer.data_loaders.train)
+    )
     assert any(
         not torch.equal(initial_parameters[name], parameter)
         for name, parameter in result.model.named_parameters()
     )
     assert [entry.epoch for entry in result.history] == [1, 2]
     assert all(entry.training >= 0.0 for entry in result.history)
-    assert all(entry.validation is not None for entry in result.history)
+    assert all(entry.validation is None for entry in result.history)
     assert result.model.training is False
 
 
@@ -186,11 +184,7 @@ def test_training_is_repeatable_for_the_configured_seed() -> None:
 
     config_data = _config_data()
     config_data["training"]["epochs"] = 2
-    config_data["training"]["sequence"] = {
-        "length": 2,
-        "stride": 2,
-        "hidden_state": "reset",
-    }
+    config_data["training"]["sequence"] = {"length": 2}
     config = TrainingConfig.model_validate(config_data)
     dataset = [_sequence("wave", [float(value) for value in range(20)])]
 
@@ -204,23 +198,59 @@ def test_training_is_repeatable_for_the_configured_seed() -> None:
     )
 
 
-def test_config_rejects_unsafe_hidden_state_carry() -> None:
-    """Reject hidden-state behavior the windowed loader cannot preserve."""
+def test_trainer_carries_state_across_chunks_and_resets_between_motions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve recurrent state only within each complete motion."""
 
     config_data = _config_data()
-    config_data["training"]["sequence"]["hidden_state"] = "carry"
+    config_data["training"]["batch_size"] = 2
+    config_data["training"]["validation_ratio"] = 0.0
+    config_data["training"]["sequence"] = {"length": 2}
+    trainer = Trainer(
+        TrainingConfig.model_validate(config_data),
+        [
+            _sequence("first", [0.0, 1.0, 2.0, 3.0, 4.0]),
+            _sequence("second", [5.0, 6.0, 7.0, 8.0, 9.0]),
+            _sequence("third", [10.0, 11.0, 12.0, 13.0, 14.0]),
+        ],
+        device="cpu",
+    )
+    original_forward = trainer._forward_with_state
+    starts: list[bool] = []
 
-    with pytest.raises(ValueError, match="hidden_state"):
-        TrainingConfig.model_validate(config_data)
+    def record_state(
+        inputs: torch.Tensor,
+        *,
+        state: torch.Tensor | None = None,
+        previous_physical: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        starts.append(state is None)
+        return original_forward(
+            inputs,
+            state=state,
+            previous_physical=previous_physical,
+        )
+
+    monkeypatch.setattr(trainer, "_forward_with_state", record_state)
+
+    trainer._train_epoch()
+
+    assert starts == [True, False, False, True, False, False]
 
 
-def test_trainer_rejects_training_without_a_complete_window() -> None:
-    """Fail clearly when sequence settings produce no trainable batch."""
+def test_trainer_accepts_a_sequence_shorter_than_the_chunk_length() -> None:
+    """Train the final partial chunk instead of discarding the motion."""
 
-    config = TrainingConfig.model_validate(_config_data())
+    config_data = _config_data()
+    config_data["training"]["validation_ratio"] = 0.0
+    trainer = Trainer(
+        TrainingConfig.model_validate(config_data),
+        [_sequence("wave", [0.0])],
+        device="cpu",
+    )
 
-    with pytest.raises(ValueError, match="complete training sequence window"):
-        Trainer(config, [_sequence("wave", [0.0, 1.0])], device="cpu")
+    assert trainer.train().history[0].training >= 0.0
 
 
 def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
@@ -229,11 +259,7 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
     config_data = _config_data()
     config_data["training"]["epochs"] = 5
     config_data["training"]["checkpoint"] = {"every_n_epochs": 2}
-    config_data["training"]["sequence"] = {
-        "length": 2,
-        "stride": 2,
-        "hidden_state": "reset",
-    }
+    config_data["training"]["sequence"] = {"length": 2}
     config = TrainingConfig.model_validate(config_data)
     checkpoint_directory = tmp_path / "checkpoints"
     trainer = Trainer(
@@ -317,7 +343,7 @@ def test_trainer_feeds_prior_prediction_into_configured_input() -> None:
     model = RecordingModel()
     trainer.model = model
 
-    predictions = trainer._forward(torch.zeros(1, 3, 2))
+    predictions, _, _ = trainer._forward_with_state(torch.zeros(1, 3, 2))
 
     assert model.seen == [2.0, 3.0, 4.0]
     assert predictions.flatten().tolist() == [3.0, 4.0, 5.0]
