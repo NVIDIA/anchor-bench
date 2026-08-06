@@ -79,7 +79,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
         return "training"
 
-    def run(self) -> Path:
+    def run(self, output_directory: Path) -> Path:
         """Train the network and persist its mapped trajectories."""
 
         dataset = DatasetLoader.load(
@@ -109,13 +109,13 @@ class TrainingTask(BaseTask[TrainingConfig]):
             trainer = Trainer(
                 self.config,
                 sequences,
-                checkpoint_directory=self.output_directory / "checkpoints",
+                checkpoint_directory=output_directory / "checkpoints",
             )
             result = trainer.train()
             validation_sequences = trainer.data_loaders.validation_sequences
             artifact_config = self.config
         else:
-            search_result = self._search(sequences)
+            search_result = self._search(sequences, output_directory)
             result = search_result.training_result
             validation_sequences = search_result.validation_sequences
             artifact_config = search_result.best_config
@@ -142,18 +142,19 @@ class TrainingTask(BaseTask[TrainingConfig]):
             sequences,
             validation_results,
             artifact_config,
-            self.output_directory,
+            output_directory,
             search_result=search_result,
         )
         self._write_trajectories(
             sequences,
-            self.output_directory / TRAJECTORIES_FILENAME,
+            output_directory / TRAJECTORIES_FILENAME,
         )
-        return self.output_directory
+        return output_directory
 
     def _search(
         self,
         sequences: Sequence[MappedTrainingSequence],
+        output_directory: Path,
     ) -> SearchResult:
         """Wrap repeated trainer executions in the configured Optuna loop."""
 
@@ -193,7 +194,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
                 trial_config,
                 sequences,
                 checkpoint_directory=(
-                    self.output_directory / "checkpoints" / f"trial-{trial.number:04d}"
+                    output_directory / "checkpoints" / f"trial-{trial.number:04d}"
                 ),
             )
             result = trainer.train()

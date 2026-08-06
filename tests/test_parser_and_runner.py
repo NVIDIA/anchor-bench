@@ -80,9 +80,11 @@ def test_runner_constructs_and_runs_registered_task(config_path):
     seen = []
 
     class RecordingTask(BaseTask[ActuatorSysIdConfig]):
-        def run(self) -> Path:
+        def run(self, output_directory: Path) -> Path:
+            assert output_directory.is_dir()
+            assert (output_directory / "config.yaml").is_file()
             seen.append(self.config)
-            return self.output_directory
+            return output_directory
 
     assert RecordingTask.name() == "actuator_sys_id"
     result = TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))
@@ -94,14 +96,30 @@ def test_runner_constructs_and_runs_registered_task(config_path):
     assert isinstance(seen[0], ActuatorSysIdConfig)
 
 
+def test_runner_uses_explicit_output_folder(config_path, tmp_path):
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self, output_directory: Path) -> Path:
+            return output_directory
+
+    requested_output = tmp_path / "named-output"
+    result = TaskRunner({"actuator_sys_id": RecordingTask}).run(
+        str(config_path),
+        output=requested_output,
+    )
+
+    assert result == requested_output
+    assert (result / "config.yaml").is_file()
+    assert (result / ".completed").is_file()
+
+
 def test_runner_skips_completed_task_unless_forced(config_path):
     run_count = 0
 
     class RecordingTask(BaseTask[ActuatorSysIdConfig]):
-        def run(self) -> Path:
+        def run(self, output_directory: Path) -> Path:
             nonlocal run_count
             run_count += 1
-            return self.output_directory
+            return output_directory
 
     runner = TaskRunner({"actuator_sys_id": RecordingTask})
     first_output = runner.run(str(config_path))
@@ -121,10 +139,10 @@ def test_forced_failure_removes_previous_completion_marker(config_path):
     should_fail = False
 
     class FailableTask(BaseTask[ActuatorSysIdConfig]):
-        def run(self) -> Path:
+        def run(self, output_directory: Path) -> Path:
             if should_fail:
                 raise RuntimeError("task failed")
-            return self.output_directory
+            return output_directory
 
     runner = TaskRunner({"actuator_sys_id": FailableTask})
     output_directory = runner.run(str(config_path))
@@ -139,8 +157,8 @@ def test_forced_failure_removes_previous_completion_marker(config_path):
 
 def test_runner_rejects_a_task_returning_the_wrong_output_directory(config_path):
     class MisdirectedTask(BaseTask[ActuatorSysIdConfig]):
-        def run(self) -> Path:
-            return self.output_directory.parent
+        def run(self, output_directory: Path) -> Path:
+            return output_directory.parent
 
     with pytest.raises(RuntimeError, match="expected its assigned output directory"):
         TaskRunner({"actuator_sys_id": MisdirectedTask}).run(str(config_path))
@@ -156,13 +174,13 @@ def test_base_task_rejects_multiple_inheritance():
             BaseTask[ActuatorSysIdConfig],
             TaskMixin,
         ):
-            def run(self) -> Path:
+            def run(self, output_directory: Path) -> Path:
                 return Path("output")
 
 
 def test_base_task_rejects_indirect_inheritance():
     class DirectTask(BaseTask[ActuatorSysIdConfig]):
-        def run(self) -> Path:
+        def run(self, output_directory: Path) -> Path:
             return Path("output")
 
     with pytest.raises(TypeError, match="directly inherit only from BaseTask"):

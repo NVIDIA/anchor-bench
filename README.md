@@ -63,6 +63,13 @@ is present. Pass `--force` to run it again:
 uv run anchor-bench --config path/to/config.yaml --force
 ```
 
+By default, task artifacts are written to a generated hash folder. Pass
+`--output` to use a specific folder instead:
+
+```bash
+uv run anchor-bench --config path/to/config.yaml --output path/to/artifacts
+```
+
 Use `--help` to display the available option:
 
 ```bash
