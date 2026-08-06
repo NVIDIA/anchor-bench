@@ -7,6 +7,7 @@ import yaml
 
 from anchor_bench.errors import DatasetAlignmentError
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.tasks.actuator_sys_id import artifacts as artifacts_module
 from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
@@ -178,8 +179,8 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     written = {}
 
     def write(output_dir, **values):
+        assert output_dir == output_directory
         written.update(values)
-        return write_artifacts(output_dir, **values)
 
     monkeypatch.setattr(
         task_module, "load_trajectories", lambda *args, **kwargs: [trajectory]
@@ -196,13 +197,14 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
+    assert written["source_usd_path"] == config.simulation.usd_path
     assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
     assert written["history"] == [
         GenerationRecord(generation=0, best_mse=0.25, population_mean_mse=0.625)
     ]
 
 
-def test_writes_fitted_parameters_and_generation_history(tmp_path):
+def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
     candidate = {
         "hip": {
             "stiffness": 20.0,
@@ -215,11 +217,25 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path):
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()
+    source_usd_path = tmp_path / "robot.usd"
+
+    def write_usd(source, output, parameters):
+        assert source == source_usd_path
+        assert parameters == candidate
+        output.write_text("#usda 1.0\n", encoding="utf-8")
+        return output
+
+    monkeypatch.setattr(
+        artifacts_module,
+        "write_identified_usd_layer",
+        write_usd,
+    )
     result = write_artifacts(
         output_dir,
         best_parameters=candidate,
         best_mse=0.125,
         history=[GenerationRecord(0, 0.125, 0.5)],
+        source_usd_path=source_usd_path,
     )
 
     document = yaml.safe_load(result.best_parameters_path.read_text())
@@ -227,3 +243,5 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path):
     assert document["parameters"] == candidate
     assert "0,0.125,0.5" in result.optimization_log_path.read_text()
     assert result.run_summary_path.is_file()
+    assert result.identified_usd_path == output_dir / "identified.usda"
+    assert result.identified_usd_path.is_file()

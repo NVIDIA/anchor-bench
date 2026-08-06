@@ -46,10 +46,12 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
                 )
             )
 
+        best_parameters = parameter_space.decode(optimizer.best_candidate)
         write_artifacts(
             output_directory,
-            best_parameters=parameter_space.decode(optimizer.best_candidate),
+            best_parameters=best_parameters,
             best_mse=optimizer.best_score,
             history=history,
+            source_usd_path=self.config.simulation.usd_path,
         )
         return output_directory

@@ -66,3 +66,4 @@ class SysIdResult:
     best_parameters_path: Path
     optimization_log_path: Path
     run_summary_path: Path
+    identified_usd_path: Path
