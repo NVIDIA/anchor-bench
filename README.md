@@ -16,9 +16,9 @@ The currently implemented functionality is limited to:
 - preparing mapped training trajectories as Parquet artifacts; and
 - loading a USD model and its initial state through the optional Newton runtime.
 
-The actuator system-identification optimizer and simulator execution pipeline
-is not wired in yet. Running a valid `actuator_sys_id` configuration currently
-loads its trajectories and then stops at the unimplemented optimization step.
+The actuator system-identification pipeline fits actuator parameters by
+evaluating CMA-ES populations in replicated Newton worlds and writes the best
+parameters and optimization history to the task output directory.
 
 ## Installation
 

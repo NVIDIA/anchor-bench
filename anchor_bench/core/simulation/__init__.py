@@ -4,18 +4,21 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar, Optional, Tuple
+from typing import Any, ClassVar, Generic, Optional, Tuple, TypeVar, cast
 
 from typing_extensions import Self
 
+ModelT = TypeVar("ModelT")
+StateT = TypeVar("StateT")
 
-class SimulationContext(ABC):
+
+class SimulationContext(ABC, Generic[ModelT, StateT]):
     """Own the single lazily loaded simulation model and state."""
 
-    _instance: ClassVar[Optional[SimulationContext]] = None
+    _instance: ClassVar[Optional[SimulationContext[Any, Any]]] = None
     _usd_path: Path
-    _model: Any
-    _state: Any
+    _model: Optional[ModelT]
+    _state: Optional[StateT]
 
     def __new__(cls, usd_path: str) -> Self:
         """Create or return the process-wide simulation context."""
@@ -31,7 +34,7 @@ class SimulationContext(ABC):
                 raise RuntimeError(
                     f"Simulation context already uses {current.usd_path}."
                 )
-            return current
+            return cast(Self, current)
 
         if not source.is_file():
             raise FileNotFoundError(f"USD file does not exist: {source}.")
@@ -47,13 +50,13 @@ class SimulationContext(ABC):
         """Accept the mandatory USD path handled during construction."""
 
     @classmethod
-    def current(cls) -> SimulationContext:
+    def current(cls) -> Self:
         """Return the process-wide simulation context."""
 
         instance = SimulationContext._instance
         if instance is None:
             raise RuntimeError("Simulation context has not been created.")
-        return instance
+        return cast(Self, instance)
 
     @property
     def usd_path(self) -> Path:
@@ -61,30 +64,30 @@ class SimulationContext(ABC):
 
         return self._usd_path
 
-    def load(self) -> Tuple[Any, Any]:
+    def load(self) -> Tuple[ModelT, StateT]:
         """Load and cache the model and state on first use."""
 
-        if self._model is None:
+        if self._model is None or self._state is None:
             model, state = self._load(self._usd_path)
             self._model = model
             self._state = state
         return self._model, self._state
 
     @property
-    def model(self) -> Any:
+    def model(self) -> ModelT:
         """Return the lazily loaded simulation model."""
 
         model, _ = self.load()
         return model
 
     @property
-    def state(self) -> Any:
+    def state(self) -> StateT:
         """Return the lazily created initial simulation state."""
 
         _, state = self.load()
         return state
 
     @abstractmethod
-    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
+    def _load(self, usd_path: Path) -> Tuple[ModelT, StateT]:
         """Load a backend model and initial state from the assigned USD."""
         raise NotImplementedError

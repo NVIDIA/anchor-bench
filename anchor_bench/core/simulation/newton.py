@@ -12,7 +12,7 @@ import newton
 from anchor_bench.core.simulation import SimulationContext
 
 
-class NewtonSimulationContext(SimulationContext):
+class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     """Own one initialized Newton simulation for the process.
 
     Call :meth:`initialize` before reading resources when more than one world is
