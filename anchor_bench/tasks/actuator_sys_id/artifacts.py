@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Union
 
 import yaml
 
@@ -14,6 +14,7 @@ from anchor_bench.tasks.actuator_sys_id.model import (
     GenerationRecord,
     SysIdResult,
 )
+from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer
 
 
 def write_artifacts(
@@ -22,12 +23,14 @@ def write_artifacts(
     best_parameters: Candidate,
     best_mse: float,
     history: Sequence[GenerationRecord],
+    source_usd_path: Union[str, Path],
 ) -> SysIdResult:
-    """Write the fitted parameters, generation log, and resolved run summary."""
+    """Write the fitted parameters, USD layer, log, and resolved run summary."""
 
     best_parameters_path = output_dir / "best_params.yaml"
     optimization_log_path = output_dir / "optimization_log.csv"
     run_summary_path = output_dir / "run_summary.yaml"
+    identified_usd_path = output_dir / "identified.usda"
 
     best_document = {
         "schema_version": 1,
@@ -63,6 +66,11 @@ def write_artifacts(
         yaml.safe_dump(summary, sort_keys=False),
         encoding="utf-8",
     )
+    write_identified_usd_layer(
+        source_usd_path,
+        identified_usd_path,
+        best_parameters,
+    )
     return SysIdResult(
         best_parameters=best_parameters,
         best_mse=best_mse,
@@ -71,4 +79,5 @@ def write_artifacts(
         best_parameters_path=best_parameters_path,
         optimization_log_path=optimization_log_path,
         run_summary_path=run_summary_path,
+        identified_usd_path=identified_usd_path,
     )
