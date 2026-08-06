@@ -63,6 +63,10 @@ class NewtonSimulationContext(SimulationContext):
             raise ValueError(
                 "configuration_key is required when configure_builder is provided."
             )
+        if configure_builder is None and configuration_key is not None:
+            raise ValueError(
+                "configure_builder is required when configuration_key is provided."
+            )
         requested_solver_options = dict(solver_options or {})
         if self._initialized:
             if (

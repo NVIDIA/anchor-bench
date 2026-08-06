@@ -281,6 +281,24 @@ def test_requires_a_stable_key_for_builder_configuration(
         context.initialize(configure_builder=lambda builder: None)
 
 
+def test_rejects_a_key_without_builder_configuration(
+    fake_newton_usd: Path,
+) -> None:
+    context = NewtonSimulationContext(str(fake_newton_usd))
+    configured = []
+    configuration_key = ("actuators", 1)
+
+    with pytest.raises(ValueError, match="configure_builder is required"):
+        context.initialize(configuration_key=configuration_key)
+
+    context.initialize(
+        configure_builder=configured.append,
+        configuration_key=configuration_key,
+    )
+
+    assert configured == [FakeModelBuilder.instances[0]]
+
+
 def test_context_steps_and_rotates_owned_states(
     fake_newton_usd: Path,
 ) -> None:
