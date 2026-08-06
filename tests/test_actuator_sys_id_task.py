@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 import yaml
 
+from anchor_bench.errors import DatasetAlignmentError
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
@@ -109,6 +110,26 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         trajectories[0].measured_position,
         [[0.1], [0.8]],
     )
+
+
+def test_load_trajectories_rejects_an_episode_without_a_transition(
+    tmp_path,
+    monkeypatch,
+):
+    dataset = pd.DataFrame(
+        {"hip/command_q": [0.0], "hip/actual_q": [0.1]},
+        index=pd.MultiIndex.from_tuples(
+            [("wave", 0)],
+            names=["experiment", "time_ns"],
+        ),
+    )
+    monkeypatch.setattr(
+        "anchor_bench.tasks.actuator_sys_id.dataset.DatasetLoader.load",
+        lambda *args, **kwargs: dataset,
+    )
+
+    with pytest.raises(DatasetAlignmentError, match="at least two aligned samples"):
+        load_trajectories(_config(tmp_path).dataset, joint_names=["hip"])
 
 
 def test_task_stops_at_unimplemented_optimization(tmp_path, monkeypatch):

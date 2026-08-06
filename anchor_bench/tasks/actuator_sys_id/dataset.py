@@ -37,6 +37,10 @@ def load_trajectories(
     )
     for experiment in experiments:
         episode = dataset.xs(experiment, level="experiment")
+        if len(episode.index) < 2:
+            raise DatasetAlignmentError(
+                f"Experiment {experiment!r} must contain at least two aligned samples."
+            )
         trajectories.append(
             Trajectory(
                 experiment=experiment,
