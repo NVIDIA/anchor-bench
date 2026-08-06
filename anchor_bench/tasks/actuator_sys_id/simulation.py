@@ -71,6 +71,7 @@ class NewtonPopulationEvaluator:
         context.initialize(
             world_count=self.num_envs,
             configure_builder=configure_template,
+            configuration_key=self._builder_configuration_key(initial),
             solver_options={
                 "solver": "newton",
                 "integrator": solver_config.integrator,
@@ -90,17 +91,34 @@ class NewtonPopulationEvaluator:
         )
         model_joint_q = model.joint_q
         model_joint_qd = model.joint_qd
-        joint_target_pos = context.control.joint_target_pos
+        model_joint_target_q = model.joint_target_q
         if model_joint_q is None or model_joint_qd is None:
             raise RuntimeError("Newton model does not expose joint state arrays")
-        if joint_target_pos is None:
-            raise RuntimeError("Newton control does not expose joint position targets")
+        if model_joint_target_q is None:
+            raise RuntimeError("Newton model does not expose joint position targets")
         self._base_q = np.asarray(model_joint_q.numpy(), dtype=np.float32)
         self._base_qd = np.asarray(model_joint_qd.numpy(), dtype=np.float32)
         self._base_targets = np.asarray(
-            joint_target_pos.numpy(),
+            model_joint_target_q.numpy(),
             dtype=np.float32,
         )
+
+    def _builder_configuration_key(self, initial: Candidate) -> tuple[object, ...]:
+        groups = {
+            joint: group
+            for group in self.config.joint_parameters
+            for joint in group.names
+        }
+        joint_configuration = tuple(
+            (
+                joint,
+                tuple(initial[joint][name] for name in self._MODEL_ARRAYS),
+                float(groups[joint].controller.clamps.effort_limit),
+                float(groups[joint].controller.clamps.velocity_limit),
+            )
+            for joint in self.joint_names
+        )
+        return (self.config.type, joint_configuration)
 
     def _configure_template(
         self,
@@ -145,10 +163,15 @@ class NewtonPopulationEvaluator:
         if not trajectories:
             raise ValueError("system identification requires trajectories")
         self._apply_population(population)
-        episode_scores = [
-            self._evaluate_trajectory(trajectory) for trajectory in trajectories
-        ]
-        scores = np.mean(np.stack(episode_scores, axis=0), axis=0)
+        episode_scores = np.stack(
+            [self._evaluate_trajectory(trajectory) for trajectory in trajectories],
+            axis=0,
+        )
+        transition_counts = np.asarray(
+            [trajectory.measured_position.shape[0] - 1 for trajectory in trajectories],
+            dtype=np.float64,
+        )
+        scores = np.average(episode_scores, axis=0, weights=transition_counts)
         if not np.isfinite(scores).all():
             raise RuntimeError("Newton produced non-finite position error")
         return scores
@@ -166,10 +189,11 @@ class NewtonPopulationEvaluator:
                     )
             model_array.assign(values)
 
-        model_flags = getattr(newton, "ModelFlags", None)
-        if model_flags is not None:
-            flags = model_flags.JOINT_DOF_PROPERTIES | model_flags.ACTUATOR_PROPERTIES
-            self._simulation_context.solver.notify_model_changed(flags)
+        flags = (
+            newton.ModelFlags.JOINT_DOF_PROPERTIES
+            | newton.ModelFlags.ACTUATOR_PROPERTIES
+        )
+        self._simulation_context.solver.notify_model_changed(flags)
 
     def _evaluate_trajectory(self, trajectory: Trajectory) -> np.ndarray:
         if trajectory.joint_names != self.joint_names:
@@ -228,10 +252,10 @@ class NewtonPopulationEvaluator:
     def _set_targets(self, command: np.ndarray) -> None:
         targets = np.array(self._base_targets, copy=True)
         targets[self._joint_target_indices] = command[np.newaxis, :]
-        joint_target_pos = self._simulation_context.control.joint_target_pos
-        if joint_target_pos is None:
+        joint_target_q = self._simulation_context.control.joint_target_q
+        if joint_target_q is None:
             raise RuntimeError("Newton control does not expose joint position targets")
-        joint_target_pos.assign(targets)
+        joint_target_q.assign(targets)
 
     def _step_control_interval(self) -> None:
         for _ in range(self.control_substeps):

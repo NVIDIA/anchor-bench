@@ -127,11 +127,9 @@ def test_newton_joint_mapping_rejects_non_scalar_targets():
         _model_joint_indices(model, ["hip"], 2)
 
 
-def test_newton_evaluator_rejects_dataset_timestep_mismatch(tmp_path):
-    config = _config(tmp_path, dataset_dt=0.01)
-
+def test_actuator_config_rejects_dataset_timestep_mismatch(tmp_path):
     with pytest.raises(ValueError, match="resampling dt must match"):
-        NewtonPopulationEvaluator(config, create_parameter_space(config))
+        _config(tmp_path, dataset_dt=0.01)
 
 
 def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
@@ -156,10 +154,11 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
                 joint_effort_limit=[0.0],
                 joint_velocity_limit=[0.0],
             )
-            self.control = SimpleNamespace(joint_target_pos=FakeArray([0.0, 0.0]))
+            self.control = SimpleNamespace(joint_target_q=FakeArray([8.0, 9.0]))
             self.model = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0]),
                 joint_qd=FakeArray([0.0, 0.0]),
+                joint_target_q=FakeArray([1.0, 2.0]),
             )
             self.solver = object()
 
@@ -168,9 +167,11 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
             *,
             world_count,
             configure_builder,
+            configuration_key,
             solver_options,
         ):
             self.created_world_count = world_count
+            self.configuration_key = configuration_key
             self.solver_options = solver_options
             configure_builder(self.template)
 
@@ -201,7 +202,7 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
 
     assert evaluator._simulation_context is context
     assert evaluator._simulation_context.control is context.control
-    np.testing.assert_allclose(evaluator._base_targets, [0.0, 0.0])
+    np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
     assert context.solver_options == {
@@ -210,6 +211,37 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
         "iterations": 10,
         "ls_iterations": 4,
     }
+
+
+def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.num_envs = 2
+    short = Trajectory(
+        experiment="short",
+        joint_names=["hip"],
+        commanded_position=np.zeros((2, 1)),
+        measured_position=np.zeros((2, 1)),
+    )
+    long = Trajectory(
+        experiment="long",
+        joint_names=["hip"],
+        commanded_position=np.zeros((3, 1)),
+        measured_position=np.zeros((3, 1)),
+    )
+    episode_scores = {
+        "short": np.asarray([3.0, 5.0]),
+        "long": np.asarray([0.0, 2.0]),
+    }
+    monkeypatch.setattr(evaluator, "_apply_population", lambda population: None)
+    monkeypatch.setattr(
+        evaluator,
+        "_evaluate_trajectory",
+        lambda trajectory: episode_scores[trajectory.experiment],
+    )
+
+    scores = evaluator.evaluate([{}, {}], [short, long])
+
+    np.testing.assert_allclose(scores, [1.0, 3.0])
 
 
 def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch):
@@ -299,6 +331,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
             self.model = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_target_q=FakeArray([-9.0] * 6),
                 joint_target_ke=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_target_kd=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_armature=FakeArray([0.0, 0.0, 0.0, 0.0]),
@@ -314,7 +347,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
             self.control = SimpleNamespace(
-                joint_target_pos=FakeArray([-9.0] * 6),
+                joint_target_q=FakeArray([-9.0] * 6),
             )
             self.solver = FakeSolver()
             self.step_dts = []
@@ -329,7 +362,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
         def step(self, *, dt):
             self.step_dts.append(dt)
             self.target_history.append(
-                np.array(self.control.joint_target_pos.numpy(), copy=True)
+                np.array(self.control.joint_target_q.numpy(), copy=True)
             )
             if len(self.step_dts) % 2 == 0:
                 self.state_in.joint_q.assign(next(self._simulated_positions))
