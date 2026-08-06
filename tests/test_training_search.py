@@ -130,6 +130,8 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
             self,
             _config: TrainingConfig,
             sequences: Sequence[MappedTrainingSequence],
+            *,
+            checkpoint_directory: Path,
         ) -> None:
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 
