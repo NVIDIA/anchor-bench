@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false
+
 """USD export for fitted actuator system-identification parameters."""
 
 from __future__ import annotations
@@ -7,7 +9,11 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Tuple, Union
 
+from pxr import Sdf, Usd, UsdPhysics
+
 from anchor_bench.tasks.actuator_sys_id.model import Candidate
+
+# The OpenUSD extension modules do not publish complete Python type information.
 
 _ANGULAR_DRIVES = frozenset({"angular", "rotX", "rotY", "rotZ"})
 _LINEAR_DRIVES = frozenset({"linear", "transX", "transY", "transZ"})
@@ -35,7 +41,6 @@ def write_identified_usd_layer(
     duplicating or flattening it.
     """
 
-    Sdf, Usd, UsdPhysics = _load_usd_modules()
     source_path = Path(source_usd).expanduser().resolve()
     destination = Path(output_path).expanduser().resolve()
     if not source_path.is_file():
@@ -49,10 +54,10 @@ def write_identified_usd_layer(
     if source_stage is None:
         raise ValueError(f"could not open source USD: {source_path}")
     joints = {
-        joint_name: _find_joint(source_stage, UsdPhysics, joint_name)
+        joint_name: _find_joint(source_stage, joint_name)
         for joint_name in best_parameters
     }
-    drive_gain_scaling = _joint_drive_gain_scaling(source_stage, UsdPhysics)
+    drive_gain_scaling = _joint_drive_gain_scaling(source_stage)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     output_layer = Sdf.Layer.CreateNew(str(destination))
@@ -76,7 +81,7 @@ def write_identified_usd_layer(
     for joint_name, parameters in best_parameters.items():
         _validate_parameters(joint_name, parameters)
         source_joint = joints[joint_name]
-        drive_name, is_angular = _drive(source_joint, UsdPhysics)
+        drive_name, is_angular = _drive(source_joint)
         joint_override = output_stage.OverridePrim(source_joint.GetPath())
         joint_override.AddAppliedSchema("NewtonJointAPI")
         drive = UsdPhysics.DriveAPI.Apply(joint_override, drive_name)
@@ -94,20 +99,17 @@ def write_identified_usd_layer(
         drive.CreateDampingAttr(float(parameters["damping"]) * drive_scale)
         _set_float(
             joint_override,
-            Sdf,
             "newton:armature",
             parameters["armature"],
         )
         _set_float(
             joint_override,
-            Sdf,
             "newton:friction",
             parameters["dry_friction"],
         )
         damping_scale = _RADIANS_PER_DEGREE if is_angular else 1.0
         _set_float(
             joint_override,
-            Sdf,
             "newton:damping",
             float(parameters["viscous_friction"]) * damping_scale,
         )
@@ -117,18 +119,7 @@ def write_identified_usd_layer(
     return destination
 
 
-def _load_usd_modules() -> Tuple[Any, Any, Any]:
-    try:
-        from pxr import Sdf, Usd, UsdPhysics
-    except ImportError as exc:
-        raise RuntimeError(
-            "USD export requires the simulation dependencies; "
-            "install anchor-bench[simulation]"
-        ) from exc
-    return Sdf, Usd, UsdPhysics
-
-
-def _find_joint(stage: Any, UsdPhysics: Any, requested: str) -> Any:
+def _find_joint(stage: Any, requested: str) -> Any:
     matches = [
         prim
         for prim in stage.Traverse()
@@ -142,7 +133,7 @@ def _find_joint(stage: Any, UsdPhysics: Any, requested: str) -> Any:
     return matches[0]
 
 
-def _drive(joint: Any, UsdPhysics: Any) -> Tuple[str, bool]:
+def _drive(joint: Any) -> Tuple[str, bool]:
     if joint.IsA(UsdPhysics.RevoluteJoint):
         return "angular", True
     if joint.IsA(UsdPhysics.PrismaticJoint):
@@ -187,7 +178,7 @@ def _applied_api_instances(prim: Any, schema_name: str) -> list[str]:
     ]
 
 
-def _joint_drive_gain_scaling(stage: Any, UsdPhysics: Any) -> float:
+def _joint_drive_gain_scaling(stage: Any) -> float:
     scenes = [prim for prim in stage.Traverse() if prim.IsA(UsdPhysics.Scene)]
     scaling = 1.0
     if scenes:
@@ -233,5 +224,5 @@ def _validate_parameters(joint_name: str, parameters: Dict[str, float]) -> None:
         )
 
 
-def _set_float(prim: Any, Sdf: Any, name: str, value: float) -> None:
+def _set_float(prim: Any, name: str, value: float) -> None:
     prim.CreateAttribute(name, Sdf.ValueTypeNames.Float, custom=False).Set(float(value))
