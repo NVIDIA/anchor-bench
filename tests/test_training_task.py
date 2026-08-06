@@ -193,10 +193,13 @@ def test_training_task_runs_loader_preprocessor_then_mapping(
         received_validation_results: object,
         training_config: object,
         output_directory: object,
+        *,
+        search_result: object = None,
     ) -> Path:
         """Record validation result persistence."""
 
         assert received_validation_results is validation_results
+        assert search_result is None
         events.append("save")
         return tmp_path / "artifacts"
 
@@ -310,7 +313,7 @@ def test_training_task_initializes_simulation_for_validators(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.artifacts.save_training_artifacts",
-        lambda result, sequences, validation_results, training_config, output_directory: (
+        lambda result, sequences, validation_results, training_config, output_directory, **kwargs: (
             tmp_path / "artifacts"
         ),
     )
