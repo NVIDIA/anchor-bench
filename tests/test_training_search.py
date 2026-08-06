@@ -101,7 +101,7 @@ def test_search_trains_trials_and_retains_best_model(
 
     monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
 
-    result = TrainingTask(_search_config(), tmp_path)._search(dataset)
+    result = TrainingTask(_search_config())._search(dataset, tmp_path)
 
     assert len(trained_configs) == 3
     assert all(config.search is None for config in trained_configs)
@@ -157,7 +157,7 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
 
     monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
 
-    result = TrainingTask(_search_config(), tmp_path)._search(dataset)
+    result = TrainingTask(_search_config())._search(dataset, tmp_path)
 
     assert [trial.value for trial in result.trials] == [2.0, 1.0]
     assert result.best_value == 1.0
@@ -171,7 +171,7 @@ def test_search_rejects_unknown_parameter_path(tmp_path: Path) -> None:
     data = config.model_dump(mode="python", exclude_none=True)
     parameter = data["search"]["search_space"].pop("model.hidden_size")
     data["search"]["search_space"]["model.missing"] = parameter
-    task = TrainingTask(TrainingConfig.model_validate(data), tmp_path)
+    task = TrainingTask(TrainingConfig.model_validate(data))
     study = optuna.create_study()
 
     with pytest.raises(ValueError, match="does not exist"):

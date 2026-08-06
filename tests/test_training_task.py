@@ -109,10 +109,6 @@ def test_training_task_runs_loader_data_processor_then_mapping(
 
     events: list[str] = []
     loaded = _aligned_dataset()
-    monkeypatch.setattr(
-        "anchor_bench.core.artifacts.resolve_repo_root",
-        lambda: tmp_path,
-    )
     usd_path = tmp_path / "robot.usda"
     usd_path.write_text("#usda 1.0", encoding="utf-8")
     config_data = _config_data("dataset.parquet")
@@ -247,8 +243,10 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         save,
     )
 
-    output_directory = TrainingTask(config).run()
-    trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
+    output_directory = tmp_path / "output"
+    output_directory.mkdir()
+    result = TrainingTask(config).run(output_directory)
+    trajectories = pd.read_parquet(result / "trajectories.parquet")
 
     assert events == [
         "load:dataset.parquet:0.02",
@@ -259,7 +257,7 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         "validate",
         "save",
     ]
-    assert output_directory.parent == tmp_path / "output"
+    assert result == output_directory
     assert trajectories["experiment"].drop_duplicates().tolist() == ["wave", "step"]
     assert trajectories["mapping"].drop_duplicates().tolist() == ["arm"]
     wave_inputs = trajectories.loc[
@@ -292,10 +290,6 @@ def test_training_task_initializes_simulation_for_validators(
 
     config_data = _config_data("dataset.parquet")
     config_data["input_features"] = {"actual_q": None}
-    monkeypatch.setattr(
-        "anchor_bench.core.artifacts.resolve_repo_root",
-        lambda: tmp_path,
-    )
     config = TrainingConfig.model_validate(config_data)
 
     monkeypatch.setattr(
@@ -346,9 +340,12 @@ def test_training_task_initializes_simulation_for_validators(
         ),
     )
 
-    output_directory = TrainingTask(config).run()
-    trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
+    output_directory = tmp_path / "output"
+    output_directory.mkdir()
+    result = TrainingTask(config).run(output_directory)
+    trajectories = pd.read_parquet(result / "trajectories.parquet")
 
+    assert result == output_directory
     assert simulation_calls == [("newton", "robot.usda")]
     assert trajectories["sequence"].nunique() == 2
 

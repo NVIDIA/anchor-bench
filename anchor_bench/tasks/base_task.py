@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generic, Optional, Type, TypeVar, get_args, get_origin
+from typing import Generic, Type, TypeVar, get_args, get_origin
 
-from anchor_bench.core.artifacts import get_or_create_output_folder
 from anchor_bench.schema.base import BaseConfig
 from anchor_bench.schema.helpers import _config_type
 
@@ -16,20 +15,10 @@ ConfigT = TypeVar("ConfigT", bound=BaseConfig)
 class BaseTask(ABC, Generic[ConfigT]):
     """A task constructed from a validated configuration model."""
 
-    def __init__(
-        self,
-        config: ConfigT,
-        output_directory: Optional[Path] = None,
-    ) -> None:
-        """Initialize the task with its configuration and artifact directory."""
+    def __init__(self, config: ConfigT) -> None:
+        """Initialize the task with its configuration."""
 
         self.config = config
-        if output_directory is None:
-            output_directory, _ = get_or_create_output_folder(
-                config,
-                output_root=getattr(config, "output_dir", None),
-            )
-        self.output_directory = output_directory
 
     def __init_subclass__(cls) -> None:
         """Require every concrete task to inherit directly and only from BaseTask."""
@@ -62,5 +51,5 @@ class BaseTask(ABC, Generic[ConfigT]):
         )
 
     @abstractmethod
-    def run(self) -> Path:
-        """Execute the task and return its output directory."""
+    def run(self, output_directory: Path) -> Path:
+        """Execute the task in a runner-provided output directory."""

@@ -192,7 +192,7 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
-    result = ActuatorSysIdTask(config, output_directory).run()
+    result = ActuatorSysIdTask(config).run(output_directory)
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)

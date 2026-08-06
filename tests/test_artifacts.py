@@ -70,5 +70,21 @@ def test_get_or_create_output_folder_uses_repository_output_by_default(
     assert output_folder.parent == tmp_path / "output"
 
 
+def test_get_or_create_output_folder_uses_explicit_output_folder(tmp_path: Path):
+    requested_folder = tmp_path / "named-output"
+
+    output_folder, already_completed = get_or_create_output_folder(
+        BaseConfig(type="example"),
+        output_root=tmp_path / "ignored-root",
+        output_folder=requested_folder,
+    )
+
+    assert output_folder == requested_folder
+    assert already_completed is False
+    assert yaml.safe_load((output_folder / "config.yaml").read_text()) == {
+        "type": "example"
+    }
+
+
 def test_resolve_repo_root_returns_project_root():
     assert resolve_repo_root() == Path(__file__).resolve().parents[1]
