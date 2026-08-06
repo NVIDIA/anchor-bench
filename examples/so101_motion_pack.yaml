@@ -1,0 +1,73 @@
+# Generic piecewise actuator-trajectory design, instantiated here for SO-101.
+type: trajectory_v1
+name: so101_motion_pack_example
+sample_rate_hz: 50
+
+actuators:
+  - {name: Rotation, unit: rad}
+  - {name: Pitch, unit: rad}
+  - {name: Elbow, unit: rad}
+  - {name: Wrist_Pitch, unit: rad}
+  - {name: Wrist_Roll, unit: rad}
+  - {name: Jaw, unit: normalized}
+
+poses:
+  home: [0.0, 0.0, 0.0, 0.0, 0.0, 0.5]
+  pitch_positive: [0.0, 0.22, 0.0, 0.0, 0.0, 0.5]
+  pitch_negative: [0.0, -0.18, 0.0, 0.0, 0.0, 0.5]
+  picklike_reach_1: [0.10, -0.13, 0.22, -0.12, 0.06, 0.5]
+  picklike_reach_2: [0.18, -0.06, 0.10, -0.18, -0.10, 0.5]
+
+trajectories:
+  - name: pitch_step_response
+    initial_pose: home
+    pieces:
+      - {type: hold, duration_s: 0.8}
+      - type: transition
+        duration_s: 1.1
+        to: pitch_positive
+        interpolation: quintic_smoothstep
+      - {type: hold, duration_s: 0.45}
+      - type: transition
+        duration_s: 1.1
+        to: pitch_negative
+        interpolation: quintic_smoothstep
+      - {type: hold, duration_s: 0.45}
+      - type: transition
+        duration_s: 1.2
+        to: home
+        interpolation: quintic_smoothstep
+      - {type: hold, duration_s: 0.8}
+
+  - name: coupled_low_frequency
+    initial_pose: home
+    pieces:
+      - type: sine
+        duration_s: 12.0
+        ramp_s: 1.0
+        components:
+          - {actuator: Rotation, amplitude: 0.16, frequency_hz: 0.17, phase_rad: 0.0}
+          - {actuator: Pitch, amplitude: -0.18, frequency_hz: 0.23, phase_rad: 1.0}
+          - {actuator: Elbow, amplitude: 0.20, frequency_hz: 0.29, phase_rad: 2.1}
+          - {actuator: Wrist_Pitch, amplitude: -0.13, frequency_hz: 0.37, phase_rad: 0.5}
+          - {actuator: Wrist_Roll, amplitude: 0.12, frequency_hz: 0.43, phase_rad: 2.7}
+
+  - name: picklike_reach
+    initial_pose: home
+    pieces:
+      - {type: hold, duration_s: 0.8}
+      - type: transition
+        duration_s: 1.2
+        to: picklike_reach_1
+        interpolation: quintic_smoothstep
+      - {type: hold, duration_s: 0.45}
+      - type: transition
+        duration_s: 1.2
+        to: picklike_reach_2
+        interpolation: quintic_smoothstep
+      - {type: hold, duration_s: 0.45}
+      - type: transition
+        duration_s: 1.2
+        to: home
+        interpolation: quintic_smoothstep
+      - {type: hold, duration_s: 0.8}

@@ -8,9 +8,10 @@ actuator tooling.
 
 The currently implemented functionality is limited to:
 
-- parsing and strictly validating `actuator_sys_id` and `training` YAML
-  configurations;
+- parsing and strictly validating `actuator_sys_id`, `trajectory_v1`, and
+  `training` YAML configurations;
 - dispatching validated configurations through the task runner;
+- generating piecewise actuator command trajectories as Parquet datasets;
 - loading local or HTTP(S) Parquet datasets and resampling their signals onto a
   uniform time grid;
 - preparing mapped training trajectories as Parquet artifacts; and
@@ -76,7 +77,8 @@ Use `--help` to display the available option:
 uv run anchor-bench --help
 ```
 
-The `actuator_sys_id` and `training` configuration types are registered. A
+The `actuator_sys_id`, `trajectory_v1`, and `training` configuration types are
+registered. A
 minimal actuator configuration looks like this:
 
 ```yaml
@@ -119,6 +121,27 @@ dataset:
 
 Configuration objects are strict: unknown fields, coerced values, invalid
 bounds, and unsupported `type` values are rejected.
+
+## Trajectory generation
+
+The `trajectory_v1` task generates ordered hold, transition, sine, and linear
+chirp pieces. The supplied actuator order defines every pose array and the
+output field order. For example:
+
+```bash
+uv run anchor-bench \
+  --config examples/so101_motion_pack.yaml \
+  --output outputs/so101_motion_pack
+```
+
+The task writes `trajectories.parquet` in the long-form actuator dataset shape:
+`time_ns`, `time_utc`, `experiment`, `field`, and `value`. It contains only
+`<actuator>/command_q` fields. Synthetic time begins at the Unix epoch for each
+trajectory, making both timestamp columns deterministic. Piece durations are
+converted to sample counts with Python's round-to-nearest, ties-to-even
+behavior, and transition endpoints are excluded so the next piece begins at
+the exact target pose. A nonzero `ramp_s` applies a linear fade-in and fade-out
+envelope to sine and chirp offsets.
 
 ## Dataset loading
 
