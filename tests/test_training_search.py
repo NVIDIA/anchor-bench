@@ -104,6 +104,39 @@ def test_search_trains_trials_and_retains_best_model(
     assert result.validation_sequences == tuple(dataset)
 
 
+def test_search_prunes_non_finite_loss_before_tracking_trial(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Allow a finite trial to win after the first trial returns NaN."""
+
+    dataset = [_sequence("experiment", [0.0, 1.0])]
+    validation_losses = iter([float("nan"), 2.0, 1.0])
+
+    class StubTrainer:
+        def __init__(
+            self,
+            _config: TrainingConfig,
+            sequences: Sequence[MappedTrainingSequence],
+        ) -> None:
+            self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
+
+        def train(self) -> TrainingResult:
+            value = next(validation_losses)
+            return TrainingResult(
+                model=nn.Linear(1, 1),
+                history=[EpochLoss(epoch=1, training=1.0, validation=value)],
+            )
+
+    monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
+
+    result = TrainingTask(_search_config(), tmp_path)._search(dataset)
+
+    assert [trial.value for trial in result.trials] == [2.0, 1.0]
+    assert result.best_value == 1.0
+    assert result.best_trial == 2
+
+
 def test_search_rejects_unknown_parameter_path(tmp_path: Path) -> None:
     """Fail clearly when a search-space path is absent from the YAML config."""
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
@@ -179,6 +180,8 @@ class TrainingTask(BaseTask[TrainingConfig]):
             trainer = Trainer(trial_config, sequences)
             result = trainer.train()
             value = self._validation_loss(result)
+            if not isfinite(value):
+                raise optuna.TrialPruned("Validation loss is not finite.")
             trials.append(
                 SearchTrial(
                     number=trial.number,
