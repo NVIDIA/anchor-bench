@@ -172,13 +172,15 @@ def test_forced_failure_removes_previous_completion_marker(config_path):
 def test_forced_config_write_failure_removes_previous_completion_marker(
     config_path,
     monkeypatch,
+    tmp_path,
 ):
     class RecordingTask(BaseTask[ActuatorSysIdConfig]):
         def run(self, output_directory: Path) -> Path:
             return output_directory
 
     runner = TaskRunner({"actuator_sys_id": RecordingTask})
-    output_directory = runner.run(str(config_path))
+    requested_output = tmp_path / "write-failure-output"
+    output_directory = runner.run(str(config_path), output=requested_output)
     assert (output_directory / ".completed").is_file()
 
     def fail_write(_path: Path, _document: object) -> None:
@@ -187,7 +189,7 @@ def test_forced_config_write_failure_removes_previous_completion_marker(
     monkeypatch.setattr("anchor_bench.core.task_runner.write_yaml", fail_write)
 
     with pytest.raises(OSError, match="config write failed"):
-        runner.run(str(config_path), force=True)
+        runner.run(str(config_path), force=True, output=requested_output)
 
     assert not (output_directory / ".completed").exists()
 
