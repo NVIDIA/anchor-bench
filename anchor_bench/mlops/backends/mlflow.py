@@ -1,4 +1,4 @@
-"""MLflow implementation of the Anchor Bench MLOps interfaces."""
+"""Bundled MLflow plugin for the Anchor Bench MLOps interfaces."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ class MLflowRun(MLOpsRun):
 
 
 class MLflowBackend(MLOpsBackend):
-    """Default MLOps backend, loaded only when it is first constructed."""
+    """Entry-point-loaded MLflow backend with lazily imported dependencies."""
 
     def __init__(
         self,
@@ -162,6 +162,6 @@ def _import_mlflow() -> ModuleType:
         return importlib.import_module("mlflow")
     except ImportError as error:
         raise MLOpsDependencyError(
-            "The default MLflow backend requires the optional 'mlflow' "
+            "The MLflow plugin requires the optional 'mlflow' "
             "dependency. Install it with `pip install 'anchor-bench[mlflow]'`."
         ) from error

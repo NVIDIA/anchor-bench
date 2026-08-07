@@ -10,14 +10,13 @@ from anchor_bench.errors import (
     MLOpsError,
     MLOpsPluginError,
 )
-from anchor_bench.mlops.backends.mlflow import MLflowBackend
 from anchor_bench.mlops.base import MLOpsBackend
 
 DEFAULT_BACKEND = "mlflow"
 ENTRY_POINT_GROUP = "anchor_bench.mlops_backends"
 BackendFactory = Callable[..., MLOpsBackend]
 
-_BACKENDS: Dict[str, BackendFactory] = {DEFAULT_BACKEND: MLflowBackend}
+_BACKENDS: Dict[str, BackendFactory] = {}
 
 
 def register_backend(
@@ -68,8 +67,6 @@ def get_backend(name: str = DEFAULT_BACKEND, **options: Any) -> MLOpsBackend:
     except MLOpsError:
         raise
     except Exception as error:
-        if normalized_name == DEFAULT_BACKEND:
-            raise
         raise MLOpsPluginError(
             f"Could not construct MLOps backend {normalized_name!r}: {error}."
         ) from error

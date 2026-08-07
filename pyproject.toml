@@ -42,6 +42,7 @@ dev = [
 anchor-bench = "anchor_bench.cli:main"
 
 [project.entry-points."anchor_bench.mlops_backends"]
+mlflow = "anchor_bench.mlops.backends.mlflow:MLflowBackend"
 wandb = "anchor_bench.mlops.backends.wandb:WandbBackend"
 
 [tool.setuptools.packages.find]

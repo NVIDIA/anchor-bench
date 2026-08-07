@@ -18,7 +18,7 @@ The currently implemented functionality is limited to:
 - loading a USD model and its initial state through the optional Newton runtime;
   and
 - tracking portable run parameters, metrics, tags, and artifacts through
-  MLflow or the optional W&B plugin.
+  bundled MLflow or W&B plugins.
 
 The actuator system-identification pipeline fits actuator parameters by
 evaluating CMA-ES populations in replicated Newton worlds and writes the best
@@ -57,7 +57,7 @@ Install only the tracking SDK you use. For the default MLflow backend, run:
 uv sync --extra mlflow
 ```
 
-Or, for the optional W&B plugin, run:
+Or, for the W&B plugin, run:
 
 ```bash
 uv sync --extra wandb

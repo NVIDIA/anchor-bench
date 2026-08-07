@@ -29,14 +29,33 @@ class FakeBackend(MLOpsBackend):
         raise NotImplementedError
 
 
+def test_bundled_backends_are_registered_as_entry_point_plugins():
+    plugin_names = {entry_point.name for entry_point in registry._plugins()}
+
+    assert {"mlflow", "wandb"} <= plugin_names
+
+
 def test_mlflow_is_the_default_backend(monkeypatch):
-    monkeypatch.setitem(registry._BACKENDS, "mlflow", FakeBackend)
+    class FakeEntryPoint:
+        name = "mlflow"
+
+        def __init__(self) -> None:
+            self.load_count = 0
+
+        def load(self):
+            self.load_count += 1
+            return FakeBackend
+
+    entry_point = FakeEntryPoint()
+    monkeypatch.setattr(registry, "_BACKENDS", {})
+    monkeypatch.setattr(registry, "_plugins", lambda: [entry_point])
 
     backend = get_backend(tracking_uri="sqlite:///runs.db")
 
     assert DEFAULT_BACKEND == "mlflow"
     assert isinstance(backend, FakeBackend)
     assert backend.options == {"tracking_uri": "sqlite:///runs.db"}
+    assert entry_point.load_count == 1
 
 
 def test_runtime_backend_registration(monkeypatch):
@@ -84,6 +103,19 @@ def test_plugin_must_return_backend_instance(monkeypatch):
 
     with pytest.raises(MLOpsPluginError, match="must return an MLOpsBackend"):
         get_backend("invalid-plugin")
+
+
+def test_plugin_construction_failure_is_wrapped(monkeypatch):
+    def fail_to_construct():
+        raise RuntimeError("broken constructor")
+
+    monkeypatch.setitem(registry._BACKENDS, "broken-plugin", fail_to_construct)
+
+    with pytest.raises(
+        MLOpsPluginError,
+        match="Could not construct MLOps backend 'broken-plugin'",
+    ):
+        get_backend("broken-plugin")
 
 
 def test_duplicate_runtime_backend_is_rejected(monkeypatch):

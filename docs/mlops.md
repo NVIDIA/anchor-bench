@@ -1,9 +1,9 @@
 # MLOps backends
 
 Anchor Bench exposes one tracking interface for run parameters, scalar metrics,
-tags, and local artifacts. MLflow is the default backend. W&B is an optional
-plugin discovered through the `anchor_bench.mlops_backends` Python entry-point
-group.
+tags, and local artifacts. MLflow and W&B are bundled plugins discovered through
+the `anchor_bench.mlops_backends` Python entry-point group. MLflow remains the
+default backend.
 
 ## Installation
 
@@ -83,10 +83,11 @@ executable task yet. Consequently, automatic epoch metrics and checkpoints will
 begin when that training loop is implemented; the runner integration and
 task-local reporting path are already in place.
 
-## W&B plugin
+## Bundled backend plugins
 
-The bundled W&B adapter is registered as an entry-point plugin rather than in
-the core backend registry. Select it entirely through configuration:
+Both bundled adapters are registered as entry-point plugins rather than in the
+core backend registry. MLflow is selected by default; select W&B explicitly
+through configuration:
 
 ```yaml
 mlops:

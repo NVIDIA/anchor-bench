@@ -1,4 +1,4 @@
-"""Optional W&B plugin for the Anchor Bench MLOps interfaces."""
+"""Bundled W&B plugin for the Anchor Bench MLOps interfaces."""
 
 from __future__ import annotations
 
