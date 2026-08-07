@@ -51,6 +51,11 @@ def _search_config() -> TrainingConfig:
             },
         },
     }
+    data["mlops"] = {
+        "backend": "wandb",
+        "experiment_name": "training",
+        "options": {"api_key": "secret"},
+    }
     return TrainingConfig.model_validate(data)
 
 
@@ -111,6 +116,10 @@ def test_search_trains_trials_and_retains_best_model(
 
     assert len(trained_configs) == 3
     assert all(config.search is None for config in trained_configs)
+    assert all(
+        config.mlops is not None and config.mlops.options == {"api_key": "secret"}
+        for config in trained_configs
+    )
     assert [path.name for path in checkpoint_directories] == [
         "trial-0000",
         "trial-0001",

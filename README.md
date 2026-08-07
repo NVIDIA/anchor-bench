@@ -51,10 +51,15 @@ For development, install the test and quality-check dependencies:
 uv sync --extra dev
 ```
 
-Install the default MLflow tracking backend or the optional W&B plugin with:
+Install only the tracking SDK you use. For the default MLflow backend, run:
 
 ```bash
 uv sync --extra mlflow
+```
+
+Or, for the optional W&B plugin, run:
+
+```bash
 uv sync --extra wandb
 ```
 
