@@ -88,9 +88,21 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         index=index,
     )
 
-    def fake_load(path, *, dt):
+    def fake_load(
+        path,
+        *,
+        dt,
+        dataset_tracker,
+        dataset_name,
+        dataset_context,
+        upload_dataset,
+    ):
         assert path == "actuator.parquet"
         assert dt == 0.005
+        assert dataset_tracker is None
+        assert dataset_name == "system-identification-dataset"
+        assert dataset_context == "system-identification"
+        assert upload_dataset is False
         return dataset
 
     monkeypatch.setattr(

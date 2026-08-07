@@ -2,6 +2,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Union
 
+import pandas as pd
 import pytest
 
 from anchor_bench.core import task_runner
@@ -52,6 +53,42 @@ class RecordingRun(MLOpsRun):
         artifact_path: Optional[str] = None,
     ) -> None:
         self.artifacts.append((Path(path), artifact_path))
+
+
+@pytest.mark.parametrize("upload", [False, True])
+def test_default_dataset_logging_records_lineage_and_optional_payload(
+    tmp_path: Path,
+    upload: bool,
+) -> None:
+    dataset = pd.DataFrame({"experiment": ["wave", "step"], "value": [1.0, 2.0]})
+    source_path = tmp_path / "dataset.parquet"
+    source_path.write_text("dataset", encoding="utf-8")
+    run = RecordingRun()
+
+    run.log_dataset(
+        dataset,
+        source="datasets/actuator.parquet",
+        digest="abc123",
+        name="training-dataset",
+        context="training",
+        path=source_path,
+        metadata={"format": "parquet", "size_bytes": 7},
+        upload=upload,
+    )
+
+    assert run.params == {
+        "datasets/training-dataset/source": "datasets/actuator.parquet",
+        "datasets/training-dataset/digest": "abc123",
+        "datasets/training-dataset/context": "training",
+        "datasets/training-dataset/rows": 2,
+        "datasets/training-dataset/columns": '["experiment","value"]',
+        "datasets/training-dataset/uploaded": upload,
+        "datasets/training-dataset/metadata/format": "parquet",
+        "datasets/training-dataset/metadata/size_bytes": 7,
+    }
+    assert run.artifacts == (
+        [(source_path, "training-dataset", "dataset")] if upload else []
+    )
 
 
 class RecordingRunContext(AbstractContextManager[MLOpsRun]):

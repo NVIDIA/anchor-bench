@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 
 from anchor_bench.mlops.backends import wandb as wandb_backend
@@ -87,6 +88,41 @@ def test_wandb_is_a_backend_plugin(monkeypatch, tmp_path):
         ),
         ("exit", None),
     ]
+
+
+def test_wandb_logs_dataset_metadata_and_opt_in_payload(monkeypatch, tmp_path):
+    fake_wandb = FakeWandb()
+    monkeypatch.setattr(wandb_backend, "_import_wandb", lambda: fake_wandb)
+    dataset = pd.DataFrame({"field": ["actual_q"], "value": [1.0]})
+    source_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(source_path, index=False)
+
+    with WandbBackend(mode="offline").start_run("dataset-lineage") as run:
+        run.log_dataset(
+            dataset,
+            source="datasets/actuator.parquet",
+            digest="abc123",
+            name="training-dataset",
+            context="training",
+            path=source_path,
+            metadata={"format": "parquet"},
+            upload=True,
+        )
+
+    assert fake_wandb.run.config == {
+        "datasets/training-dataset/source": "datasets/actuator.parquet",
+        "datasets/training-dataset/digest": "abc123",
+        "datasets/training-dataset/context": "training",
+        "datasets/training-dataset/rows": 1,
+        "datasets/training-dataset/columns": '["field","value"]',
+        "datasets/training-dataset/uploaded": True,
+        "datasets/training-dataset/metadata/format": "parquet",
+    }
+    assert (
+        "log_artifact",
+        str(source_path),
+        {"name": "training-dataset", "type": "dataset"},
+    ) in fake_wandb.calls
 
 
 def test_wandb_artifact_must_exist(monkeypatch, tmp_path):

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Mapping, Optional, Union
+
+import pandas as pd
 
 ParameterValue = Union[str, int, float, bool]
 
@@ -34,6 +37,53 @@ class MLOpsRun(ABC):
     @abstractmethod
     def set_tags(self, tags: Mapping[str, str]) -> None:
         """Add or replace searchable run metadata."""
+
+    def log_dataset(
+        self,
+        dataset: pd.DataFrame,
+        *,
+        source: str,
+        digest: str,
+        name: str = "dataset",
+        context: str = "input",
+        path: Optional[Union[str, Path]] = None,
+        metadata: Optional[Mapping[str, ParameterValue]] = None,
+        upload: bool = False,
+    ) -> None:
+        """Log dataset lineage and optionally upload its materialized payload.
+
+        Backends can override this method to additionally use native dataset-input
+        concepts. The default implementation remains useful to third-party backends
+        by recording portable parameters and reusing artifact logging for uploads.
+        """
+
+        prefix = f"datasets/{name}"
+        parameters: dict[str, ParameterValue] = {
+            f"{prefix}/source": source,
+            f"{prefix}/digest": digest,
+            f"{prefix}/context": context,
+            f"{prefix}/rows": len(dataset.index),
+            f"{prefix}/columns": json.dumps(
+                [str(column) for column in dataset.columns],
+                separators=(",", ":"),
+            ),
+            f"{prefix}/uploaded": upload,
+        }
+        if metadata is not None:
+            parameters.update(
+                {f"{prefix}/metadata/{key}": value for key, value in metadata.items()}
+            )
+        self.log_params(parameters)
+
+        if not upload:
+            return
+        if path is None:
+            raise ValueError("A local dataset path is required when upload is enabled.")
+        self.log_artifact(
+            path,
+            collection=name,
+            artifact_type="dataset",
+        )
 
     @abstractmethod
     def log_artifact(

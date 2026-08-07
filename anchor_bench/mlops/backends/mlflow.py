@@ -8,8 +8,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Generator, Mapping, Optional, Union
 
+import pandas as pd
+
 from anchor_bench.errors import MLOpsDependencyError
 from anchor_bench.mlops.base import MLOpsBackend, MLOpsRun, ParameterValue
+
+_MLFLOW_DATASET_DIGEST_MAX_LENGTH = 36
+_FULL_DATASET_DIGEST_TAG = "anchor_bench.dataset_digest"
 
 
 class MLflowRun(MLOpsRun):
@@ -40,6 +45,46 @@ class MLflowRun(MLOpsRun):
 
     def set_tags(self, tags: Mapping[str, str]) -> None:
         self._mlflow.set_tags(dict(tags))
+
+    def log_dataset(
+        self,
+        dataset: pd.DataFrame,
+        *,
+        source: str,
+        digest: str,
+        name: str = "dataset",
+        context: str = "input",
+        path: Optional[Union[str, Path]] = None,
+        metadata: Optional[Mapping[str, ParameterValue]] = None,
+        upload: bool = False,
+    ) -> None:
+        super().log_dataset(
+            dataset,
+            source=source,
+            digest=digest,
+            name=name,
+            context=context,
+            path=path,
+            metadata=metadata,
+            upload=upload,
+        )
+        mlflow_dataset = self._mlflow.data.from_pandas(
+            dataset,
+            source=source,
+            name=name,
+            digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
+        )
+        input_tags = (
+            {key: str(value) for key, value in metadata.items()}
+            if metadata is not None
+            else {}
+        )
+        input_tags[_FULL_DATASET_DIGEST_TAG] = digest
+        self._mlflow.log_input(
+            mlflow_dataset,
+            context=context,
+            tags=input_tags,
+        )
 
     def log_artifact(
         self,

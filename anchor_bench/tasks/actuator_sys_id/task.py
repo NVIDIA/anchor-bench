@@ -25,6 +25,8 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         trajectories = load_trajectories(
             self.config.dataset,
             joint_names=joint_names,
+            dataset_tracker=self.mlops_run,
+            upload_dataset=self.mlops_upload_dataset,
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)

@@ -119,9 +119,21 @@ def test_training_task_runs_loader_data_processor_then_mapping(
     config_data["output_features"] = {"torque_residual": "torque_residual"}
     config = TrainingConfig.model_validate(config_data)
 
-    def load(source: str, *, dt: float) -> pd.DataFrame:
+    def load(
+        source: str,
+        *,
+        dt: float,
+        dataset_tracker: MLOpsRun,
+        dataset_name: str,
+        dataset_context: str,
+        upload_dataset: bool,
+    ) -> pd.DataFrame:
         """Record configured loading arguments."""
 
+        assert dataset_tracker is mlops_run
+        assert dataset_name == "training-dataset"
+        assert dataset_context == "training"
+        assert upload_dataset is False
         events.append(f"load:{source}:{dt}")
         return loaded
 
@@ -300,7 +312,7 @@ def test_training_task_initializes_simulation_for_validators(
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
-        lambda source, *, dt: _aligned_dataset(),
+        lambda source, *, dt, **kwargs: _aligned_dataset(),
     )
     simulation_calls = []
     monkeypatch.setattr(

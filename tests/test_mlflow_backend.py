@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from anchor_bench.errors import MLOpsDependencyError
@@ -20,9 +21,19 @@ class FakeActiveRun:
         self.calls.append(("exit", exception_type))
 
 
+class FakeMLflowData:
+    def __init__(self) -> None:
+        self.arguments = None
+
+    def from_pandas(self, dataset, **options):
+        self.arguments = (dataset, options)
+        return "native-dataset"
+
+
 class FakeMLflow:
     def __init__(self) -> None:
         self.calls = []
+        self.data = FakeMLflowData()
 
     def set_tracking_uri(self, uri):
         self.calls.append(("set_tracking_uri", uri))
@@ -45,6 +56,9 @@ class FakeMLflow:
 
     def set_tags(self, tags):
         self.calls.append(("set_tags", tags))
+
+    def log_input(self, dataset, **options):
+        self.calls.append(("log_input", dataset, options))
 
     def log_artifact(self, path, **options):
         self.calls.append(("log_artifact", path, options))
@@ -113,6 +127,59 @@ def test_mlflow_backend_adapts_run_operations(monkeypatch, tmp_path):
     ]
 
 
+def test_mlflow_logs_native_dataset_input_without_upload(monkeypatch, tmp_path):
+    fake_mlflow = FakeMLflow()
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", lambda: fake_mlflow)
+    dataset = pd.DataFrame({"field": ["actual_q"], "value": [1.0]})
+    full_digest = "a" * 64
+    source_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(source_path, index=False)
+
+    with MLflowBackend().start_run("dataset-lineage") as run:
+        run.log_dataset(
+            dataset,
+            source="datasets/actuator.parquet",
+            digest=full_digest,
+            name="training-dataset",
+            context="training",
+            path=source_path,
+            metadata={"format": "parquet"},
+        )
+
+    assert fake_mlflow.data.arguments is not None
+    reported_dataset, options = fake_mlflow.data.arguments
+    assert reported_dataset is dataset
+    assert options == {
+        "source": "datasets/actuator.parquet",
+        "name": "training-dataset",
+        "digest": full_digest[:36],
+    }
+    assert (
+        "log_input",
+        "native-dataset",
+        {
+            "context": "training",
+            "tags": {
+                "format": "parquet",
+                "anchor_bench.dataset_digest": full_digest,
+            },
+        },
+    ) in fake_mlflow.calls
+    assert (
+        "log_params",
+        {
+            "datasets/training-dataset/source": "datasets/actuator.parquet",
+            "datasets/training-dataset/digest": full_digest,
+            "datasets/training-dataset/context": "training",
+            "datasets/training-dataset/rows": 1,
+            "datasets/training-dataset/columns": '["field","value"]',
+            "datasets/training-dataset/uploaded": False,
+            "datasets/training-dataset/metadata/format": "parquet",
+        },
+    ) in fake_mlflow.calls
+    assert not any(call[0] == "log_artifact" for call in fake_mlflow.calls)
+
+
 def test_mlflow_artifact_must_exist(monkeypatch, tmp_path):
     monkeypatch.setattr(mlflow_backend, "_import_mlflow", FakeMLflow)
 
@@ -134,7 +201,7 @@ def test_mlflow_dependency_is_loaded_lazily(monkeypatch):
         MLflowBackend()
 
 
-def test_mlflow_persists_file_and_directory_artifacts(tmp_path, monkeypatch):
+def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
     mlflow = pytest.importorskip("mlflow")
     monkeypatch.chdir(tmp_path)
     tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
@@ -147,6 +214,10 @@ def test_mlflow_persists_file_and_directory_artifacts(tmp_path, monkeypatch):
         "format_version: 1\n",
         encoding="utf-8",
     )
+    dataset = pd.DataFrame({"field": ["actual_q"], "value": [1.0]})
+    full_digest = "a" * 64
+    dataset_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(dataset_path, index=False)
 
     backend = MLflowBackend(tracking_uri=tracking_uri)
     with backend.start_run("artifact-persistence") as run:
@@ -161,6 +232,16 @@ def test_mlflow_persists_file_and_directory_artifacts(tmp_path, monkeypatch):
             collection="training-output",
             artifact_type="model",
         )
+        run.log_dataset(
+            dataset,
+            source="datasets/actuator.parquet",
+            digest=full_digest,
+            name="training-dataset",
+            context="training",
+            path=dataset_path,
+            metadata={"format": "parquet"},
+            upload=True,
+        )
 
     client = mlflow.MlflowClient(tracking_uri=tracking_uri)
     checkpoint_artifacts = client.list_artifacts(
@@ -171,6 +252,12 @@ def test_mlflow_persists_file_and_directory_artifacts(tmp_path, monkeypatch):
         run_id,
         path="training-output",
     )
+    dataset_artifacts = client.list_artifacts(
+        run_id,
+        path="training-dataset",
+    )
+    tracked_run = client.get_run(run_id)
+    dataset_inputs = tracked_run.inputs.dataset_inputs
 
     assert {artifact.path for artifact in checkpoint_artifacts} == {
         "training-checkpoints/epoch-000001.pt"
@@ -179,3 +266,13 @@ def test_mlflow_persists_file_and_directory_artifacts(tmp_path, monkeypatch):
         "training-output/metadata.yaml",
         "training-output/model.pt",
     }
+    assert {artifact.path for artifact in dataset_artifacts} == {
+        "training-dataset/dataset.parquet"
+    }
+    assert len(dataset_inputs) == 1
+    assert dataset_inputs[0].dataset.name == "training-dataset"
+    assert dataset_inputs[0].dataset.digest == full_digest[:36]
+    assert tracked_run.data.params["datasets/training-dataset/digest"] == full_digest
+    input_tags = {tag.key: tag.value for tag in dataset_inputs[0].tags}
+    assert input_tags["mlflow.data.context"] == "training"
+    assert input_tags["anchor_bench.dataset_digest"] == full_digest
