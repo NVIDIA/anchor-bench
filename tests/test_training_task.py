@@ -54,7 +54,7 @@ def _config_data(source: str) -> dict[str, Any]:
             "batch_size": 2,
             "seed": 0,
             "validation_ratio": 0.2,
-            "sequence": {"length": 2, "stride": 1, "hidden_state": "reset"},
+            "sequence": {"length": 2},
             "optimizer": {
                 "type": "adamw",
                 "learning_rate": 0.001,
@@ -125,10 +125,16 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         events.append(f"load:{source}:{dt}")
         return loaded
 
-    def initialize_context(backend: str, path: str) -> object:
+    def initialize_context(
+        backend: str,
+        path: str,
+        *,
+        fixed_base: bool,
+    ) -> object:
         """Record simulation initialization before preprocessing."""
 
         events.append(f"simulation:{backend}:{path}")
+        assert fixed_base is False
         return object()
 
     def preprocess(
@@ -299,7 +305,7 @@ def test_training_task_initializes_simulation_for_validators(
     simulation_calls = []
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.create_simulation_context",
-        lambda backend, path: simulation_calls.append((backend, path)),
+        lambda backend, path, *, fixed_base: simulation_calls.append((backend, path)),
     )
 
     class StubTrainer:
@@ -363,7 +369,7 @@ def test_task_runner_registers_and_runs_training(
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.create_simulation_context",
-        lambda backend, path: object(),
+        lambda backend, path, *, fixed_base: object(),
     )
     monkeypatch.setattr(
         "anchor_bench.tasks.train.validator_runner.ValidatorRunner.run",

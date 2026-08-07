@@ -97,7 +97,11 @@ def test_save_training_artifacts_writes_portable_run(
                 "data_processor": None,
             }
         ],
-        "simulation": {"backend": "newton", "usd_path": "robot.usda"},
+        "simulation": {
+            "backend": "newton",
+            "usd_path": "robot.usda",
+            "fixed_base": False,
+        },
         "mappings": {
             "joint": {
                 "inputs": ["joint/input"],

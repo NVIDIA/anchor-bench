@@ -52,15 +52,26 @@ class FakeModelBuilder:
     def __init__(self) -> None:
         self.usd_source = None
         self.replicated_template = None
-        self.world_count = None
+        self.world_count = 1
+        self.world_gravity = []
+        self.floating = None
+        self.options = {}
         self.model = FakeModel()
         FakeModelBuilder.instances.append(self)
         FakeModelBuilder.instance_count += 1
 
-    def add_usd(self, *, source: str) -> None:
+    def add_usd(
+        self,
+        *,
+        source: str,
+        floating: bool,
+        **options: object,
+    ) -> None:
         """Record the USD source passed to Newton."""
 
         self.usd_source = source
+        self.floating = floating
+        self.options = options
 
     def finalize(self) -> FakeModel:
         """Return the finalized fake model."""
@@ -168,6 +179,9 @@ def test_lazily_builds_one_newton_model_and_state(
     template, population = FakeModelBuilder.instances
     fake_model = population.model
     assert template.usd_source == str(source)
+    assert template.floating is True
+    assert template.options == {}
+    assert template.world_gravity == []
     assert population.replicated_template is template
     assert population.world_count == 1
     assert model is fake_model
@@ -367,3 +381,14 @@ def test_rejects_a_different_backend(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="Only one simulation backend"):
         OtherSimulationContext(str(source))
+
+
+def test_rejects_different_import_configuration(tmp_path: Path) -> None:
+    """Keep the fixed-base setting process-wide."""
+
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
+    NewtonSimulationContext(str(source), fixed_base=True)
+
+    with pytest.raises(RuntimeError, match="different base mode"):
+        NewtonSimulationContext(str(source), fixed_base=False)

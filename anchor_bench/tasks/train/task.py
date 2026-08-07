@@ -88,7 +88,11 @@ class TrainingTask(BaseTask[TrainingConfig]):
         )
 
         simulation = self.config.simulation
-        create_simulation_context(simulation.backend, simulation.usd_path)
+        create_simulation_context(
+            simulation.backend,
+            simulation.usd_path,
+            fixed_base=simulation.fixed_base,
+        )
 
         dataset = DataProcessorRunner.run(dataset, self.config.input_features)
         dataset = DataProcessorRunner.run(dataset, self.config.output_features)

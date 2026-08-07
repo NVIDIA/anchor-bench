@@ -31,10 +31,15 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     _contacts: newton.Contacts
     _solver: newton.solvers.SolverMuJoCo
 
-    def __init__(self, usd_path: str) -> None:
+    def __init__(
+        self,
+        usd_path: str,
+        *,
+        fixed_base: bool = False,
+    ) -> None:
         """Initialize instance bookkeeping without resetting the singleton."""
 
-        super().__init__(usd_path)
+        super().__init__(usd_path, fixed_base=fixed_base)
         if not hasattr(self, "_initialized"):
             self._initialized = False
 
@@ -184,7 +189,10 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         """Create a configured builder and load the context's USD asset."""
 
         builder = self._create_builder()
-        builder.add_usd(source=str(self.usd_path))
+        builder.add_usd(
+            source=str(self.usd_path),
+            floating=not self.fixed_base,
+        )
         return builder
 
     def _create_builder(self) -> newton.ModelBuilder:

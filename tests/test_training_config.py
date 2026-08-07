@@ -64,8 +64,6 @@ def valid_config_data():
             "validation_ratio": 0.2,
             "sequence": {
                 "length": 32,
-                "stride": 8,
-                "hidden_state": "reset",
             },
             "optimizer": {
                 "type": "adamw",
@@ -109,9 +107,9 @@ def valid_config_data():
                     "max": 0.01,
                     "scale": "log",
                 },
-                "training.sequence.hidden_state": {
+                "model.output.activation": {
                     "data_type": "categorical",
-                    "values": ["reset"],
+                    "values": ["identity"],
                 },
             },
         },
@@ -321,9 +319,9 @@ def test_search_rejects_parameter_name_without_object_path(valid_config_data):
 
 def test_search_rejects_duplicate_categorical_values(valid_config_data):
     data = deepcopy(valid_config_data)
-    data["search"]["search_space"]["training.sequence.hidden_state"]["values"] = [
-        "reset",
-        "reset",
+    data["search"]["search_space"]["model.output.activation"]["values"] = [
+        "identity",
+        "identity",
     ]
 
     with pytest.raises(
