@@ -265,7 +265,7 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,
-        "options": {"api_key": "secret"},
+        "options": {"mode": "offline"},
     }
     config = TrainingConfig.model_validate(config_data)
     checkpoint_directory = tmp_path / "checkpoints"
@@ -299,6 +299,7 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,
+        "options": {"mode": "offline"},
     }
     assert checkpoint["model_state_dict"].keys() == trainer.model.state_dict().keys()
     assert checkpoint["optimizer_state_dict"]["state"]

@@ -35,7 +35,7 @@ def test_get_or_create_output_folder_writes_config(tmp_path: Path):
     }
 
 
-def test_get_or_create_output_folder_omits_mlops_options(tmp_path: Path):
+def test_get_or_create_output_folder_preserves_mlops_options(tmp_path: Path):
     config = ConfigWithMLOps(
         type="example",
         mlops=MLOpsConfig(
@@ -43,7 +43,7 @@ def test_get_or_create_output_folder_omits_mlops_options(tmp_path: Path):
             experiment_name="training",
             run_name="baseline",
             upload_dataset=True,
-            options={"api_key": "secret"},
+            options={"mode": "offline"},
         ),
     )
 
@@ -56,6 +56,7 @@ def test_get_or_create_output_folder_omits_mlops_options(tmp_path: Path):
             "experiment_name": "training",
             "run_name": "baseline",
             "upload_dataset": True,
+            "options": {"mode": "offline"},
         },
     }
 

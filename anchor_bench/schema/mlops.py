@@ -16,4 +16,4 @@ class MLOpsConfig(StrictBaseModel):
     experiment_name: str = Field(default="anchor-bench", min_length=1)
     run_name: Optional[str] = Field(default=None, min_length=1)
     upload_dataset: bool = False
-    options: Dict[str, Any] = Field(default_factory=dict, exclude=True)
+    options: Dict[str, Any] = Field(default_factory=dict)

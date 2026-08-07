@@ -132,7 +132,7 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,
-        "options": {"api_key": "secret"},
+        "options": {"mode": "offline"},
     }
     config = TrainingConfig.model_validate(config_data)
     sequences = [_sequence("first", [0.0, 1.0])]
@@ -194,4 +194,5 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,
+        "options": {"mode": "offline"},
     }
