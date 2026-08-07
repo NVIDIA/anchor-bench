@@ -157,7 +157,7 @@ class Trainer:
         temporary_path.replace(path)
 
     def _train_epoch(self) -> float:
-        """Update model weights for every training batch."""
+        """Update model weights for every independent training window."""
 
         self.model.train()
         total_loss = 0.0
@@ -215,41 +215,69 @@ class Trainer:
         return total_loss / sample_count
 
     def _forward(self, inputs: Tensor) -> Tensor:
-        """Run a batch, feeding configured prior predictions into later steps."""
+        """Run an independent input batch and return its predictions."""
+
+        predictions, _, _ = self._forward_with_state(inputs)
+        return predictions
+
+    def _forward_with_state(
+        self,
+        inputs: Tensor,
+        *,
+        state: Tensor | None = None,
+        previous_physical: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
+        """Run a batch while preserving recurrent and feedback state."""
 
         feedback = self.config.training.feedback
         indices = self.feedback_indices
         if feedback is None or indices is None:
-            return self.model(inputs).predictions
+            output = self.model(inputs, state)
+            if output.state is None:
+                raise RuntimeError("GRU model did not return recurrent state.")
+            return output.predictions, output.state, None
 
         input_indices, output_indices = indices
         normalization = self.data_loaders.normalization
 
-        def selected(values: tuple[float, ...], indices: tuple[int, ...]) -> Tensor:
-            return inputs.new_tensor(tuple(values[index] for index in indices))
+        def selected(
+            values: tuple[float, ...], selected_indices: tuple[int, ...]
+        ) -> Tensor:
+            """Select normalization values for configured feedback columns."""
+
+            return inputs.new_tensor(tuple(values[index] for index in selected_indices))
 
         input_mean = selected(normalization.inputs.mean, input_indices)
-        input_std = selected(normalization.inputs.standard_deviation, input_indices)
-        output_mean = selected(normalization.outputs.mean, output_indices)
-        output_std = selected(normalization.outputs.standard_deviation, output_indices)
-        previous_physical = inputs.new_full(
-            (inputs.shape[0], 1, len(input_indices)),
-            feedback.initial_value,
+        input_std = selected(
+            normalization.inputs.standard_deviation,
+            input_indices,
         )
-        state = None
+        output_mean = selected(normalization.outputs.mean, output_indices)
+        output_std = selected(
+            normalization.outputs.standard_deviation,
+            output_indices,
+        )
+        if previous_physical is None:
+            previous_physical = inputs.new_full(
+                (inputs.shape[0], 1, len(input_indices)),
+                feedback.initial_value,
+            )
+        feedback_value = previous_physical
         predictions = []
         for timestep in range(inputs.shape[1]):
             step_inputs = inputs[:, timestep : timestep + 1].clone()
-            step_inputs[:, :, input_indices] = (
-                previous_physical - input_mean
-            ) / input_std
+            step_inputs[:, :, input_indices] = (feedback_value - input_mean) / input_std
             output = self.model(step_inputs, state)
+            if output.state is None:
+                raise RuntimeError("GRU model did not return recurrent state.")
             predictions.append(output.predictions)
             state = output.state
-            previous_physical = (
+            feedback_value = (
                 output.predictions[:, :, output_indices] * output_std + output_mean
             )
-        return torch.cat(predictions, dim=1)
+        if state is None:
+            raise RuntimeError("GRU input sequence must not be empty.")
+        return torch.cat(predictions, dim=1), state, feedback_value
 
 
 def _create_loss(config: LossConfig) -> nn.Module:

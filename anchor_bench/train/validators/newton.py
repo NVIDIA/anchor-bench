@@ -74,8 +74,12 @@ class NewtonReplayValidator(BaseValidator):
         substeps = self.config.get("substeps", 1)
         if isinstance(substeps, bool) or not isinstance(substeps, int) or substeps < 1:
             raise ValueError("Newton replay substeps must be a positive integer.")
+        disable_contacts = self.config.get("disable_contacts", False)
+        if not isinstance(disable_contacts, bool):
+            raise TypeError("Newton replay disable_contacts must be a boolean.")
 
         self.signals = tuple(signals)
+        self.disable_contacts = disable_contacts
         self.substeps = substeps
 
     def validate(
@@ -91,6 +95,7 @@ class NewtonReplayValidator(BaseValidator):
             self.simulation_context,
             output_joints=output_joints,
             residual=self._uses_residual_effort(sequences),
+            disable_contacts=self.disable_contacts,
             substeps=self.substeps,
         )
         metrics: dict[str, float] = {}

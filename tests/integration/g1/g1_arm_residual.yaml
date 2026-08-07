@@ -1,0 +1,81 @@
+type: training
+description: Train the four-joint G1 right-arm residual-torque GRU.
+tags: [g1, right-arm, gru, residual-torque]
+
+dataset:
+  type: parquet
+  source: tests/integration/g1/data/g1_arm_multijoint.parquet
+  resampling:
+    type: uniform
+    dt: 0.002
+    time_range: intersection
+    interpolation: linear
+
+simulation:
+  backend: newton
+  usd_path: tests/integration/g1/usd/g1_arm_residual.usda
+  fixed_base: true
+
+input_features:
+  actual_q: null
+  position_error: null
+  actual_dq: null
+
+output_features:
+  torque_residual: torque_residual
+
+mapping:
+  right_arm:
+    inputs:
+      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_pitch_joint
+      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_roll_joint
+      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_yaw_joint
+      - /g1_29dof_with_hand_rev_1_0/joints/right_elbow_joint
+    outputs:
+      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_pitch_joint
+      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_roll_joint
+      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_yaw_joint
+      - /g1_29dof_with_hand_rev_1_0/joints/right_elbow_joint
+
+model:
+  type: gru
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.0
+  output:
+    activation: tanh
+    scale: 5.0
+
+training:
+  epochs: 50
+  batch_size: 4
+  seed: 42
+  validation_ratio: 0.2
+  sequence:
+    length: 100
+  optimizer:
+    type: adamw
+    learning_rate: 0.001
+    weight_decay: 0.0
+  loss:
+    type: huber
+    delta: 1.0
+  gradient:
+    clip_norm: 1.0
+  augmentation:
+    input_noise_std: 0.0
+  normalization:
+    inputs: standard
+    outputs: none
+  checkpoint:
+    every_n_epochs: 10
+
+validation:
+  validators:
+    - name: newton_replay
+      type: simulation
+      entrypoint: newton_replay
+      config:
+        signals: [position, velocity]
+        substeps: 1
+        disable_contacts: true

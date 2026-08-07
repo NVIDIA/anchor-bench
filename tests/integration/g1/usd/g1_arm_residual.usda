@@ -1,0 +1,57 @@
+#usda 1.0
+(
+    defaultPrim = "g1_29dof_with_hand_rev_1_0"
+    subLayers = [
+        @g1.usd@
+    ]
+)
+
+over "g1_29dof_with_hand_rev_1_0"
+{
+    over "joints"
+    {
+        over "right_shoulder_pitch_joint" (
+            prepend apiSchemas = ["NewtonJointAPI", "PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.012391837
+            float drive:angular:physics:stiffness = 0.5235988
+            float newton:armature = 0.00109
+            float newton:damping = 0.0006457718
+            float newton:friction = 0.462
+        }
+
+        over "right_shoulder_roll_joint" (
+            prepend apiSchemas = ["NewtonJointAPI", "PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.00715585
+            float drive:angular:physics:stiffness = 0.58590704
+            float newton:armature = 0.00101
+            float newton:damping = 0.008412487
+            float newton:friction = 0.783
+        }
+
+        over "right_shoulder_yaw_joint" (
+            prepend apiSchemas = ["NewtonJointAPI", "PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.012077678
+            float drive:angular:physics:stiffness = 1.0927507
+            float newton:armature = 0.00574
+            float newton:damping = 0.019634955
+            float newton:friction = 0.521
+        }
+
+        over "right_elbow_joint" (
+            prepend apiSchemas = ["NewtonJointAPI", "PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 0.0099832835
+            float drive:angular:physics:stiffness = 0.47944194
+            float newton:armature = 0.00119
+            float newton:damping = 0.0013788101
+            float newton:friction = 0.27
+        }
+    }
+}

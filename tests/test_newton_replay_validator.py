@@ -47,6 +47,7 @@ class FakeStepper(newton_validator._NewtonStepper):
         output_joints: tuple[str, ...],
         residual: bool,
         substeps: int,
+        disable_contacts: bool = False,
     ) -> None:
         """Record construction arguments and initialize state."""
 
@@ -54,6 +55,7 @@ class FakeStepper(newton_validator._NewtonStepper):
         self.output_joints = output_joints
         self.residual = residual
         self.substeps = substeps
+        self.disable_contacts = disable_contacts
         self.position: dict[str, float] = {}
         self.velocity: dict[str, float] = {}
         self.steps: list[tuple[dict[str, float], dict[str, float], float]] = []
@@ -233,7 +235,11 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
     validator = NewtonReplayValidator(
         name="rollout",
         type="simulation",
-        config={"signals": ["position", "velocity"], "substeps": 4},
+        config={
+            "signals": ["position", "velocity"],
+            "substeps": 4,
+            "disable_contacts": True,
+        },
     )
 
     result = validator.validate(model, _validation_dataset(_sequence()))
@@ -243,6 +249,7 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
     assert model.state_inputs == [None, 1]
     assert stepper.residual is False
     assert stepper.substeps == 4
+    assert stepper.disable_contacts is True
     assert stepper.reset_count == 1
     assert [step[1] for step in stepper.steps] == [
         {"joint": 1.0},
@@ -296,12 +303,13 @@ def test_residual_target_keeps_newton_baseline_enabled() -> None:
         {"signals": ["position", "position"]},
         {"substeps": 0},
         {"substeps": True},
+        {"disable_contacts": 1},
     ],
 )
 def test_rejects_invalid_replay_configuration(config: dict[str, object]) -> None:
-    """Reject unsupported signals and invalid physical substeps."""
+    """Reject unsupported signals and invalid physical options."""
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         NewtonReplayValidator(
             name="invalid",
             type="simulation",

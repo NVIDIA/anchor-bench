@@ -1,0 +1,29 @@
+source_usd: files/g1.usd
+exporter: anchor_bench.tasks.actuator_sys_id.usd.write_identified_usd_layer
+
+physical_parameters:
+  right_shoulder_pitch_joint:
+    armature: 0.00109
+    dry_friction: 0.462
+    viscous_friction: 0.037
+  right_shoulder_roll_joint:
+    armature: 0.00101
+    dry_friction: 0.783
+    viscous_friction: 0.482
+  right_shoulder_yaw_joint:
+    armature: 0.00574
+    dry_friction: 0.521
+    viscous_friction: 1.125
+  right_elbow_joint:
+    armature: 0.00119
+    dry_friction: 0.270
+    viscous_friction: 0.079
+
+layers:
+  files/g1_arm_residual.usda:
+    stiffness: [30.0, 33.57, 62.61, 27.47]
+    damping: [0.71, 0.41, 0.692, 0.572]
+  files/g1_arm_full_torque.usda:
+    stiffness: [40.0, 40.0, 40.0, 40.0]
+    damping: [1.0, 1.0, 1.0, 1.0]
+    note: Gains define solver_pd inputs; replay switches learned outputs to effort mode.

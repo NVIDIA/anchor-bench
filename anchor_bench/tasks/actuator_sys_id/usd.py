@@ -41,7 +41,8 @@ def write_identified_usd_layer(
     duplicating or flattening it.
     """
 
-    source_path = Path(source_usd).expanduser().resolve()
+    source_reference_path = Path(source_usd).expanduser().absolute()
+    source_path = source_reference_path.resolve()
     destination = Path(output_path).expanduser().resolve()
     if not source_path.is_file():
         raise FileNotFoundError(f"source USD does not exist: {source_path}")
@@ -65,7 +66,7 @@ def write_identified_usd_layer(
         raise RuntimeError(f"could not create identified USD layer: {destination}")
     output_layer.Clear()
     source_identifier = Path(
-        os.path.relpath(source_path, start=destination.parent)
+        os.path.relpath(source_reference_path, start=destination.parent)
     ).as_posix()
     output_layer.subLayerPaths = [source_identifier]
 

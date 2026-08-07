@@ -84,7 +84,7 @@ class FakeSolver:
 
     instances: ClassVar[list[FakeSolver]] = []
 
-    def __init__(self, model: FakeNewtonModel) -> None:
+    def __init__(self, model: FakeNewtonModel, **options: object) -> None:
         """Record one created solver."""
 
         self.reset_count = 0
@@ -145,6 +145,16 @@ def test_stepper_resets_steps_and_restores_direct_effort_mode(
     )
 
     assert context.model.joint_target_mode.numpy().tolist() == [4.0]
+    assert context.model.joint_target_ke.numpy().tolist() == [0.0]
+    assert context.model.joint_target_kd.numpy().tolist() == [0.0]
+    assert stepper.solver_pd(
+        "joint",
+        3.0,
+        newton_stepper._ReplayState(
+            position={"joint": 1.0},
+            velocity={"joint": 2.0},
+        ),
+    ) == pytest.approx(7.0)
     initial = stepper.reset(
         position={"joint": 1.0},
         velocity={"joint": 0.0},
@@ -169,6 +179,8 @@ def test_stepper_resets_steps_and_restores_direct_effort_mode(
     stepper.close()
 
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
+    assert context.model.joint_target_ke.numpy().tolist() == [4.0]
+    assert context.model.joint_target_kd.numpy().tolist() == [0.5]
 
 
 def test_stepper_retains_usd_actuation_for_residual_effort(

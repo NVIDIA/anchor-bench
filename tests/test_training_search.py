@@ -45,9 +45,9 @@ def _search_config() -> TrainingConfig:
                 "max": 0.01,
                 "scale": "log",
             },
-            "training.sequence.hidden_state": {
+            "model.output.activation": {
                 "data_type": "categorical",
-                "values": ["reset"],
+                "values": ["identity"],
             },
         },
     }

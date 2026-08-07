@@ -56,6 +56,7 @@ def _duplicate_values(values: List[CategoricalValue]) -> bool:
 
 
 class SimulationConfig(StrictBaseModel):
+    fixed_base: StrictBool = False
     backend: Literal["newton"] = "newton"
     usd_path: NonEmptyString
 
@@ -92,8 +93,6 @@ ModelConfig: TypeAlias = GruModelConfig
 
 class SequenceConfig(StrictBaseModel):
     length: PositiveInteger
-    stride: PositiveInteger
-    hidden_state: Literal["reset"]
 
 
 class AdamwOptimizerConfig(StrictBaseModel):

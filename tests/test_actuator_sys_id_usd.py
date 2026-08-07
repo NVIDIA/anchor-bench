@@ -116,6 +116,20 @@ def test_infers_a_scalar_d6_axis_and_uses_newton_angular_scaling(tmp_path):
     )
 
 
+def test_preserves_a_supplied_symlink_as_the_sublayer_path(tmp_path):
+    source = tmp_path / "cache" / "robot.usda"
+    link = tmp_path / "assets" / "robot.usda"
+    output = tmp_path / "assets" / "identified.usda"
+    _create_source_usd(source)
+    link.parent.mkdir()
+    link.symlink_to(source)
+
+    write_identified_usd_layer(link, output, {"hip": _parameters()})
+
+    layer = Sdf.Layer.FindOrOpen(str(output))
+    assert layer.subLayerPaths == ["robot.usda"]
+
+
 def test_rejects_an_ambiguous_joint_name(tmp_path):
     source = tmp_path / "robot.usda"
     output = tmp_path / "identified.usda"

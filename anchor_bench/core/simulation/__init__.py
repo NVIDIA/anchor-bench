@@ -17,10 +17,16 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
 
     _instance: ClassVar[Optional[SimulationContext[Any, Any]]] = None
     _usd_path: Path
+    _fixed_base: bool
     _model: Optional[ModelT]
     _state: Optional[StateT]
 
-    def __new__(cls, usd_path: str) -> Self:
+    def __new__(
+        cls,
+        usd_path: str,
+        *,
+        fixed_base: bool = False,
+    ) -> Self:
         """Create or return the process-wide simulation context."""
 
         source = Path(usd_path).expanduser().resolve()
@@ -34,6 +40,10 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
                 raise RuntimeError(
                     f"Simulation context already uses {current.usd_path}."
                 )
+            if current.fixed_base != fixed_base:
+                raise RuntimeError(
+                    "Simulation context already uses a different base mode."
+                )
             return cast(Self, current)
 
         if not source.is_file():
@@ -41,12 +51,18 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
 
         instance = super().__new__(cls)
         instance._usd_path = source
+        instance._fixed_base = fixed_base
         instance._model = None
         instance._state = None
         SimulationContext._instance = instance
         return instance
 
-    def __init__(self, usd_path: str) -> None:
+    def __init__(
+        self,
+        usd_path: str,
+        *,
+        fixed_base: bool = False,
+    ) -> None:
         """Accept the mandatory USD path handled during construction."""
 
     @classmethod
@@ -63,6 +79,12 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
         """Return the USD file assigned to this process."""
 
         return self._usd_path
+
+    @property
+    def fixed_base(self) -> bool:
+        """Return whether the imported robot root is fixed."""
+
+        return self._fixed_base
 
     def load(self) -> Tuple[ModelT, StateT]:
         """Load and cache the model and state on first use."""
