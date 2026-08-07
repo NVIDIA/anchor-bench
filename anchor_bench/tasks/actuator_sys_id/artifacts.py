@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 import yaml
 
+from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import (
     Candidate,
     GenerationRecord,
@@ -24,6 +25,7 @@ def write_artifacts(
     best_mse: float,
     history: Sequence[GenerationRecord],
     source_usd_path: Union[str, Path],
+    config: ActuatorSysIdConfig,
 ) -> SysIdResult:
     """Write the fitted parameters, USD layer, log, and resolved run summary."""
 
@@ -70,6 +72,7 @@ def write_artifacts(
         source_usd_path,
         identified_usd_path,
         best_parameters,
+        config.model_dump_json(),
     )
     return SysIdResult(
         best_parameters=best_parameters,
