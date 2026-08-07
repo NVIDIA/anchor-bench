@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from anchor_bench.core.task_runner import TaskRunner
 from anchor_bench.errors import ConfigParseError, UnknownConfigTypeError
@@ -112,7 +113,10 @@ def test_runner_uses_explicit_output_folder(config_path, tmp_path):
     assert (result / ".completed").is_file()
 
 
-def test_runner_skips_completed_task_unless_forced(config_path):
+def test_runner_skips_completed_task_without_rewriting_config_unless_forced(
+    config_path,
+    tmp_path,
+):
     run_count = 0
 
     class RecordingTask(BaseTask[ActuatorSysIdConfig]):
@@ -122,16 +126,26 @@ def test_runner_skips_completed_task_unless_forced(config_path):
             return output_directory
 
     runner = TaskRunner({"actuator_sys_id": RecordingTask})
-    first_output = runner.run(str(config_path))
-    second_output = runner.run(str(config_path))
+    requested_output = tmp_path / "named-output"
+    first_output = runner.run(str(config_path), output=requested_output)
+    config_artifact = first_output / "config.yaml"
+    config_artifact.write_text("stale: true\n", encoding="utf-8")
+
+    second_output = runner.run(str(config_path), output=requested_output)
 
     assert second_output == first_output
     assert run_count == 1
+    assert yaml.safe_load(config_artifact.read_text(encoding="utf-8")) == {
+        "stale": True
+    }
 
-    forced_output = runner.run(str(config_path), force=True)
+    forced_output = runner.run(str(config_path), force=True, output=requested_output)
 
     assert forced_output == first_output
     assert run_count == 2
+    assert yaml.safe_load(config_artifact.read_text(encoding="utf-8")) == parse(
+        config_path
+    ).model_dump(mode="json")
     assert (forced_output / ".completed").is_file()
 
 

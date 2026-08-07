@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, Union
 
-from anchor_bench.core.artifacts import COMPLETION_MARKER, get_or_create_output_folder
+from anchor_bench.core.artifacts import (
+    COMPLETION_MARKER,
+    get_or_create_output_folder,
+    write_yaml,
+)
 from anchor_bench.errors import TaskNotFoundError
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
@@ -52,6 +56,10 @@ class TaskRunner:
         if already_completed and not force:
             return output_directory
 
+        write_yaml(
+            output_directory / "config.yaml",
+            config.model_dump(mode="json"),
+        )
         completion_marker = output_directory / COMPLETION_MARKER
         completion_marker.unlink(missing_ok=True)
         task_output = task_class(config).run(output_directory)
