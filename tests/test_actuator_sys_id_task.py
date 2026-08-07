@@ -198,6 +198,7 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
     assert written["source_usd_path"] == config.simulation.usd_path
+    assert written["config"] is config
     assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
     assert written["history"] == [
         GenerationRecord(generation=0, best_mse=0.25, population_mean_mse=0.625)
@@ -218,10 +219,12 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     source_usd_path = tmp_path / "robot.usd"
+    config = _config(tmp_path)
 
-    def write_usd(source, output, parameters):
+    def write_usd(source, output, parameters, config_metadata):
         assert source == source_usd_path
         assert parameters == candidate
+        assert config_metadata == config.model_dump_json()
         output.write_text("#usda 1.0\n", encoding="utf-8")
         return output
 
@@ -236,6 +239,7 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
         best_mse=0.125,
         history=[GenerationRecord(0, 0.125, 0.5)],
         source_usd_path=source_usd_path,
+        config=config,
     )
 
     document = yaml.safe_load(result.best_parameters_path.read_text())

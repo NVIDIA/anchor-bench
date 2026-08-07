@@ -33,12 +33,13 @@ def write_identified_usd_layer(
     source_usd: Union[str, Path],
     output_path: Union[str, Path],
     best_parameters: Candidate,
+    config_metadata: str,
 ) -> Path:
     """Write a sparse USD layer containing the identified actuator parameters.
 
-    The resulting layer sublayers ``source_usd`` and authors only stronger joint
-    opinions. It therefore remains dependent on the source asset rather than
-    duplicating or flattening it.
+    The resulting layer records the resolved configuration metadata, sublayers
+    ``source_usd``, and authors only stronger joint opinions. It therefore remains
+    dependent on the source asset rather than duplicating or flattening it.
     """
 
     source_reference_path = Path(source_usd).expanduser().absolute()
@@ -65,6 +66,7 @@ def write_identified_usd_layer(
     if output_layer is None:
         raise RuntimeError(f"could not create identified USD layer: {destination}")
     output_layer.Clear()
+    output_layer.customLayerData = {"config": config_metadata}
     source_identifier = Path(
         os.path.relpath(source_reference_path, start=destination.parent)
     ).as_posix()

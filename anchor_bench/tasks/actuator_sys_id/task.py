@@ -53,5 +53,6 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             best_mse=optimizer.best_score,
             history=history,
             source_usd_path=self.config.simulation.usd_path,
+            config=self.config,
         )
         return output_directory

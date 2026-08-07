@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -10,6 +11,8 @@ from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer
 
 # The OpenUSD extension modules do not publish complete Python type information.
+
+_CONFIG_METADATA = '{"type":"actuator_sys_id","seed":7}'
 
 
 def _parameters(**overrides):
@@ -63,11 +66,16 @@ def test_writes_sparse_opinions_over_the_source_asset(tmp_path):
                 viscous_friction=2.0,
             ),
         },
+        _CONFIG_METADATA,
     )
 
     assert result == output.resolve()
     root_layer = Sdf.Layer.FindOrOpen(str(output))
     assert root_layer.subLayerPaths == ["../assets/robot.usda"]
+    assert json.loads(root_layer.customLayerData["config"]) == {
+        "type": "actuator_sys_id",
+        "seed": 7,
+    }
     assert root_layer.GetPrimAtPath("/World/visual") is None
     hip_spec = root_layer.GetPrimAtPath("/World/hip")
     assert "NewtonJointAPI" in hip_spec.GetInfo("apiSchemas").GetAddedOrExplicitItems()
@@ -105,6 +113,7 @@ def test_infers_a_scalar_d6_axis_and_uses_newton_angular_scaling(tmp_path):
         source,
         output,
         {"wrist": _parameters()},
+        _CONFIG_METADATA,
     )
 
     stage = Usd.Stage.Open(str(output))
@@ -124,7 +133,7 @@ def test_preserves_a_supplied_symlink_as_the_sublayer_path(tmp_path):
     link.parent.mkdir()
     link.symlink_to(source)
 
-    write_identified_usd_layer(link, output, {"hip": _parameters()})
+    write_identified_usd_layer(link, output, {"hip": _parameters()}, _CONFIG_METADATA)
 
     layer = Sdf.Layer.FindOrOpen(str(output))
     assert layer.subLayerPaths == ["robot.usda"]
@@ -139,4 +148,9 @@ def test_rejects_an_ambiguous_joint_name(tmp_path):
     stage.GetRootLayer().Save()
 
     with pytest.raises(ValueError, match="exactly one joint matching 'hip'"):
-        write_identified_usd_layer(source, output, {"hip": _parameters()})
+        write_identified_usd_layer(
+            source,
+            output,
+            {"hip": _parameters()},
+            _CONFIG_METADATA,
+        )
