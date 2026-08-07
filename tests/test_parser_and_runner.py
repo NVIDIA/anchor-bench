@@ -169,6 +169,29 @@ def test_forced_failure_removes_previous_completion_marker(config_path):
     assert not (output_directory / ".completed").exists()
 
 
+def test_forced_config_write_failure_removes_previous_completion_marker(
+    config_path,
+    monkeypatch,
+):
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self, output_directory: Path) -> Path:
+            return output_directory
+
+    runner = TaskRunner({"actuator_sys_id": RecordingTask})
+    output_directory = runner.run(str(config_path))
+    assert (output_directory / ".completed").is_file()
+
+    def fail_write(_path: Path, _document: object) -> None:
+        raise OSError("config write failed")
+
+    monkeypatch.setattr("anchor_bench.core.task_runner.write_yaml", fail_write)
+
+    with pytest.raises(OSError, match="config write failed"):
+        runner.run(str(config_path), force=True)
+
+    assert not (output_directory / ".completed").exists()
+
+
 def test_runner_rejects_a_task_returning_the_wrong_output_directory(config_path):
     class MisdirectedTask(BaseTask[ActuatorSysIdConfig]):
         def run(self, output_directory: Path) -> Path:

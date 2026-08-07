@@ -56,12 +56,12 @@ class TaskRunner:
         if already_completed and not force:
             return output_directory
 
+        completion_marker = output_directory / COMPLETION_MARKER
+        completion_marker.unlink(missing_ok=True)
         write_yaml(
             output_directory / "config.yaml",
             config.model_dump(mode="json"),
         )
-        completion_marker = output_directory / COMPLETION_MARKER
-        completion_marker.unlink(missing_ok=True)
         task_output = task_class(config).run(output_directory)
         if task_output != output_directory:
             raise RuntimeError(
