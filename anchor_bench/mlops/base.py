@@ -29,7 +29,7 @@ class MLOpsRun(ABC):
         *,
         step: Optional[int] = None,
     ) -> None:
-        """Log scalar metrics, optionally at a training step."""
+        """Log scalar metrics at an optional run-global, monotonic step."""
 
     @abstractmethod
     def set_tags(self, tags: Mapping[str, str]) -> None:
@@ -40,9 +40,10 @@ class MLOpsRun(ABC):
         self,
         path: Union[str, Path],
         *,
-        artifact_path: Optional[str] = None,
+        collection: Optional[str] = None,
+        artifact_type: str = "anchor-bench",
     ) -> None:
-        """Log a local file or directory as a run artifact."""
+        """Log a local file or directory in a logical artifact collection."""
 
 
 class MLOpsBackend(ABC):

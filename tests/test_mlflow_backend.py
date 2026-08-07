@@ -75,8 +75,16 @@ def test_mlflow_backend_adapts_run_operations(monkeypatch, tmp_path):
         run.log_metrics({"loss": 0.4})
         run.log_metrics({"loss": 0.2}, step=2)
         run.set_tags({"checkpoint": "best"})
-        run.log_artifact(artifact, artifact_path="models")
-        run.log_artifact(artifact_directory, artifact_path="diagnostics")
+        run.log_artifact(
+            artifact,
+            collection="training-checkpoints",
+            artifact_type="model",
+        )
+        run.log_artifact(
+            artifact_directory,
+            collection="training-output",
+            artifact_type="model",
+        )
 
     assert fake_mlflow.calls == [
         ("set_tracking_uri", "sqlite:///tracking.db"),
@@ -91,11 +99,15 @@ def test_mlflow_backend_adapts_run_operations(monkeypatch, tmp_path):
         ("log_metrics", {"loss": 0.4}, {}),
         ("log_metrics", {"loss": 0.2}, {"step": 2}),
         ("set_tags", {"checkpoint": "best"}),
-        ("log_artifact", str(artifact), {"artifact_path": "models"}),
+        (
+            "log_artifact",
+            str(artifact),
+            {"artifact_path": "training-checkpoints"},
+        ),
         (
             "log_artifacts",
             str(artifact_directory),
-            {"artifact_path": "diagnostics"},
+            {"artifact_path": "training-output"},
         ),
         ("exit", None),
     ]
@@ -120,3 +132,50 @@ def test_mlflow_dependency_is_loaded_lazily(monkeypatch):
 
     with pytest.raises(MLOpsDependencyError, match=r"anchor-bench\[mlflow\]"):
         MLflowBackend()
+
+
+def test_mlflow_persists_file_and_directory_artifacts(tmp_path, monkeypatch):
+    mlflow = pytest.importorskip("mlflow")
+    monkeypatch.chdir(tmp_path)
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    checkpoint = tmp_path / "epoch-000001.pt"
+    checkpoint.write_text("checkpoint", encoding="utf-8")
+    output_directory = tmp_path / "training-output"
+    output_directory.mkdir()
+    (output_directory / "model.pt").write_text("model", encoding="utf-8")
+    (output_directory / "metadata.yaml").write_text(
+        "format_version: 1\n",
+        encoding="utf-8",
+    )
+
+    backend = MLflowBackend(tracking_uri=tracking_uri)
+    with backend.start_run("artifact-persistence") as run:
+        run_id = run.run_id
+        run.log_artifact(
+            checkpoint,
+            collection="training-checkpoints",
+            artifact_type="model",
+        )
+        run.log_artifact(
+            output_directory,
+            collection="training-output",
+            artifact_type="model",
+        )
+
+    client = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    checkpoint_artifacts = client.list_artifacts(
+        run_id,
+        path="training-checkpoints",
+    )
+    output_artifacts = client.list_artifacts(
+        run_id,
+        path="training-output",
+    )
+
+    assert {artifact.path for artifact in checkpoint_artifacts} == {
+        "training-checkpoints/epoch-000001.pt"
+    }
+    assert {artifact.path for artifact in output_artifacts} == {
+        "training-output/metadata.yaml",
+        "training-output/model.pt",
+    }

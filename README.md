@@ -60,7 +60,7 @@ uv sync --extra wandb
 
 The tracking SDKs are loaded lazily and are not needed for tasks that do not
 use MLOps tracking. See the [MLOps backend guide](docs/mlops.md) for the shared
-API, automatic task-run lifecycle, training configuration, and plugin contract.
+API, opt-in task-run lifecycle, task configuration, and plugin contract.
 
 ## Command-line usage
 

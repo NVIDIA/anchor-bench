@@ -45,7 +45,8 @@ class MLflowRun(MLOpsRun):
         self,
         path: Union[str, Path],
         *,
-        artifact_path: Optional[str] = None,
+        collection: Optional[str] = None,
+        artifact_type: str = "anchor-bench",
     ) -> None:
         artifact = Path(path)
         if not artifact.exists():
@@ -54,12 +55,12 @@ class MLflowRun(MLOpsRun):
         if artifact.is_dir():
             self._mlflow.log_artifacts(
                 str(artifact),
-                artifact_path=artifact_path,
+                artifact_path=collection,
             )
         else:
             self._mlflow.log_artifact(
                 str(artifact),
-                artifact_path=artifact_path,
+                artifact_path=collection,
             )
 
 

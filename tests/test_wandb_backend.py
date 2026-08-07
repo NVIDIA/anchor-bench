@@ -1,3 +1,5 @@
+import pytest
+
 from anchor_bench.mlops.backends import wandb as wandb_backend
 from anchor_bench.mlops.backends.wandb import WandbBackend
 
@@ -55,7 +57,11 @@ def test_wandb_is_a_backend_plugin(monkeypatch, tmp_path):
         run.set_tags({"checkpoint": "best"})
         run.set_tags({"checkpoint": "final"})
         run.set_tags({"baseline": ""})
-        run.log_artifact(artifact, artifact_path="model")
+        run.log_artifact(
+            artifact,
+            collection="training-output",
+            artifact_type="model",
+        )
 
     assert fake_wandb.run.config == {"hidden_size": 128}
     assert fake_wandb.run.tags == ("initial", "checkpoint:final", "baseline")
@@ -77,7 +83,18 @@ def test_wandb_is_a_backend_plugin(monkeypatch, tmp_path):
         (
             "log_artifact",
             str(artifact),
-            {"name": "model", "type": "anchor-bench"},
+            {"name": "training-output", "type": "model"},
         ),
         ("exit", None),
     ]
+
+
+def test_wandb_artifact_must_exist(monkeypatch, tmp_path):
+    fake_wandb = FakeWandb()
+    monkeypatch.setattr(wandb_backend, "_import_wandb", lambda: fake_wandb)
+
+    with (
+        WandbBackend(mode="offline").start_run("test") as run,
+        pytest.raises(FileNotFoundError, match="Artifact does not exist"),
+    ):
+        run.log_artifact(tmp_path / "missing.pt")

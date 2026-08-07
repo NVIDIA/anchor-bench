@@ -53,15 +53,16 @@ class WandbRun(MLOpsRun):
         self,
         path: Union[str, Path],
         *,
-        artifact_path: Optional[str] = None,
+        collection: Optional[str] = None,
+        artifact_type: str = "anchor-bench",
     ) -> None:
         artifact = Path(path)
         if not artifact.exists():
             raise FileNotFoundError(f"Artifact does not exist: {artifact}.")
         self._run.log_artifact(
             str(artifact),
-            name=artifact_path,
-            type="anchor-bench",
+            name=collection,
+            type=artifact_type,
         )
 
 

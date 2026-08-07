@@ -283,7 +283,7 @@ class TrainingConfig(BaseConfig):
     type: Literal["training"]  # pyright: ignore[reportIncompatibleVariableOverride]
     description: Optional[str] = None
     tags: Optional[List[str]] = None
-    mlops: MLOpsConfig = Field(default_factory=MLOpsConfig)
+    mlops: Optional[MLOpsConfig] = None
     dataset: ParquetDatasetConfig
     simulation: SimulationConfig
     input_features: Annotated[
