@@ -53,5 +53,5 @@ target-version = "py310"
 ignore = ["UP006", "UP007", "UP035", "UP045"]
 
 [tool.pyright]
-exclude = ["build", "**/__pycache__"]
+exclude = ["build", ".venv", "**/__pycache__"]
 pythonVersion = "3.10"
