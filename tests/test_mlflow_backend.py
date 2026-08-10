@@ -34,11 +34,21 @@ class FakeMLflow:
     def __init__(self) -> None:
         self.calls = []
         self.data = FakeMLflowData()
+        self.tracking_uri = "file:///default-tracking"
+        self.registry_uri = "file:///default-registry"
+
+    def get_tracking_uri(self):
+        return self.tracking_uri
+
+    def get_registry_uri(self):
+        return self.registry_uri
 
     def set_tracking_uri(self, uri):
+        self.tracking_uri = uri
         self.calls.append(("set_tracking_uri", uri))
 
     def set_registry_uri(self, uri):
+        self.registry_uri = uri
         self.calls.append(("set_registry_uri", uri))
 
     def set_experiment(self, name):
@@ -124,6 +134,33 @@ def test_mlflow_backend_adapts_run_operations(monkeypatch, tmp_path):
             {"artifact_path": "training-output"},
         ),
         ("exit", None),
+        ("set_registry_uri", "file:///default-registry"),
+        ("set_tracking_uri", "file:///default-tracking"),
+    ]
+    assert fake_mlflow.tracking_uri == "file:///default-tracking"
+    assert fake_mlflow.registry_uri == "file:///default-registry"
+
+
+def test_mlflow_restores_backend_uris_when_run_fails(monkeypatch):
+    fake_mlflow = FakeMLflow()
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", lambda: fake_mlflow)
+    backend = MLflowBackend(
+        tracking_uri="sqlite:///tracking.db",
+        registry_uri="sqlite:///registry.db",
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="training failed"),
+        backend.start_run("actuator-training"),
+    ):
+        raise RuntimeError("training failed")
+
+    assert fake_mlflow.tracking_uri == "file:///default-tracking"
+    assert fake_mlflow.registry_uri == "file:///default-registry"
+    assert fake_mlflow.calls[-3:] == [
+        ("exit", RuntimeError),
+        ("set_registry_uri", "file:///default-registry"),
+        ("set_tracking_uri", "file:///default-tracking"),
     ]
 
 
@@ -204,6 +241,7 @@ def test_mlflow_dependency_is_loaded_lazily(monkeypatch):
 def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
     mlflow = pytest.importorskip("mlflow")
     monkeypatch.chdir(tmp_path)
+    previous_tracking_uri = mlflow.get_tracking_uri()
     tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
     checkpoint = tmp_path / "epoch-000001.pt"
     checkpoint.write_text("checkpoint", encoding="utf-8")
@@ -243,6 +281,7 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
             upload=True,
         )
 
+    assert mlflow.get_tracking_uri() == previous_tracking_uri
     client = mlflow.MlflowClient(tracking_uri=tracking_uri)
     checkpoint_artifacts = client.list_artifacts(
         run_id,

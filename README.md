@@ -17,8 +17,8 @@ The currently implemented functionality is limited to:
 - preparing mapped training trajectories as Parquet artifacts;
 - loading a USD model and its initial state through the optional Newton runtime;
   and
-- tracking portable run parameters, metrics, tags, and artifacts through
-  bundled MLflow or W&B plugins.
+- tracking portable run parameters, metrics, tags, and artifacts through the
+  bundled MLflow plugin or third-party backend plugins.
 
 The actuator system-identification pipeline fits actuator parameters by
 evaluating CMA-ES populations in replicated Newton worlds and writes the best

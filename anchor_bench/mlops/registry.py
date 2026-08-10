@@ -16,6 +16,8 @@ DEFAULT_BACKEND = "mlflow"
 ENTRY_POINT_GROUP = "anchor_bench.mlops_backends"
 BackendFactory = Callable[..., MLOpsBackend]
 
+# This process-local cache contains explicit runtime registrations and factories
+# loaded lazily from package entry points.
 _BACKENDS: Dict[str, BackendFactory] = {}
 
 
@@ -50,7 +52,11 @@ def available_backends() -> List[str]:
 
 
 def get_backend(name: str = DEFAULT_BACKEND, **options: Any) -> MLOpsBackend:
-    """Construct a backend by name, defaulting to MLflow."""
+    """Construct a backend by name, defaulting to MLflow.
+
+    Options are forwarded unchanged to the selected factory, keeping the core
+    registry independent of backend SDK configuration.
+    """
 
     normalized_name = _normalize_name(name)
     factory = _BACKENDS.get(normalized_name)
@@ -80,6 +86,8 @@ def get_backend(name: str = DEFAULT_BACKEND, **options: Any) -> MLOpsBackend:
 
 
 def _load_plugin(name: str) -> BackendFactory | None:
+    """Load and cache the single installed entry point matching a name."""
+
     matches = [
         entry_point
         for entry_point in _plugins()
@@ -108,10 +116,14 @@ def _load_plugin(name: str) -> BackendFactory | None:
 
 
 def _plugins() -> List[metadata.EntryPoint]:
+    """Return installed factories without importing their backend modules."""
+
     return list(metadata.entry_points(group=ENTRY_POINT_GROUP))
 
 
 def _normalize_name(name: str) -> str:
+    """Canonicalize a user-facing backend name for registry lookups."""
+
     normalized_name = name.strip().lower()
     if not normalized_name:
         raise ValueError("An MLOps backend name cannot be empty.")

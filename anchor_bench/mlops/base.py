@@ -107,4 +107,9 @@ class MLOpsBackend(ABC):
         run_name: Optional[str] = None,
         tags: Optional[Mapping[str, str]] = None,
     ) -> AbstractContextManager[MLOpsRun]:
-        """Create an active run that must be used as a context manager."""
+        """Create an active run that must be used as a context manager.
+
+        The context owns backend success/failure finalization. Implementations
+        must propagate exceptions from the task body so callers can keep local
+        completion state consistent with the tracking service.
+        """

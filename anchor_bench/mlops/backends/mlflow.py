@@ -13,6 +13,8 @@ import pandas as pd
 from anchor_bench.errors import MLOpsDependencyError
 from anchor_bench.mlops.base import MLOpsBackend, MLOpsRun, ParameterValue
 
+# MLflow's native digest field accepts only 36 characters. The full SHA-256 is
+# retained separately as portable run metadata and as an input tag.
 _MLFLOW_DATASET_DIGEST_MAX_LENGTH = 36
 _FULL_DATASET_DIGEST_TAG = "anchor_bench.dataset_digest"
 
@@ -58,6 +60,12 @@ class MLflowRun(MLOpsRun):
         metadata: Optional[Mapping[str, ParameterValue]] = None,
         upload: bool = False,
     ) -> None:
+        """Record portable lineage plus MLflow's native dataset-input metadata.
+
+        The base implementation owns optional payload upload; this adapter adds
+        MLflow's searchable input relationship without changing that policy.
+        """
+
         super().log_dataset(
             dataset,
             source=source,
@@ -93,6 +101,12 @@ class MLflowRun(MLOpsRun):
         collection: Optional[str] = None,
         artifact_type: str = "anchor-bench",
     ) -> None:
+        """Log a path, mapping its collection to an MLflow artifact directory.
+
+        MLflow file artifacts do not have an artifact-type field, so that
+        backend-neutral hint is intentionally unused by this adapter.
+        """
+
         artifact = Path(path)
         if not artifact.exists():
             raise FileNotFoundError(f"Artifact does not exist: {artifact}.")
@@ -118,6 +132,18 @@ class MLflowBackend(MLOpsBackend):
         tracking_uri: Optional[str] = None,
         registry_uri: Optional[str] = None,
     ) -> None:
+        """Configure optional URI overrides for runs created by this backend.
+
+        The tracking URI selects the MLflow Tracking Server or backend store for
+        experiment and run metadata. The registry URI can independently select
+        the backend used by MLflow's model registry; when omitted, the SDK's
+        current registry setting remains in effect.
+
+        MLflow exposes both settings through process-global state. Overrides are
+        therefore applied only while a run context is open and the previous SDK
+        values are restored when it exits.
+        """
+
         self._mlflow = _import_mlflow()
         self._tracking_uri = tracking_uri
         self._registry_uri = registry_uri
@@ -129,6 +155,8 @@ class MLflowBackend(MLOpsBackend):
         run_name: Optional[str] = None,
         tags: Optional[Mapping[str, str]] = None,
     ) -> AbstractContextManager[MLOpsRun]:
+        """Start one MLflow run under the requested experiment."""
+
         return self._start_run(
             experiment_name,
             run_name=run_name,
@@ -143,21 +171,43 @@ class MLflowBackend(MLOpsBackend):
         run_name: Optional[str],
         tags: Optional[Mapping[str, str]],
     ) -> Generator[MLOpsRun, None, None]:
-        if self._tracking_uri is not None:
-            self._mlflow.set_tracking_uri(self._tracking_uri)
-        if self._registry_uri is not None:
-            self._mlflow.set_registry_uri(self._registry_uri)
+        """Apply URI overrides for exactly one run and then restore SDK state."""
 
-        self._mlflow.set_experiment(experiment_name)
-        start_options = {
-            "run_name": run_name,
-            "tags": dict(tags) if tags is not None else None,
-        }
-        with self._mlflow.start_run(**start_options) as active_run:
-            yield MLflowRun(self._mlflow, active_run.info.run_id)
+        # Snapshot only settings this backend will override. A None option means
+        # the caller intentionally wants to keep the SDK's current configuration.
+        previous_tracking_uri = (
+            self._mlflow.get_tracking_uri() if self._tracking_uri is not None else None
+        )
+        previous_registry_uri = (
+            self._mlflow.get_registry_uri() if self._registry_uri is not None else None
+        )
+        try:
+            if self._tracking_uri is not None:
+                self._mlflow.set_tracking_uri(self._tracking_uri)
+            if self._registry_uri is not None:
+                self._mlflow.set_registry_uri(self._registry_uri)
+
+            self._mlflow.set_experiment(experiment_name)
+            start_options = {
+                "run_name": run_name,
+                "tags": dict(tags) if tags is not None else None,
+            }
+            with self._mlflow.start_run(**start_options) as active_run:
+                yield MLflowRun(self._mlflow, active_run.info.run_id)
+        finally:
+            # Keep restoration independent: a registry failure must not prevent
+            # the tracking URI from being returned to its previous value.
+            try:
+                if previous_registry_uri is not None:
+                    self._mlflow.set_registry_uri(previous_registry_uri)
+            finally:
+                if previous_tracking_uri is not None:
+                    self._mlflow.set_tracking_uri(previous_tracking_uri)
 
 
 def _import_mlflow() -> ModuleType:
+    """Import the optional SDK only when the MLflow backend is constructed."""
+
     try:
         return importlib.import_module("mlflow")
     except ImportError as error:

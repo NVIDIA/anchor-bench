@@ -9,6 +9,8 @@ from typing import Any, Dict, Generator, Optional
 
 from anchor_bench.mlops.base import MLOpsRun, ParameterValue
 
+# A ContextVar keeps nested and asynchronous task executions isolated while
+# allowing lower-level task code to report without receiving a run explicitly.
 _ACTIVE_RUN: ContextVar[Optional[MLOpsRun]] = ContextVar(
     "anchor_bench_mlops_run",
     default=None,
@@ -37,7 +39,12 @@ def flatten_params(
     *,
     separator: str = "/",
 ) -> Dict[str, ParameterValue]:
-    """Flatten JSON-like configuration values into portable run parameters."""
+    """Flatten JSON-like configuration values into portable run parameters.
+
+    Mapping keys and sequence indexes become path components. Empty containers
+    and nulls use explicit string encodings because tracking backends generally
+    accept only scalar parameter values.
+    """
 
     flattened: Dict[str, ParameterValue] = {}
     for key, value in values.items():
@@ -57,6 +64,8 @@ def _flatten_value(
     separator: str,
     destination: Dict[str, ParameterValue],
 ) -> None:
+    """Recursively append one JSON-like value to a flattened destination."""
+
     if isinstance(value, Mapping):
         if not value:
             destination[prefix] = "{}"
