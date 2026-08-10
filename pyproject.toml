@@ -28,9 +28,6 @@ simulation = [
 mlflow = [
   "mlflow>=3.0,<4",
 ]
-wandb = [
-  "wandb>=0.26,<1",
-]
 dev = [
   "pyright>=1.1,<2",
   "pytest>=8,<9",
@@ -43,7 +40,6 @@ anchor-bench = "anchor_bench.cli:main"
 
 [project.entry-points."anchor_bench.mlops_backends"]
 mlflow = "anchor_bench.mlops.backends.mlflow:MLflowBackend"
-wandb = "anchor_bench.mlops.backends.wandb:WandbBackend"
 
 [tool.setuptools.packages.find]
 include = ["anchor_bench*"]

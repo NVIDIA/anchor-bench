@@ -57,13 +57,7 @@ Install only the tracking SDK you use. For the default MLflow backend, run:
 uv sync --extra mlflow
 ```
 
-Or, for the W&B plugin, run:
-
-```bash
-uv sync --extra wandb
-```
-
-The tracking SDKs are loaded lazily and are not needed for tasks that do not
+The tracking SDK is loaded lazily and is not needed for tasks that do not
 use MLOps tracking. See the [MLOps backend guide](docs/mlops.md) for the shared
 API, opt-in task-run lifecycle, task configuration, and plugin contract.
 

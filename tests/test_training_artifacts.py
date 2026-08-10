@@ -128,7 +128,7 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
 
     config_data = _config_data()
     config_data["mlops"] = {
-        "backend": "wandb",
+        "backend": "custom",
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,
@@ -190,7 +190,7 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
     assert [trial["value"] for trial in summary["trials"]] == [2.0, 1.0]
     assert summary["best_config"]["model"]["hidden_size"] == 8
     assert summary["best_config"]["mlops"] == {
-        "backend": "wandb",
+        "backend": "custom",
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,

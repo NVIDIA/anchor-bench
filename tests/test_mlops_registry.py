@@ -32,7 +32,7 @@ class FakeBackend(MLOpsBackend):
 def test_bundled_backends_are_registered_as_entry_point_plugins():
     plugin_names = {entry_point.name for entry_point in registry._plugins()}
 
-    assert {"mlflow", "wandb"} <= plugin_names
+    assert "mlflow" in plugin_names
 
 
 def test_mlflow_is_the_default_backend(monkeypatch):

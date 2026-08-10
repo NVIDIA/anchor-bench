@@ -52,7 +52,7 @@ def _search_config() -> TrainingConfig:
         },
     }
     data["mlops"] = {
-        "backend": "wandb",
+        "backend": "custom",
         "experiment_name": "training",
         "options": {"mode": "offline"},
     }

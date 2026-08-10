@@ -261,7 +261,7 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
     config_data["training"]["checkpoint"] = {"every_n_epochs": 2}
     config_data["training"]["sequence"] = {"length": 2}
     config_data["mlops"] = {
-        "backend": "wandb",
+        "backend": "custom",
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,
@@ -295,7 +295,7 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
     }
     assert checkpoint["config"]["training"]["checkpoint"] == {"every_n_epochs": 2}
     assert checkpoint["config"]["mlops"] == {
-        "backend": "wandb",
+        "backend": "custom",
         "experiment_name": "training",
         "run_name": "baseline",
         "upload_dataset": True,

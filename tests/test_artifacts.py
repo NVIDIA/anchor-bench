@@ -39,7 +39,7 @@ def test_get_or_create_output_folder_preserves_mlops_options(tmp_path: Path):
     config = ConfigWithMLOps(
         type="example",
         mlops=MLOpsConfig(
-            backend="wandb",
+            backend="custom",
             experiment_name="training",
             run_name="baseline",
             upload_dataset=True,
@@ -52,7 +52,7 @@ def test_get_or_create_output_folder_preserves_mlops_options(tmp_path: Path):
     assert yaml.safe_load((output_folder / "config.yaml").read_text()) == {
         "type": "example",
         "mlops": {
-            "backend": "wandb",
+            "backend": "custom",
             "experiment_name": "training",
             "run_name": "baseline",
             "upload_dataset": True,
