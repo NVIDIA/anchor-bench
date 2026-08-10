@@ -40,7 +40,7 @@ CUDA_VISIBLE_DEVICES=1 uv run anchor-bench \
   --output outputs/g1_arm_full_torque
 ```
 
-The configs train for 50 epochs, write checkpoints every 10 epochs, and run
+The configs train for 5 epochs, write a checkpoint at the final epoch, and run
 Newton replay on the three experiments selected by the deterministic held-out
 split. Contact generation is disabled because this is a fixed-base arm replay
 without environmental contact.
