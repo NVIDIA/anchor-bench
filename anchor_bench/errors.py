@@ -39,3 +39,7 @@ class MLOpsDependencyError(MLOpsError, ImportError):
 
 class MLOpsPluginError(MLOpsError):
     """Raised when an MLOps plugin cannot be loaded or constructed."""
+
+
+class MLOpsTrackingError(MLOpsError):
+    """Raised when an MLOps backend cannot create or update a tracked run."""

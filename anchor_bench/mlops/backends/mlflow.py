@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import os
+import re
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -10,13 +12,18 @@ from typing import Generator, Mapping, Optional, Union
 
 import pandas as pd
 
-from anchor_bench.errors import MLOpsDependencyError
+from anchor_bench.errors import MLOpsDependencyError, MLOpsTrackingError
 from anchor_bench.mlops.base import MLOpsBackend, MLOpsRun, ParameterValue
 
 # MLflow's native digest field accepts only 36 characters. The full SHA-256 is
 # retained separately as portable run metadata and as an input tag.
 _MLFLOW_DATASET_DIGEST_MAX_LENGTH = 36
 _FULL_DATASET_DIGEST_TAG = "anchor_bench.dataset_digest"
+_DEFAULT_HTTP_REQUEST_TIMEOUT = 30
+_DEFAULT_HTTP_REQUEST_MAX_RETRIES = 2
+_HTTP_REQUEST_TIMEOUT_ENV = "MLFLOW_HTTP_REQUEST_TIMEOUT"
+_HTTP_REQUEST_MAX_RETRIES_ENV = "MLFLOW_HTTP_REQUEST_MAX_RETRIES"
+_URI_CREDENTIALS_PATTERN = re.compile(r"(https?://)[^/@\s]+@", re.IGNORECASE)
 
 
 class MLflowRun(MLOpsRun):
@@ -131,19 +138,35 @@ class MLflowBackend(MLOpsBackend):
         *,
         tracking_uri: Optional[str] = None,
         registry_uri: Optional[str] = None,
+        http_request_timeout: Optional[int] = None,
+        http_request_max_retries: Optional[int] = None,
     ) -> None:
-        """Configure optional URI overrides for runs created by this backend.
+        """Configure URI and HTTP-policy overrides for this backend.
 
         The tracking URI selects the MLflow Tracking Server or backend store for
         experiment and run metadata. The registry URI can independently select
         the backend used by MLflow's model registry; when omitted, the SDK's
         current registry setting remains in effect.
 
-        MLflow exposes both settings through process-global state. Overrides are
+        Remote requests default to a 30-second timeout and two retries. Existing
+        MLflow environment settings take precedence over those defaults, while
+        explicit constructor options take precedence over the environment.
+
+        MLflow exposes these settings through process-global state. Overrides are
         therefore applied only while a run context is open and the previous SDK
         values are restored when it exits.
         """
 
+        self._http_request_timeout = _validate_integer_option(
+            "http_request_timeout",
+            http_request_timeout,
+            minimum=1,
+        )
+        self._http_request_max_retries = _validate_integer_option(
+            "http_request_max_retries",
+            http_request_max_retries,
+            minimum=0,
+        )
         self._mlflow = _import_mlflow()
         self._tracking_uri = tracking_uri
         self._registry_uri = registry_uri
@@ -165,6 +188,30 @@ class MLflowBackend(MLOpsBackend):
 
     @contextmanager
     def _start_run(
+        self,
+        experiment_name: str,
+        *,
+        run_name: Optional[str],
+        tags: Optional[Mapping[str, str]],
+    ) -> Generator[MLOpsRun, None, None]:
+        """Apply HTTP defaults around exactly one MLflow run."""
+
+        with (
+            _temporary_http_request_settings(
+                timeout=self._http_request_timeout,
+                max_retries=self._http_request_max_retries,
+            ),
+            _translate_mlflow_errors(self._mlflow),
+            self._start_run_with_uris(
+                experiment_name,
+                run_name=run_name,
+                tags=tags,
+            ) as run,
+        ):
+            yield run
+
+    @contextmanager
+    def _start_run_with_uris(
         self,
         experiment_name: str,
         *,
@@ -203,6 +250,77 @@ class MLflowBackend(MLOpsBackend):
             finally:
                 if previous_tracking_uri is not None:
                     self._mlflow.set_tracking_uri(previous_tracking_uri)
+
+
+@contextmanager
+def _temporary_http_request_settings(
+    *,
+    timeout: Optional[int],
+    max_retries: Optional[int],
+) -> Generator[None, None, None]:
+    """Apply Anchor Bench defaults without replacing MLflow environment overrides."""
+
+    settings = {
+        _HTTP_REQUEST_TIMEOUT_ENV: (timeout, _DEFAULT_HTTP_REQUEST_TIMEOUT),
+        _HTTP_REQUEST_MAX_RETRIES_ENV: (
+            max_retries,
+            _DEFAULT_HTTP_REQUEST_MAX_RETRIES,
+        ),
+    }
+    previous_values: dict[str, Optional[str]] = {}
+    try:
+        for name, (configured_value, default_value) in settings.items():
+            if configured_value is None and name in os.environ:
+                continue
+            previous_values[name] = os.environ.get(name)
+            os.environ[name] = str(
+                default_value if configured_value is None else configured_value
+            )
+        yield
+    finally:
+        for name, previous_value in previous_values.items():
+            if previous_value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous_value
+
+
+@contextmanager
+def _translate_mlflow_errors(mlflow: ModuleType) -> Generator[None, None, None]:
+    """Translate SDK failures while preserving unrelated task exceptions."""
+
+    try:
+        yield
+    except Exception as error:
+        if not _is_mlflow_exception(mlflow, error):
+            raise
+        message = _URI_CREDENTIALS_PATTERN.sub(r"\1***@", str(error))
+        raise MLOpsTrackingError(f"MLflow tracking failed: {message}") from error
+
+
+def _is_mlflow_exception(mlflow: ModuleType, error: Exception) -> bool:
+    """Identify SDK failures without importing MLflow at module import time."""
+
+    exceptions = getattr(mlflow, "exceptions", None)
+    exception_type = getattr(exceptions, "MlflowException", None)
+    return isinstance(exception_type, type) and isinstance(error, exception_type)
+
+
+def _validate_integer_option(
+    name: str,
+    value: Optional[int],
+    *,
+    minimum: int,
+) -> Optional[int]:
+    """Validate an optional integer backend setting before importing MLflow."""
+
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value < minimum
+    ):
+        raise ValueError(
+            f"{name} must be an integer greater than or equal to {minimum}."
+        )
+    return value
 
 
 def _import_mlflow() -> ModuleType:

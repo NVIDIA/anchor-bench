@@ -1,11 +1,16 @@
+import os
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-from anchor_bench.errors import MLOpsDependencyError
+from anchor_bench.errors import MLOpsDependencyError, MLOpsTrackingError
 from anchor_bench.mlops.backends import mlflow as mlflow_backend
 from anchor_bench.mlops.backends.mlflow import MLflowBackend
+
+
+class FakeMlflowException(Exception):
+    pass
 
 
 class FakeActiveRun:
@@ -34,6 +39,7 @@ class FakeMLflow:
     def __init__(self) -> None:
         self.calls = []
         self.data = FakeMLflowData()
+        self.exceptions = SimpleNamespace(MlflowException=FakeMlflowException)
         self.tracking_uri = "file:///default-tracking"
         self.registry_uri = "file:///default-registry"
 
@@ -139,6 +145,88 @@ def test_mlflow_backend_adapts_run_operations(monkeypatch, tmp_path):
     ]
     assert fake_mlflow.tracking_uri == "file:///default-tracking"
     assert fake_mlflow.registry_uri == "file:///default-registry"
+
+
+def test_mlflow_translates_sdk_errors_and_redacts_uri_credentials(monkeypatch):
+    fake_mlflow = FakeMLflow()
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", lambda: fake_mlflow)
+
+    def fail_to_set_experiment(name):
+        assert name == "actuator-training"
+        raise FakeMlflowException(
+            "API request to http://user:secret@mlflow.example:5000 failed"
+        )
+
+    monkeypatch.setattr(fake_mlflow, "set_experiment", fail_to_set_experiment)
+
+    with (
+        pytest.raises(MLOpsTrackingError, match="MLflow tracking failed") as error,
+        MLflowBackend().start_run("actuator-training"),
+    ):
+        pytest.fail("The run should not start.")
+
+    assert "http://***@mlflow.example:5000" in str(error.value)
+    assert "secret" not in str(error.value)
+
+
+def test_mlflow_applies_bounded_http_defaults_for_one_run(monkeypatch):
+    fake_mlflow = FakeMLflow()
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", lambda: fake_mlflow)
+    monkeypatch.delenv("MLFLOW_HTTP_REQUEST_TIMEOUT", raising=False)
+    monkeypatch.delenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", raising=False)
+
+    with MLflowBackend().start_run("actuator-training"):
+        assert os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] == "30"
+        assert os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] == "2"
+
+    assert "MLFLOW_HTTP_REQUEST_TIMEOUT" not in os.environ
+    assert "MLFLOW_HTTP_REQUEST_MAX_RETRIES" not in os.environ
+
+
+def test_mlflow_http_options_override_environment_for_one_run(monkeypatch):
+    fake_mlflow = FakeMLflow()
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", lambda: fake_mlflow)
+    monkeypatch.setenv("MLFLOW_HTTP_REQUEST_TIMEOUT", "90")
+    monkeypatch.setenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "5")
+
+    with MLflowBackend().start_run("environment-policy"):
+        assert os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] == "90"
+        assert os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] == "5"
+
+    with MLflowBackend(
+        http_request_timeout=12,
+        http_request_max_retries=0,
+    ).start_run("configured-policy"):
+        assert os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] == "12"
+        assert os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] == "0"
+
+    assert os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] == "90"
+    assert os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] == "5"
+
+
+def test_mlflow_restores_http_defaults_when_run_fails(monkeypatch):
+    fake_mlflow = FakeMLflow()
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", lambda: fake_mlflow)
+    monkeypatch.delenv("MLFLOW_HTTP_REQUEST_TIMEOUT", raising=False)
+    monkeypatch.delenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", raising=False)
+
+    with (
+        pytest.raises(RuntimeError, match="training failed"),
+        MLflowBackend().start_run("actuator-training"),
+    ):
+        raise RuntimeError("training failed")
+
+    assert "MLFLOW_HTTP_REQUEST_TIMEOUT" not in os.environ
+    assert "MLFLOW_HTTP_REQUEST_MAX_RETRIES" not in os.environ
+
+
+def test_mlflow_rejects_invalid_http_options(monkeypatch):
+    monkeypatch.setattr(mlflow_backend, "_import_mlflow", FakeMLflow)
+
+    with pytest.raises(ValueError, match="http_request_timeout"):
+        MLflowBackend(http_request_timeout=0)
+    with pytest.raises(ValueError, match="http_request_max_retries"):
+        MLflowBackend(http_request_max_retries=-1)
 
 
 def test_mlflow_restores_backend_uris_when_run_fails(monkeypatch):
