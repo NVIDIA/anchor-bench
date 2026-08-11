@@ -9,6 +9,7 @@ import pandas as pd
 
 from anchor_bench.data import DatasetLoader
 from anchor_bench.errors import DatasetAlignmentError
+from anchor_bench.mlops import MLOpsRun
 from anchor_bench.schema.dataset import ParquetDatasetConfig
 from anchor_bench.tasks.actuator_sys_id.model import Trajectory
 
@@ -17,12 +18,23 @@ def load_trajectories(
     dataset_config: ParquetDatasetConfig,
     *,
     joint_names: Sequence[str],
+    dataset_tracker: MLOpsRun | None = None,
+    upload_dataset: bool = False,
 ) -> List[Trajectory]:
-    """Load command and measurement trajectories from aligned datasets."""
+    """Load command and measurement trajectories from aligned datasets.
+
+    A supplied tracker receives lineage for each raw Parquet input. Dataset bytes
+    are attached only when upload_dataset is explicitly enabled; trajectory
+    alignment itself is unchanged by tracking.
+    """
 
     dataset = DatasetLoader.load(
         dataset_config.source,
         dt=float(dataset_config.resampling.dt),
+        dataset_tracker=dataset_tracker,
+        dataset_name="system-identification-dataset",
+        dataset_context="system-identification",
+        upload_dataset=upload_dataset,
     )
     _validate_index(dataset)
 

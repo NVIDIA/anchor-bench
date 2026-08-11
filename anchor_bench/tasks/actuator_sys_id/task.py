@@ -25,6 +25,8 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         trajectories = load_trajectories(
             self.config.dataset,
             joint_names=joint_names,
+            dataset_tracker=self.mlops_run,
+            upload_dataset=self.mlops_upload_dataset,
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
@@ -45,6 +47,17 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
                     population_mean_mse=step.mean_score,
                 )
             )
+            # The optimizer iteration is the shared monotonic step for all
+            # convergence curves reported by this task.
+            if self.mlops_run is not None:
+                self.mlops_run.log_metrics(
+                    {
+                        "optimization/best_mse": step.best_score,
+                        "optimization/iteration_best_mse": (step.iteration_best_score),
+                        "optimization/population_mean_mse": step.mean_score,
+                    },
+                    step=step.iteration,
+                )
 
         best_parameters = parameter_space.decode(optimizer.best_candidate)
         write_artifacts(
@@ -55,4 +68,12 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             source_usd_path=self.config.simulation.usd_path,
             config=self.config,
         )
+        # Upload only after every SysID output file is finalized. TaskRunner
+        # separately owns the completion marker and tracked-run status.
+        if self.mlops_run is not None:
+            self.mlops_run.log_artifact(
+                output_directory,
+                collection="sysid-output",
+                artifact_type="actuator-sysid",
+            )
         return output_directory

@@ -3,11 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
+from unittest.mock import Mock
 
 import optuna
 import pytest
 from torch import nn
 
+from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     EpochLoss,
@@ -51,6 +53,11 @@ def _search_config() -> TrainingConfig:
             },
         },
     }
+    data["mlops"] = {
+        "backend": "custom",
+        "experiment_name": "training",
+        "options": {"mode": "offline"},
+    }
     return TrainingConfig.model_validate(data)
 
 
@@ -68,6 +75,8 @@ def test_search_trains_trials_and_retains_best_model(
     )
     trained_configs = []
     checkpoint_directories = []
+    report_metrics_values = []
+    checkpoint_collections = []
 
     class ScoredModel(nn.Linear):
         """Attach the sampled score to a small real module."""
@@ -85,10 +94,14 @@ def test_search_trains_trials_and_retains_best_model(
             sequences: Sequence[MappedTrainingSequence],
             *,
             checkpoint_directory: Path,
+            report_metrics: bool,
+            checkpoint_collection: str,
         ) -> None:
             trained_configs.append(config)
             self.config = config
             checkpoint_directories.append(checkpoint_directory)
+            report_metrics_values.append(report_metrics)
+            checkpoint_collections.append(checkpoint_collection)
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 
         def train(self) -> TrainingResult:
@@ -101,10 +114,16 @@ def test_search_trains_trials_and_retains_best_model(
 
     monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
 
-    result = TrainingTask(_search_config())._search(dataset, tmp_path)
+    mlops_run = Mock(spec=MLOpsRun)
+    with bind_active_run(mlops_run):
+        result = TrainingTask(_search_config())._search(dataset, tmp_path)
 
     assert len(trained_configs) == 3
     assert all(config.search is None for config in trained_configs)
+    assert all(
+        config.mlops is not None and config.mlops.options == {"mode": "offline"}
+        for config in trained_configs
+    )
     assert [path.name for path in checkpoint_directories] == [
         "trial-0000",
         "trial-0001",
@@ -113,6 +132,12 @@ def test_search_trains_trials_and_retains_best_model(
     assert all(
         path.parent == tmp_path / "checkpoints" for path in checkpoint_directories
     )
+    assert report_metrics_values == [False, False, False]
+    assert checkpoint_collections == [
+        "search-trial-0000-checkpoints",
+        "search-trial-0001-checkpoints",
+        "search-trial-0002-checkpoints",
+    ]
     assert len(result.trials) == 3
     assert result.best_value == min(trial.value for trial in result.trials)
     assert (
@@ -121,6 +146,16 @@ def test_search_trains_trials_and_retains_best_model(
     )
     assert result.training_result.model.search_value == result.best_value
     assert result.validation_sequences == tuple(dataset)
+    assert mlops_run.log_metrics.call_count == 3
+    assert [entry.kwargs["step"] for entry in mlops_run.log_metrics.call_args_list] == [
+        0,
+        1,
+        2,
+    ]
+    assert [
+        entry.args[0]["search/validation_loss"]
+        for entry in mlops_run.log_metrics.call_args_list
+    ] == [trial.value for trial in result.trials]
 
 
 def test_search_prunes_non_finite_loss_before_tracking_trial(
@@ -144,6 +179,8 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
             sequences: Sequence[MappedTrainingSequence],
             *,
             checkpoint_directory: Path,
+            report_metrics: bool,
+            checkpoint_collection: str,
         ) -> None:
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 

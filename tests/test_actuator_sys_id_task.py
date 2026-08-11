@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import numpy as np
 import pandas as pd
 import pytest
 import yaml
 
 from anchor_bench.errors import DatasetAlignmentError
+from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import artifacts as artifacts_module
 from anchor_bench.tasks.actuator_sys_id import task as task_module
@@ -88,9 +91,21 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         index=index,
     )
 
-    def fake_load(path, *, dt):
+    def fake_load(
+        path,
+        *,
+        dt,
+        dataset_tracker,
+        dataset_name,
+        dataset_context,
+        upload_dataset,
+    ):
         assert path == "actuator.parquet"
         assert dt == 0.005
+        assert dataset_tracker is None
+        assert dataset_name == "system-identification-dataset"
+        assert dataset_context == "system-identification"
+        assert upload_dataset is False
         return dataset
 
     monkeypatch.setattr(
@@ -235,7 +250,9 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
-    result = ActuatorSysIdTask(config).run(output_directory)
+    mlops_run = Mock(spec=MLOpsRun)
+    with bind_active_run(mlops_run):
+        result = ActuatorSysIdTask(config).run(output_directory)
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
@@ -245,6 +262,19 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     assert written["history"] == [
         GenerationRecord(generation=0, best_mse=0.25, population_mean_mse=0.625)
     ]
+    mlops_run.log_metrics.assert_called_once_with(
+        {
+            "optimization/best_mse": 0.25,
+            "optimization/iteration_best_mse": 0.25,
+            "optimization/population_mean_mse": 0.625,
+        },
+        step=0,
+    )
+    mlops_run.log_artifact.assert_called_once_with(
+        output_directory,
+        collection="sysid-output",
+        artifact_type="actuator-sysid",
+    )
 
 
 def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):

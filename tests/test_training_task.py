@@ -3,18 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, Optional, Sequence
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
 import yaml
 
 from anchor_bench.core.task_runner import TASKS, TaskRunner
+from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     MappedTrainingSequence,
     TrainingTask,
     ValidationDataset,
 )
+from anchor_bench.train import ValidationResult
 
 
 def _config_data(source: str) -> dict[str, Any]:
@@ -101,9 +104,15 @@ def _aligned_dataset() -> pd.DataFrame:
     )
 
 
+@pytest.mark.parametrize(
+    ("search_trials", "expected_step"),
+    [(None, 4), (3, 3)],
+)
 def test_training_task_runs_loader_data_processor_then_mapping(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    search_trials: int | None,
+    expected_step: int,
 ) -> None:
     """Pass configured data through each preparation stage in order."""
 
@@ -117,11 +126,42 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         "usd_path": str(usd_path),
     }
     config_data["output_features"] = {"torque_residual": "torque_residual"}
+    config_data["training"]["epochs"] = 4
+    if search_trials is not None:
+        config_data["search"] = {
+            "schema_version": 1,
+            "method": "optuna",
+            "trials": search_trials,
+            "objective": {
+                "metric": "validation_loss",
+                "direction": "minimize",
+            },
+            "search_space": {
+                "model.hidden_size": {
+                    "data_type": "integer",
+                    "min": 2,
+                    "max": 4,
+                    "scale": "linear",
+                }
+            },
+        }
     config = TrainingConfig.model_validate(config_data)
 
-    def load(source: str, *, dt: float) -> pd.DataFrame:
+    def load(
+        source: str,
+        *,
+        dt: float,
+        dataset_tracker: MLOpsRun,
+        dataset_name: str,
+        dataset_context: str,
+        upload_dataset: bool,
+    ) -> pd.DataFrame:
         """Record configured loading arguments."""
 
+        assert dataset_tracker is mlops_run
+        assert dataset_name == "training-dataset"
+        assert dataset_context == "training"
+        assert upload_dataset is False
         events.append(f"load:{source}:{dt}")
         return loaded
 
@@ -163,7 +203,13 @@ def test_training_task_runs_loader_data_processor_then_mapping(
 
     prepared: list[MappedTrainingSequence] = []
     trained_model = object()
-    validation_results = [object()]
+    validation_results = [
+        ValidationResult(
+            name="held-out loss",
+            type="offline",
+            metrics={"mse": 0.25},
+        )
+    ]
 
     class StubTrainer:
         """Record data passed through the trainer boundary."""
@@ -196,7 +242,7 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         *,
         model: object,
         validation_dataset: object,
-    ) -> list[object]:
+    ) -> list[ValidationResult]:
         """Record post-training validator execution."""
 
         assert validators == config.validation.validators
@@ -220,9 +266,32 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         """Record validation result persistence."""
 
         assert received_validation_results is validation_results
-        assert search_result is None
+        assert (search_result is None) == (search_trials is None)
         events.append("save")
         return tmp_path / "artifacts"
+
+    if search_trials is not None:
+
+        def search(
+            _task: TrainingTask,
+            dataset: Sequence[MappedTrainingSequence],
+            output_directory: Path,
+        ) -> SimpleNamespace:
+            """Return an inert search result for logging-step coverage."""
+
+            prepared.extend(dataset)
+            events.append("train")
+            training_result = SimpleNamespace(
+                model=trained_model,
+                normalization=SimpleNamespace(wrap=lambda model: model),
+            )
+            return SimpleNamespace(
+                training_result=training_result,
+                validation_sequences=tuple(dataset),
+                best_config=config,
+            )
+
+        monkeypatch.setattr(TrainingTask, "_search", search)
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
@@ -251,7 +320,9 @@ def test_training_task_runs_loader_data_processor_then_mapping(
 
     output_directory = tmp_path / "output"
     output_directory.mkdir()
-    result = TrainingTask(config).run(output_directory)
+    mlops_run = Mock(spec=MLOpsRun)
+    with bind_active_run(mlops_run):
+        result = TrainingTask(config).run(output_directory)
     trajectories = pd.read_parquet(result / "trajectories.parquet")
 
     assert events == [
@@ -286,6 +357,15 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         ("wave", "arm"),
         ("step", "arm"),
     ]
+    mlops_run.log_metrics.assert_called_once_with(
+        {"validation/held-out loss/mse": 0.25},
+        step=expected_step,
+    )
+    mlops_run.log_artifact.assert_called_once_with(
+        output_directory,
+        collection="training-output",
+        artifact_type="model",
+    )
 
 
 def test_training_task_initializes_simulation_for_validators(
@@ -300,7 +380,7 @@ def test_training_task_initializes_simulation_for_validators(
 
     monkeypatch.setattr(
         "anchor_bench.tasks.train.task.DatasetLoader.load",
-        lambda source, *, dt: _aligned_dataset(),
+        lambda source, *, dt, **kwargs: _aligned_dataset(),
     )
     simulation_calls = []
     monkeypatch.setattr(
@@ -400,6 +480,7 @@ def test_task_runner_registers_and_runs_training(
     trajectories = pd.read_parquet(output_directory / "trajectories.parquet")
 
     assert output_directory.parent == tmp_path / "output"
+    assert (output_directory / "config.yaml").is_file()
     assert (output_directory / ".completed").is_file()
     assert (output_directory / "model.pt").is_file()
     assert (output_directory / "history.yaml").is_file()

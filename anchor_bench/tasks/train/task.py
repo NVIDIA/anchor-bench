@@ -82,9 +82,15 @@ class TrainingTask(BaseTask[TrainingConfig]):
     def run(self, output_directory: Path) -> Path:
         """Train the network and persist its mapped trajectories."""
 
+        # Track the acquired source before processors transform it so lineage
+        # remains tied to reusable input bytes.
         dataset = DatasetLoader.load(
             self.config.dataset.source,
             dt=float(self.config.dataset.resampling.dt),
+            dataset_tracker=self.mlops_run,
+            dataset_name="training-dataset",
+            dataset_context="training",
+            upload_dataset=self.mlops_upload_dataset,
         )
 
         simulation = self.config.simulation
@@ -153,6 +159,26 @@ class TrainingTask(BaseTask[TrainingConfig]):
             sequences,
             output_directory / TRAJECTORIES_FILENAME,
         )
+        # Validator metrics follow the epoch or trial series without moving the
+        # run-global step backwards; the completed directory is uploaded last.
+        if self.mlops_run is not None:
+            validation_metrics = {
+                f"validation/{validation.name}/{name}": float(value)
+                for validation in validation_results
+                for name, value in validation.metrics.items()
+            }
+            if validation_metrics:
+                step = (
+                    self.config.search.trials
+                    if self.config.search is not None
+                    else self.config.training.epochs
+                )
+                self.mlops_run.log_metrics(validation_metrics, step=step)
+            self.mlops_run.log_artifact(
+                output_directory,
+                collection="training-output",
+                artifact_type="model",
+            )
         return output_directory
 
     def _search(
@@ -194,17 +220,27 @@ class TrainingTask(BaseTask[TrainingConfig]):
 
             nonlocal best
             trial_config, parameters = self._trial_config(trial)
+            # Every trial restarts its epoch count, so suppress nested epoch
+            # curves and report one objective value at the run-global trial
+            # number instead.
             trainer = Trainer(
                 trial_config,
                 sequences,
                 checkpoint_directory=(
                     output_directory / "checkpoints" / f"trial-{trial.number:04d}"
                 ),
+                report_metrics=False,
+                checkpoint_collection=(f"search-trial-{trial.number:04d}-checkpoints"),
             )
             result = trainer.train()
             value = self._validation_loss(result)
             if not isfinite(value):
                 raise optuna.TrialPruned("Validation loss is not finite.")
+            if self.mlops_run is not None:
+                self.mlops_run.log_metrics(
+                    {"search/validation_loss": value},
+                    step=trial.number,
+                )
             trials.append(
                 SearchTrial(
                     number=trial.number,
