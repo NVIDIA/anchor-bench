@@ -50,7 +50,7 @@ model:
     scale: 15.0
 
 training:
-  epochs: 5
+  epochs: 2
   batch_size: 4
   seed: 48
   validation_ratio: 0.2
