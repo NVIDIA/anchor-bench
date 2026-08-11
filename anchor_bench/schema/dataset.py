@@ -24,7 +24,7 @@ class ResamplingConfig(StrictBaseModel):
 
 
 class ParquetDatasetConfig(StrictBaseModel):
-    """Locate and resample one long-form Parquet time-series dataset."""
+    """Locate and resample long-form Parquet time-series datasets."""
 
     type: Literal["parquet"]
     source: NonEmptyString

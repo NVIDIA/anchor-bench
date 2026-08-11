@@ -7,6 +7,7 @@ import pytest
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.parse import parse
+from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from tests.integration.cli_runner import CliResult
 from tests.integration.usd_trajectory import usd_trajectory_accuracy
 
@@ -31,6 +32,16 @@ EXPECTED_ARTIFACTS = (
 def test_runs_actuator_sysid_config(
     run_cli: Callable[[Sequence[str]], CliResult],
 ) -> None:
+    config = parse(CONFIG_PATH)
+    assert isinstance(config, ActuatorSysIdConfig)
+    joint_names = [joint for group in config.joint_parameters for joint in group.names]
+    trajectories = load_trajectories(config.dataset, joint_names=joint_names)
+    assert [trajectory.experiment for trajectory in trajectories] == [
+        "so101-sysid-50motion-train-random-waypoints",
+        "so101-sysid-50motion-train-staircase-motion",
+        "so101-sysid-50motion-train-wave-motion",
+    ]
+
     result = run_cli(
         [
             "--config",
@@ -44,8 +55,6 @@ def test_runs_actuator_sysid_config(
     assert result.exit_code == 0, result.stderr or result.stdout
     assert all((TEST_DIRECTORY / artifact).is_file() for artifact in EXPECTED_ARTIFACTS)
 
-    config = parse(CONFIG_PATH)
-    assert isinstance(config, ActuatorSysIdConfig)
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,
         EVALUATION_TRAJECTORY_PATH,
