@@ -1,8 +1,7 @@
-"""Portable MLOps tracking with MLflow as the default backend."""
+"""Portable tracking through pluggable MLOps backends."""
 
 from anchor_bench.mlops.base import MLOpsBackend, MLOpsRun, ParameterValue
 from anchor_bench.mlops.registry import (
-    DEFAULT_BACKEND,
     ENTRY_POINT_GROUP,
     available_backends,
     get_backend,
@@ -15,7 +14,6 @@ from anchor_bench.mlops.reporting import (
 )
 
 __all__ = [
-    "DEFAULT_BACKEND",
     "ENTRY_POINT_GROUP",
     "MLOpsBackend",
     "MLOpsRun",

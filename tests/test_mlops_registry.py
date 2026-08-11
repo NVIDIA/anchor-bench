@@ -5,7 +5,6 @@ import pytest
 
 from anchor_bench.errors import MLOpsBackendNotFoundError, MLOpsPluginError
 from anchor_bench.mlops import (
-    DEFAULT_BACKEND,
     MLOpsBackend,
     MLOpsRun,
     available_backends,
@@ -27,35 +26,6 @@ class FakeBackend(MLOpsBackend):
         tags: Optional[Mapping[str, str]] = None,
     ) -> AbstractContextManager[MLOpsRun]:
         raise NotImplementedError
-
-
-def test_bundled_backends_are_registered_as_entry_point_plugins():
-    plugin_names = {entry_point.name for entry_point in registry._plugins()}
-
-    assert "mlflow" in plugin_names
-
-
-def test_mlflow_is_the_default_backend(monkeypatch):
-    class FakeEntryPoint:
-        name = "mlflow"
-
-        def __init__(self) -> None:
-            self.load_count = 0
-
-        def load(self):
-            self.load_count += 1
-            return FakeBackend
-
-    entry_point = FakeEntryPoint()
-    monkeypatch.setattr(registry, "_BACKENDS", {})
-    monkeypatch.setattr(registry, "_plugins", lambda: [entry_point])
-
-    backend = get_backend(tracking_uri="sqlite:///runs.db")
-
-    assert DEFAULT_BACKEND == "mlflow"
-    assert isinstance(backend, FakeBackend)
-    assert backend.options == {"tracking_uri": "sqlite:///runs.db"}
-    assert entry_point.load_count == 1
 
 
 def test_runtime_backend_registration(monkeypatch):

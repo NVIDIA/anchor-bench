@@ -23,7 +23,6 @@ third_party/artifacts/h1/*
 !third_party/artifacts/h1/.gitkeep
 outputs/
 output/
-mlruns/
 /data/
 inputs/datasets/
 *.pt

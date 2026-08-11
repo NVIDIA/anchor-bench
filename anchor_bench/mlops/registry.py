@@ -12,7 +12,6 @@ from anchor_bench.errors import (
 )
 from anchor_bench.mlops.base import MLOpsBackend
 
-DEFAULT_BACKEND = "mlflow"
 ENTRY_POINT_GROUP = "anchor_bench.mlops_backends"
 BackendFactory = Callable[..., MLOpsBackend]
 
@@ -51,8 +50,8 @@ def available_backends() -> List[str]:
     return sorted(set(_BACKENDS).union(installed_plugins))
 
 
-def get_backend(name: str = DEFAULT_BACKEND, **options: Any) -> MLOpsBackend:
-    """Construct a backend by name, defaulting to MLflow.
+def get_backend(name: str, **options: Any) -> MLOpsBackend:
+    """Construct a backend by name.
 
     Options are forwarded unchanged to the selected factory, keeping the core
     registry independent of backend SDK configuration.

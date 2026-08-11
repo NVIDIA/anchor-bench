@@ -17,8 +17,8 @@ The currently implemented functionality is limited to:
 - preparing mapped training trajectories as Parquet artifacts;
 - loading a USD model and its initial state through the optional Newton runtime;
   and
-- tracking portable run parameters, metrics, tags, and artifacts through the
-  bundled MLflow plugin or third-party backend plugins.
+- tracking portable run parameters, metrics, tags, and artifacts through
+  pluggable MLOps backends.
 
 The actuator system-identification pipeline fits actuator parameters by
 evaluating CMA-ES populations in replicated Newton worlds and writes the best
@@ -51,15 +51,10 @@ For development, install the test and quality-check dependencies:
 uv sync --extra dev
 ```
 
-Install only the tracking SDK you use. For the default MLflow backend, run:
-
-```bash
-uv sync --extra mlflow
-```
-
-The tracking SDK is loaded lazily and is not needed for tasks that do not
-use MLOps tracking. See the [MLOps backend guide](docs/mlops.md) for the shared
-API, opt-in task-run lifecycle, task configuration, and plugin contract.
+Install the plugin and tracking SDK for the backend you use. Backend packages
+are discovered lazily and are not needed for tasks that do not use MLOps
+tracking. See the [MLOps backend guide](docs/mlops.md) for the shared API,
+opt-in task-run lifecycle, task configuration, and plugin contract.
 
 ## Command-line usage
 

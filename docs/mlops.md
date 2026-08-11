@@ -1,36 +1,24 @@
 # MLOps backends
 
 Anchor Bench exposes one tracking interface for run parameters, scalar metrics,
-tags, and local artifacts. MLflow and W&B are bundled plugins discovered through
-the `anchor_bench.mlops_backends` Python entry-point group. MLflow remains the
-default backend.
+tags, and local artifacts. Backend plugins are discovered through the
+`anchor_bench.mlops_backends` Python entry-point group and selected explicitly
+by name.
 
 ## Installation
 
-Install only the SDK used by the current environment:
-
-```bash
-uv sync --extra mlflow
-```
-
-or:
-
-```bash
-uv sync --extra wandb
-```
-
-Importing `anchor_bench.mlops` does not import either SDK. The selected SDK is
-loaded when its backend is constructed, and a missing extra produces an
-installation-specific error.
+Install the plugin and tracking SDK for the backend you use. Importing
+`anchor_bench.mlops` does not import a backend-specific SDK; the selected
+plugin owns its optional dependencies.
 
 ## Tracking a run
 
-`get_backend()` selects MLflow when no name is passed:
+`get_backend()` selects an installed or runtime-registered plugin by name:
 
 ```python
 from anchor_bench.mlops import get_backend
 
-backend = get_backend(tracking_uri="file:./mlruns")
+backend = get_backend("custom", endpoint="https://tracking.example")
 
 with backend.start_run(
     "actuator-training",
@@ -39,28 +27,58 @@ with backend.start_run(
 ) as run:
     run.log_params({"hidden_size": 128, "seed": 42})
     run.log_metrics({"train/loss": 0.31}, step=1)
-    run.log_artifact("outputs/model.pt", artifact_path="models")
+    run.log_artifact(
+        "outputs/model.pt",
+        collection="training-output",
+        artifact_type="model",
+    )
 ```
 
 The run context owns backend completion and failure handling. Do not retain a
 run and log to it after leaving the context.
 
-Training configuration has the same default:
+Tracking is opt-in for both training and actuator system identification. When an
+`mlops` block is present, its backend name is required:
 
 ```yaml
 mlops:
-  backend: mlflow
+  backend: custom
   experiment_name: actuator-training
+  run_name: gru-seed-42
   options:
-    tracking_uri: file:./mlruns
+    endpoint: https://tracking.example
 ```
+
+### Dataset inputs
+
+Training and system-identification runs automatically log their source Parquet
+file as a dataset input. Tracking always records the configured source, a
+SHA-256 digest of the acquired file, its size, raw row count and columns, and
+the dataset context. Resampling and preprocessing remain part of the flattened
+task configuration, so the source fingerprint and transformations can be
+inspected together.
+
+Dataset bytes are not uploaded by default. Enable payload upload explicitly
+when the tracking store is an appropriate home for the source data:
+
+```yaml
+mlops:
+  backend: custom
+  experiment_name: actuator-training
+  upload_dataset: true
+```
+
+Backends receive the same portable dataset parameters. Upload-enabled runs also
+log the Parquet file as an artifact with type `dataset`. The upload occurs
+while remote downloads are still materialized, before their temporary directory
+is removed.
 
 `TaskRunner` constructs the selected backend automatically before calling the
 task. It logs the validated task configuration as flattened parameters, starts
 the configured experiment, and binds the active run to the task:
 
 ```python
-def run(self):
+def run(self, output_directory):
     # Report exactly where the metric or artifact is produced.
     if self.mlops_run is not None:
         self.mlops_run.log_metrics(
@@ -69,37 +87,62 @@ def run(self):
         )
         self.mlops_run.log_artifact(
             checkpoint_path,
-            artifact_path="models",
+            collection="training-checkpoints",
+            artifact_type="model",
         )
 ```
 
+Metric steps are run-global and must increase monotonically for portability
+across backends. During hyperparameter search, Anchor Bench reports one
+`search/validation_loss` value per trial and suppresses the individual trial
+epoch curves; this prevents different trials from reusing the same run steps.
+
+An artifact `collection` is a logical output group. Backends decide how to
+map collections into their artifact store. Files and directories
+must exist before they are logged. Missing or failed artifact uploads fail the
+task, so the local `.completed` marker is not written for an incompletely
+tracked run.
+
 Backend-specific `mlops.options` are used to construct the backend but are
-deliberately excluded from logged parameters because they can contain access
-tokens. The backend context records successful or failed completion and the
+deliberately excluded from logged parameters. Do not put credentials, access
+tokens, or other secrets in the run YAML, including under `mlops.options`.
+Anchor Bench persists the validated configuration in the output directory, and
+successful tasks upload that directory as a run artifact. Configure credentials
+through the backend SDK's supported environment variables or credential store
+instead. The backend context records successful or failed completion and the
 active run is cleared even if the task raises an exception.
 
-The current training module only prepares data and is not registered as an
-executable task yet. Consequently, automatic epoch metrics and checkpoints will
-begin when that training loop is implemented; the runner integration and
-task-local reporting path are already in place.
+The training task reports per-epoch training and validation loss, search and
+validator metrics, interval checkpoints, and the completed `training-output`
+artifact collection. Interval checkpoints remain useful if a later training or
+validation stage fails; successful runs also include them in the final output
+directory.
 
-## Bundled backend plugins
+## System-identification runs
 
-Both bundled adapters are registered as entry-point plugins rather than in the
-core backend registry. MLflow is selected by default; select W&B explicitly
-through configuration:
+System identification benefits from the same tracking abstraction: controller
+bounds, optimizer settings, simulation settings, dataset identity, and random
+seed are run parameters; per-generation MSE values are metrics; and the fitted
+parameters, optimization history, summary, and identified USD layer are
+artifacts. Enable it explicitly:
 
 ```yaml
+type: actuator_sys_id
+description: Identify the SO-101 arm actuators.
+tags: [so101, baseline]
 mlops:
-  backend: wandb
-  experiment_name: actuator-training
+  backend: custom
+  experiment_name: actuator-identification
+  run_name: so101-baseline
   options:
-    entity: robotics-team
-    mode: online
+    endpoint: https://tracking.example
 ```
 
-MLflow experiment names map to W&B project names. Anchor Bench's key/value tags
-are encoded as `key:value` W&B tags.
+The task reports `optimization/best_mse`,
+`optimization/iteration_best_mse`, and
+`optimization/population_mean_mse` for every generation. Its completed local
+output directory is logged in the `sysid-output` collection with artifact type
+`actuator-sysid`.
 
 ## Adding another backend
 
@@ -122,4 +165,4 @@ register_backend("custom", CustomBackend)
 ```
 
 Backend names are case-insensitive. Duplicate names are rejected so an
-installed plugin cannot silently replace the default or another integration.
+installed plugin cannot silently replace another integration.
