@@ -50,7 +50,7 @@ model:
     scale: 15.0
 
 training:
-  epochs: 50
+  epochs: 2
   batch_size: 4
   seed: 48
   validation_ratio: 0.2
@@ -75,7 +75,7 @@ training:
     output: actual_effort
     initial_value: 0.0
   checkpoint:
-    every_n_epochs: 10
+    every_n_epochs: 2
 
 validation:
   validators:
