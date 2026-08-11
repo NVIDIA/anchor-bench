@@ -11,10 +11,12 @@ from anchor_bench.errors import ConfigParseError, UnknownConfigTypeError
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.base import BaseConfig
 from anchor_bench.schema.training import TrainingConfig
+from anchor_bench.schema.trajectory import TrajectoryConfig
 
 DATA_MODELS: Dict[str, Type[BaseConfig]] = {
     "actuator_sys_id": ActuatorSysIdConfig,
     "training": TrainingConfig,
+    "trajectory_v1": TrajectoryConfig,
 }
 
 

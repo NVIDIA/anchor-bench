@@ -16,10 +16,12 @@ from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
 from anchor_bench.tasks.train.task import TrainingTask
+from anchor_bench.tasks.trajectory import TrajectoryTask
 
 TASKS: Dict[str, Type[BaseTask[Any]]] = {
     ActuatorSysIdTask.name(): ActuatorSysIdTask,
     TrainingTask.name(): TrainingTask,
+    TrajectoryTask.name(): TrajectoryTask,
 }
 
 
