@@ -49,7 +49,7 @@ def test_cli_passes_force_and_output_to_task_runner(tmp_path, monkeypatch):
 
 def test_cli_reports_mlops_tracking_errors(monkeypatch, capsys):
     def fail_to_run(self, path, *, force=False, output=None):
-        raise MLOpsTrackingError("Tracking failed: connection refused")
+        raise MLOpsTrackingError("MLflow tracking failed: connection refused")
 
     monkeypatch.setattr("anchor_bench.cli.TaskRunner.run", fail_to_run)
 
@@ -58,5 +58,8 @@ def test_cli_reports_mlops_tracking_errors(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert exit_error.value.code == 2
-    assert "anchor-bench: error: Tracking failed: connection refused" in captured.err
+    assert (
+        "anchor-bench: error: MLflow tracking failed: connection refused"
+        in captured.err
+    )
     assert "Traceback" not in captured.err

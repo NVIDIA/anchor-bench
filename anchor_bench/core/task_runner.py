@@ -13,6 +13,7 @@ from anchor_bench.core.artifacts import (
 )
 from anchor_bench.errors import MLOpsBackendNotFoundError, TaskNotFoundError
 from anchor_bench.mlops import (
+    MLflowBackend,
     MLOpsBackend,
     bind_active_run,
     flatten_params,
@@ -40,7 +41,10 @@ class TaskRunner:
         mlops_backends: Optional[Mapping[str, Callable[..., MLOpsBackend]]] = None,
     ) -> None:
         self._tasks = dict(TASKS if task_registry is None else task_registry)
-        self._mlops_backends = dict(mlops_backends or {})
+        self._mlops_backends: Dict[str, Callable[..., MLOpsBackend]] = {
+            "mlflow": MLflowBackend,
+            **dict(mlops_backends or {}),
+        }
 
     def run(
         self,

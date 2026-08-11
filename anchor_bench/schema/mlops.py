@@ -13,6 +13,7 @@ class MLOpsConfig(StrictBaseModel):
     """Select a backend without coupling task schemas to its SDK."""
 
     backend: str = Field(
+        default="mlflow",
         min_length=1,
         description="MLOps backend name available to the task runner.",
     )

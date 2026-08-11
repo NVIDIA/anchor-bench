@@ -184,6 +184,31 @@ def _tracked_config() -> TrackedConfig:
     )
 
 
+def test_task_runner_loads_mlflow_backend_by_default(monkeypatch, tmp_path):
+    config = _tracked_config().model_copy(update={"mlops": MLOpsConfig()})
+    backend = RecordingBackend()
+    monkeypatch.setattr(task_runner, "parse", lambda path: config)
+    monkeypatch.setattr(task_runner, "MLflowBackend", lambda **options: backend)
+    monkeypatch.setattr(
+        task_runner,
+        "get_or_create_output_folder",
+        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+    )
+
+    TaskRunner({"tracked": ReportingTask}).run("tracked.yaml")
+
+    assert backend.start_arguments == (
+        "anchor-bench",
+        None,
+        {
+            "baseline": "",
+            "so101": "",
+            "anchor_bench.task_type": "tracked",
+            "anchor_bench.description": "Exercise reporting.",
+        },
+    )
+
+
 def test_task_runner_reports_unknown_backend(monkeypatch, tmp_path):
     config = _tracked_config().model_copy(
         update={"mlops": MLOpsConfig(backend="missing")}
@@ -197,7 +222,7 @@ def test_task_runner_reports_unknown_backend(monkeypatch, tmp_path):
 
     with pytest.raises(
         MLOpsBackendNotFoundError,
-        match="Available backends: none",
+        match="Available backends: mlflow",
     ):
         TaskRunner({"tracked": ReportingTask}).run("tracked.yaml")
 
