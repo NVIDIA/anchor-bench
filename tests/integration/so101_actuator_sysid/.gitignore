@@ -5,5 +5,5 @@ run_summary.yaml
 identified.usda
 !so101.usd
 !trajectories/
-!trajectories/train-random-waypoints.parquet
+!trajectories/train-*.parquet
 !trajectories/heldout-square-pattern.parquet

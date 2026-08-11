@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
+from glob import glob, has_magic
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Iterator, Union
+from typing import Iterator, Sequence, Union
 from urllib.parse import urlparse
 
 import numpy as np
@@ -30,36 +31,63 @@ class DatasetLoader:
         dt: float,
         http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
     ) -> pd.DataFrame:
-        """Acquire a local Parquet file, read it, and resample its signals."""
+        """Acquire Parquet files, read them, and resample their signals."""
 
-        with DatasetLoader._get_file(
+        with DatasetLoader._get_files(
             source,
             http_timeout_seconds=http_timeout_seconds,
-        ) as dataset_file:
-            dataset = DatasetLoader._read_file(dataset_file, source)
+        ) as dataset_files:
+            datasets = [
+                DatasetLoader._read_file(dataset_file, source)
+                for dataset_file in dataset_files
+            ]
+        dataset = pd.concat(datasets, ignore_index=True)
         return DatasetLoader._resample(dataset, dt)
 
     @staticmethod
     @contextmanager
-    def _get_file(
+    def _get_files(
         source: Union[str, Path],
         *,
         http_timeout_seconds: float,
-    ) -> Iterator[Path]:
-        """Yield a validated local file, downloading remote data when needed."""
+    ) -> Iterator[Sequence[Path]]:
+        """Yield validated local files, downloading remote data when needed."""
 
         source_text = str(source)
         scheme = urlparse(source_text).scheme
         if scheme in ("http", "https"):
+            if has_magic(source_text):
+                raise DatasetLoadError("URL dataset sources do not support globbing.")
             # TODO: We should also cache these downloads at some point.
             with TemporaryDirectory(prefix="anchor-bench-dataset-") as folder:
-                yield download_from_huggingface(
-                    source_text,
-                    folder,
-                    http_timeout_seconds=http_timeout_seconds,
-                )
+                yield [
+                    download_from_huggingface(
+                        source_text,
+                        folder,
+                        http_timeout_seconds=http_timeout_seconds,
+                    )
+                ]
             return
-        yield DatasetLoader._local_path(source)
+        yield DatasetLoader._local_paths(source)
+
+    @staticmethod
+    def _local_paths(source: Union[str, Path]) -> list[Path]:
+        """Expand and validate a local file path or glob pattern."""
+
+        source_text = str(source)
+        if not has_magic(source_text):
+            return [DatasetLoader._local_path(source)]
+        expanded_pattern = str(Path(source).expanduser())
+        matches = sorted(
+            path
+            for candidate in glob(expanded_pattern, recursive=True)
+            if (path := Path(candidate)).is_file()
+        )
+        if not matches:
+            raise DatasetLoadError(
+                f"Dataset glob did not match any files: {expanded_pattern}."
+            )
+        return matches
 
     @staticmethod
     def _read_file(

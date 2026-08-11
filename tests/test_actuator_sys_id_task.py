@@ -114,6 +114,48 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
     )
 
 
+def test_load_trajectories_supports_multiple_globbed_parquet_files(tmp_path):
+    for name, experiment, offset in (
+        ("train-a.parquet", "wave-a", 0.0),
+        ("train-b.parquet", "wave-b", 1.0),
+    ):
+        rows = []
+        for field, values in (
+            ("hip/command_q", [offset, offset + 1.0]),
+            ("hip/actual_q", [offset + 0.1, offset + 0.8]),
+        ):
+            rows.extend(
+                {
+                    "time_ns": timestamp,
+                    "experiment": experiment,
+                    "field": field,
+                    "value": value,
+                }
+                for timestamp, value in zip((0, 5_000_000), values)
+            )
+        pd.DataFrame(rows).to_parquet(tmp_path / name, index=False)
+
+    config = _config(
+        tmp_path,
+        dataset={
+            "type": "parquet",
+            "source": str(tmp_path / "train-*.parquet"),
+            "resampling": {"type": "uniform", "dt": 0.005},
+        },
+    )
+
+    trajectories = load_trajectories(config.dataset, joint_names=["hip"])
+
+    assert [trajectory.experiment for trajectory in trajectories] == [
+        "wave-a",
+        "wave-b",
+    ]
+    np.testing.assert_allclose(
+        trajectories[1].commanded_position,
+        [[1.0], [2.0]],
+    )
+
+
 def test_load_trajectories_rejects_an_episode_without_a_transition(
     tmp_path,
     monkeypatch,

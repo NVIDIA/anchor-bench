@@ -18,7 +18,7 @@ def load_trajectories(
     *,
     joint_names: Sequence[str],
 ) -> List[Trajectory]:
-    """Load command and measurement trajectories from one aligned dataset."""
+    """Load command and measurement trajectories from aligned datasets."""
 
     dataset = DatasetLoader.load(
         dataset_config.source,

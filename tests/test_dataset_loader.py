@@ -43,6 +43,29 @@ def test_loads_and_resamples_local_parquet_file(tmp_path: Path) -> None:
     assert result.index.get_level_values("time_ns").tolist() == [0, 20_000_000]
 
 
+def test_loads_multiple_local_parquet_files_from_glob(tmp_path: Path) -> None:
+    for name, experiment, value in (
+        ("b.parquet", "episode-b", 2.0),
+        ("a.parquet", "episode-a", 1.0),
+    ):
+        dataset = pd.DataFrame(_rows("actual_q", [0], [value]))
+        dataset["experiment"] = experiment
+        dataset.to_parquet(tmp_path / name, index=False)
+
+    result = DatasetLoader.load(str(tmp_path / "*.parquet"), dt=0.02)
+
+    assert result.index.get_level_values("experiment").unique().tolist() == [
+        "episode-a",
+        "episode-b",
+    ]
+    assert result["actual_q"].tolist() == [1.0, 2.0]
+
+
+def test_rejects_local_glob_without_file_matches(tmp_path: Path) -> None:
+    with pytest.raises(DatasetLoadError, match="glob did not match any files"):
+        DatasetLoader.load(str(tmp_path / "*.parquet"), dt=0.02)
+
+
 def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
     dataset = pd.DataFrame(_rows("actual_q", [0], [1.0]))
     seen = []
@@ -70,6 +93,14 @@ def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
     )
     assert seen[0][2] == 2.5
     assert not seen[0][1].exists()
+
+
+def test_rejects_globbing_huggingface_urls() -> None:
+    with pytest.raises(DatasetLoadError, match="URL.*do not support globbing"):
+        DatasetLoader.load(
+            "https://huggingface.co/datasets/example/resolve/main/*.parquet",
+            dt=0.02,
+        )
 
 
 @pytest.mark.parametrize(

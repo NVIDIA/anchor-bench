@@ -35,7 +35,7 @@ seed: 42
 output_dir: outputs/integration/so101_actuator_sysid
 dataset:
   type: parquet
-  source: tests/integration/so101_actuator_sysid/trajectories/train-random-waypoints.parquet
+  source: tests/integration/so101_actuator_sysid/trajectories/train-*.parquet
   resampling:
     type: uniform
     dt: 0.02
