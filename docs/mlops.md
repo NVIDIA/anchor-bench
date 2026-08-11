@@ -1,15 +1,15 @@
 # MLOps backends
 
 Anchor Bench exposes one tracking interface for run parameters, scalar metrics,
-tags, and local artifacts. Backend plugins are discovered through the
+tags, datasets, and local artifacts. Backend plugins are discovered through the
 `anchor_bench.mlops_backends` Python entry-point group and selected explicitly
 by name.
 
 ## Installation
 
 Install the plugin and tracking SDK for the backend you use. Importing
-`anchor_bench.mlops` does not import a backend-specific SDK; the selected
-plugin owns its optional dependencies.
+`anchor_bench.mlops` does not import a backend-specific SDK; the selected plugin
+owns its optional dependencies.
 
 ## Tracking a run
 
@@ -37,112 +37,33 @@ with backend.start_run(
 The run context owns backend completion and failure handling. Do not retain a
 run and log to it after leaving the context.
 
-Tracking is opt-in for both training and actuator system identification. When an
-`mlops` block is present, its backend name is required:
+## Portable data and artifacts
 
-```yaml
-mlops:
-  backend: custom
-  experiment_name: actuator-training
-  run_name: gru-seed-42
-  options:
-    endpoint: https://tracking.example
-```
+`MLOpsRun.log_dataset()` records portable lineage parameters including the
+source, digest, shape, column names, and optional metadata. When upload is
+enabled, its default implementation also logs the materialized dataset through
+`log_artifact()` with artifact type `dataset`. Backends can override this method
+to add native dataset relationships while retaining the portable fields.
 
-### Dataset inputs
+An artifact `collection` is a logical output group. Backends decide how to map
+collections into their artifact store. Files and directories must exist before
+they are logged.
 
-Training and system-identification runs automatically log their source Parquet
-file as a dataset input. Tracking always records the configured source, a
-SHA-256 digest of the acquired file, its size, raw row count and columns, and
-the dataset context. Resampling and preprocessing remain part of the flattened
-task configuration, so the source fingerprint and transformations can be
-inspected together.
+Metric steps are run-global and should increase monotonically for portability
+across backends. Backend implementations must propagate failures so callers can
+keep their local completion state consistent with the tracking service.
 
-Dataset bytes are not uploaded by default. Enable payload upload explicitly
-when the tracking store is an appropriate home for the source data:
+Backend constructor options can contain service endpoints and other
+backend-specific settings. Do not put credentials or access tokens in persisted
+configuration; use the backend SDK's supported environment variables or
+credential store instead.
 
-```yaml
-mlops:
-  backend: custom
-  experiment_name: actuator-training
-  upload_dataset: true
-```
+## Reporting helpers
 
-Backends receive the same portable dataset parameters. Upload-enabled runs also
-log the Parquet file as an artifact with type `dataset`. The upload occurs
-while remote downloads are still materialized, before their temporary directory
-is removed.
-
-`TaskRunner` constructs the selected backend automatically before calling the
-task. It logs the validated task configuration as flattened parameters, starts
-the configured experiment, and binds the active run to the task:
-
-```python
-def run(self, output_directory):
-    # Report exactly where the metric or artifact is produced.
-    if self.mlops_run is not None:
-        self.mlops_run.log_metrics(
-            {"validation/loss": validation_loss},
-            step=epoch,
-        )
-        self.mlops_run.log_artifact(
-            checkpoint_path,
-            collection="training-checkpoints",
-            artifact_type="model",
-        )
-```
-
-Metric steps are run-global and must increase monotonically for portability
-across backends. During hyperparameter search, Anchor Bench reports one
-`search/validation_loss` value per trial and suppresses the individual trial
-epoch curves; this prevents different trials from reusing the same run steps.
-
-An artifact `collection` is a logical output group. Backends decide how to
-map collections into their artifact store. Files and directories
-must exist before they are logged. Missing or failed artifact uploads fail the
-task, so the local `.completed` marker is not written for an incompletely
-tracked run.
-
-Backend-specific `mlops.options` are used to construct the backend but are
-deliberately excluded from logged parameters. Do not put credentials, access
-tokens, or other secrets in the run YAML, including under `mlops.options`.
-Anchor Bench persists the validated configuration in the output directory, and
-successful tasks upload that directory as a run artifact. Configure credentials
-through the backend SDK's supported environment variables or credential store
-instead. The backend context records successful or failed completion and the
-active run is cleared even if the task raises an exception.
-
-The training task reports per-epoch training and validation loss, search and
-validator metrics, interval checkpoints, and the completed `training-output`
-artifact collection. Interval checkpoints remain useful if a later training or
-validation stage fails; successful runs also include them in the final output
-directory.
-
-## System-identification runs
-
-System identification benefits from the same tracking abstraction: controller
-bounds, optimizer settings, simulation settings, dataset identity, and random
-seed are run parameters; per-generation MSE values are metrics; and the fitted
-parameters, optimization history, summary, and identified USD layer are
-artifacts. Enable it explicitly:
-
-```yaml
-type: actuator_sys_id
-description: Identify the SO-101 arm actuators.
-tags: [so101, baseline]
-mlops:
-  backend: custom
-  experiment_name: actuator-identification
-  run_name: so101-baseline
-  options:
-    endpoint: https://tracking.example
-```
-
-The task reports `optimization/best_mse`,
-`optimization/iteration_best_mse`, and
-`optimization/population_mean_mse` for every generation. Its completed local
-output directory is logged in the `sysid-output` collection with artifact type
-`actuator-sysid`.
+`flatten_params()` converts nested JSON-like configuration into portable scalar
+parameters. `bind_active_run()` and `get_active_run()` provide a context-local
+run binding for application code that cannot conveniently receive a run as an
+explicit argument.
 
 ## Adding another backend
 

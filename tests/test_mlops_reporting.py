@@ -1,32 +1,24 @@
-from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Mapping, Optional, Union
 
 import pandas as pd
 import pytest
 
-from anchor_bench.core import task_runner
-from anchor_bench.core.task_runner import TaskRunner
-from anchor_bench.mlops import MLOpsBackend, MLOpsRun, get_active_run
+from anchor_bench.mlops import (
+    MLOpsRun,
+    bind_active_run,
+    flatten_params,
+    get_active_run,
+)
 from anchor_bench.mlops.base import ParameterValue
-from anchor_bench.schema.base import BaseConfig
-from anchor_bench.schema.mlops import MLOpsConfig
-from anchor_bench.tasks.base_task import BaseTask
-
-
-class TrackedConfig(BaseConfig):
-    description: str
-    tags: List[str]
-    mlops: MLOpsConfig
-    payload: Dict[str, Any]
 
 
 class RecordingRun(MLOpsRun):
     def __init__(self) -> None:
-        self.params: Dict[str, ParameterValue] = {}
-        self.metrics = []
-        self.tags = []
-        self.artifacts = []
+        self.params: dict[str, ParameterValue] = {}
+        self.metrics: list[tuple[dict[str, float], Optional[int]]] = []
+        self.tags: list[dict[str, str]] = []
+        self.artifacts: list[tuple[Path, Optional[str], str]] = []
 
     @property
     def run_id(self) -> str:
@@ -50,9 +42,10 @@ class RecordingRun(MLOpsRun):
         self,
         path: Union[str, Path],
         *,
-        artifact_path: Optional[str] = None,
+        collection: Optional[str] = None,
+        artifact_type: str = "anchor-bench",
     ) -> None:
-        self.artifacts.append((Path(path), artifact_path))
+        self.artifacts.append((Path(path), collection, artifact_type))
 
 
 @pytest.mark.parametrize("upload", [False, True])
@@ -91,128 +84,34 @@ def test_default_dataset_logging_records_lineage_and_optional_payload(
     )
 
 
-class RecordingRunContext(AbstractContextManager[MLOpsRun]):
-    def __init__(self, run: RecordingRun) -> None:
-        self.run = run
-        self.exit_exception_type = None
-
-    def __enter__(self) -> MLOpsRun:
-        return self.run
-
-    def __exit__(self, exception_type, exception, traceback) -> None:
-        self.exit_exception_type = exception_type
-
-
-class RecordingBackend(MLOpsBackend):
-    def __init__(self) -> None:
-        self.run = RecordingRun()
-        self.context = RecordingRunContext(self.run)
-        self.start_arguments = None
-
-    def start_run(
-        self,
-        experiment_name: str,
-        *,
-        run_name: Optional[str] = None,
-        tags: Optional[Mapping[str, str]] = None,
-    ) -> AbstractContextManager[MLOpsRun]:
-        self.start_arguments = (experiment_name, run_name, dict(tags or {}))
-        return self.context
-
-
-class ReportingTask(BaseTask[TrackedConfig]):
-    def __init__(self, config: TrackedConfig) -> None:
-        self.config = config
-
-    @classmethod
-    def name(cls) -> str:
-        return "tracked"
-
-    def run(self) -> str:
-        assert self.mlops_run is not None
-        self.mlops_run.log_metrics({"validation/loss": 0.25}, step=4)
-        self.mlops_run.log_artifact("checkpoint.pt", artifact_path="models")
-        return "complete"
-
-
-def _tracked_config() -> TrackedConfig:
-    return TrackedConfig(
-        type="tracked",
-        description="Exercise reporting.",
-        tags=["baseline", "so101"],
-        mlops=MLOpsConfig(
-            backend="recording",
-            experiment_name="actuator-training",
-            options={"api_token": "must-not-be-logged"},
-        ),
-        payload={
+def test_flatten_params_encodes_nested_json_values() -> None:
+    assert flatten_params(
+        {
             "epochs": 4,
             "nested": {"enabled": True, "missing": None},
-            "empty": [],
-        },
-    )
-
-
-def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch):
-    config = _tracked_config()
-    backend = RecordingBackend()
-    resolver_calls = []
-
-    def resolve_backend(name, **options):
-        resolver_calls.append((name, options))
-        return backend
-
-    monkeypatch.setattr(task_runner, "parse", lambda path: config)
-
-    result = TaskRunner(
-        {"tracked": ReportingTask},
-        mlops_backend_resolver=resolve_backend,
-    ).run("tracked.yaml")
-
-    assert result == "complete"
-    assert resolver_calls == [("recording", {"api_token": "must-not-be-logged"})]
-    assert backend.start_arguments == (
-        "actuator-training",
-        None,
-        {
-            "baseline": "",
-            "so101": "",
-            "anchor_bench.task_type": "tracked",
-            "anchor_bench.description": "Exercise reporting.",
-        },
-    )
-    assert backend.run.params == {
-        "type": "tracked",
-        "description": "Exercise reporting.",
-        "tags/0": "baseline",
-        "tags/1": "so101",
-        "payload/epochs": 4,
-        "payload/nested/enabled": True,
-        "payload/nested/missing": "null",
-        "payload/empty": "[]",
-        "anchor_bench/mlops/backend": "recording",
+            "features": ["position", "velocity"],
+            "empty": {},
+        }
+    ) == {
+        "epochs": 4,
+        "nested/enabled": True,
+        "nested/missing": "null",
+        "features/0": "position",
+        "features/1": "velocity",
+        "empty": "{}",
     }
-    assert backend.run.metrics == [({"validation/loss": 0.25}, 4)]
-    assert backend.run.artifacts == [(Path("checkpoint.pt"), "models")]
-    assert backend.context.exit_exception_type is None
+
+
+def test_active_run_binding_is_nested_and_context_local() -> None:
+    outer = RecordingRun()
+    inner = RecordingRun()
+
     assert get_active_run() is None
-
-
-def test_active_run_is_reset_when_task_fails(monkeypatch):
-    class FailingTask(ReportingTask):
-        def run(self) -> str:
-            assert self.mlops_run is not None
-            raise RuntimeError("training failed")
-
-    config = _tracked_config()
-    backend = RecordingBackend()
-    monkeypatch.setattr(task_runner, "parse", lambda path: config)
-
-    with pytest.raises(RuntimeError, match="training failed"):
-        TaskRunner(
-            {"tracked": FailingTask},
-            mlops_backend_resolver=lambda name, **options: backend,
-        ).run("tracked.yaml")
-
-    assert backend.context.exit_exception_type is RuntimeError
+    with bind_active_run(outer) as bound_outer:
+        assert bound_outer is outer
+        assert get_active_run() is outer
+        with bind_active_run(inner) as bound_inner:
+            assert bound_inner is inner
+            assert get_active_run() is inner
+        assert get_active_run() is outer
     assert get_active_run() is None

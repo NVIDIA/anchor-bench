@@ -126,15 +126,7 @@ def test_save_training_artifacts_writes_portable_run(
 def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
     """Persist the objective, trials, parameters, and winning configuration."""
 
-    config_data = _config_data()
-    config_data["mlops"] = {
-        "backend": "custom",
-        "experiment_name": "training",
-        "run_name": "baseline",
-        "upload_dataset": True,
-        "options": {"mode": "offline"},
-    }
-    config = TrainingConfig.model_validate(config_data)
+    config = TrainingConfig.model_validate(_config_data())
     sequences = [_sequence("first", [0.0, 1.0])]
     model = GruModel(config.model, input_size=1, output_size=1)
     training_result = TrainingResult(
@@ -189,10 +181,3 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
     assert summary["best_parameters"] == {"model.hidden_size": 8}
     assert [trial["value"] for trial in summary["trials"]] == [2.0, 1.0]
     assert summary["best_config"]["model"]["hidden_size"] == 8
-    assert summary["best_config"]["mlops"] == {
-        "backend": "custom",
-        "experiment_name": "training",
-        "run_name": "baseline",
-        "upload_dataset": True,
-        "options": {"mode": "offline"},
-    }

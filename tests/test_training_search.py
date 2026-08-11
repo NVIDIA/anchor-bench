@@ -51,11 +51,6 @@ def _search_config() -> TrainingConfig:
             },
         },
     }
-    data["mlops"] = {
-        "backend": "custom",
-        "experiment_name": "training",
-        "options": {"mode": "offline"},
-    }
     return TrainingConfig.model_validate(data)
 
 
@@ -73,8 +68,6 @@ def test_search_trains_trials_and_retains_best_model(
     )
     trained_configs = []
     checkpoint_directories = []
-    report_metrics_values = []
-    checkpoint_collections = []
 
     class ScoredModel(nn.Linear):
         """Attach the sampled score to a small real module."""
@@ -92,14 +85,10 @@ def test_search_trains_trials_and_retains_best_model(
             sequences: Sequence[MappedTrainingSequence],
             *,
             checkpoint_directory: Path,
-            report_metrics: bool,
-            checkpoint_collection: str,
         ) -> None:
             trained_configs.append(config)
             self.config = config
             checkpoint_directories.append(checkpoint_directory)
-            report_metrics_values.append(report_metrics)
-            checkpoint_collections.append(checkpoint_collection)
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 
         def train(self) -> TrainingResult:
@@ -116,10 +105,6 @@ def test_search_trains_trials_and_retains_best_model(
 
     assert len(trained_configs) == 3
     assert all(config.search is None for config in trained_configs)
-    assert all(
-        config.mlops is not None and config.mlops.options == {"mode": "offline"}
-        for config in trained_configs
-    )
     assert [path.name for path in checkpoint_directories] == [
         "trial-0000",
         "trial-0001",
@@ -128,12 +113,6 @@ def test_search_trains_trials_and_retains_best_model(
     assert all(
         path.parent == tmp_path / "checkpoints" for path in checkpoint_directories
     )
-    assert report_metrics_values == [False, False, False]
-    assert checkpoint_collections == [
-        "search-trial-0000-checkpoints",
-        "search-trial-0001-checkpoints",
-        "search-trial-0002-checkpoints",
-    ]
     assert len(result.trials) == 3
     assert result.best_value == min(trial.value for trial in result.trials)
     assert (
@@ -165,8 +144,6 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
             sequences: Sequence[MappedTrainingSequence],
             *,
             checkpoint_directory: Path,
-            report_metrics: bool,
-            checkpoint_collection: str,
         ) -> None:
             self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
 

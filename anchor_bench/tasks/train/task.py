@@ -85,10 +85,6 @@ class TrainingTask(BaseTask[TrainingConfig]):
         dataset = DatasetLoader.load(
             self.config.dataset.source,
             dt=float(self.config.dataset.resampling.dt),
-            dataset_tracker=self.mlops_run,
-            dataset_name="training-dataset",
-            dataset_context="training",
-            upload_dataset=self.mlops_upload_dataset,
         )
 
         simulation = self.config.simulation

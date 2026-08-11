@@ -53,8 +53,8 @@ uv sync --extra dev
 
 Install the plugin and tracking SDK for the backend you use. Backend packages
 are discovered lazily and are not needed for tasks that do not use MLOps
-tracking. See the [MLOps backend guide](docs/mlops.md) for the shared API,
-opt-in task-run lifecycle, task configuration, and plugin contract.
+tracking. See the [MLOps backend guide](docs/mlops.md) for the shared API and
+plugin contract.
 
 ## Command-line usage
 

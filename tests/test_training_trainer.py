@@ -260,13 +260,6 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
     config_data["training"]["epochs"] = 5
     config_data["training"]["checkpoint"] = {"every_n_epochs": 2}
     config_data["training"]["sequence"] = {"length": 2}
-    config_data["mlops"] = {
-        "backend": "custom",
-        "experiment_name": "training",
-        "run_name": "baseline",
-        "upload_dataset": True,
-        "options": {"mode": "offline"},
-    }
     config = TrainingConfig.model_validate(config_data)
     checkpoint_directory = tmp_path / "checkpoints"
     trainer = Trainer(
@@ -294,13 +287,6 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
         "outputs": {"method": "none", "mean": (0.0,), "standard_deviation": (1.0,)},
     }
     assert checkpoint["config"]["training"]["checkpoint"] == {"every_n_epochs": 2}
-    assert checkpoint["config"]["mlops"] == {
-        "backend": "custom",
-        "experiment_name": "training",
-        "run_name": "baseline",
-        "upload_dataset": True,
-        "options": {"mode": "offline"},
-    }
     assert checkpoint["model_state_dict"].keys() == trainer.model.state_dict().keys()
     assert checkpoint["optimizer_state_dict"]["state"]
     assert not list(checkpoint_directory.glob("*.tmp"))

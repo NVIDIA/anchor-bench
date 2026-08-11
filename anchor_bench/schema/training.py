@@ -17,7 +17,6 @@ from typing_extensions import TypeAlias
 
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
 from anchor_bench.schema.dataset import ParquetDatasetConfig
-from anchor_bench.schema.mlops import MLOpsConfig
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 CategoricalValue: TypeAlias = Union[
@@ -283,10 +282,6 @@ class TrainingConfig(BaseConfig):
     type: Literal["training"]  # pyright: ignore[reportIncompatibleVariableOverride]
     description: Optional[str] = None
     tags: Optional[List[str]] = None
-    mlops: Optional[MLOpsConfig] = Field(
-        default=None,
-        description="Optional experiment-tracking configuration for this task.",
-    )
     dataset: ParquetDatasetConfig
     simulation: SimulationConfig
     input_features: Annotated[
