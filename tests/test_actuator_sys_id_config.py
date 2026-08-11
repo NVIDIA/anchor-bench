@@ -74,6 +74,29 @@ def test_model_matches_schema_and_applies_defaults(valid_config_data):
     assert isinstance(config.joint_parameters[0].controller, PdControllerConfig)
     assert config.joint_parameters[0].controller.delay_duration_ms == 0
     assert config.simulation.solver.integrator == "implicitfast"
+    assert config.mlops is None
+
+
+def test_model_accepts_optional_mlops_configuration(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["mlops"] = {
+        "backend": "custom",
+        "experiment_name": "actuator-identification",
+        "run_name": "so101-baseline",
+        "options": {"mode": "offline"},
+    }
+    data["description"] = "Identify the SO-101 arm actuators."
+    data["tags"] = ["so101", "baseline"]
+
+    config = ActuatorSysIdConfig.model_validate(data)
+
+    assert config.mlops is not None
+    assert config.mlops.backend == "custom"
+    assert config.mlops.experiment_name == "actuator-identification"
+    assert config.mlops.run_name == "so101-baseline"
+    assert config.mlops.options == {"mode": "offline"}
+    assert config.description == "Identify the SO-101 arm actuators."
+    assert config.tags == ["so101", "baseline"]
 
 
 def test_model_rejects_extra_properties(valid_config_data):

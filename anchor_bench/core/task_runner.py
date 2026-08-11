@@ -12,6 +12,10 @@ from anchor_bench.core.artifacts import (
     write_yaml,
 )
 from anchor_bench.errors import TaskNotFoundError
+from anchor_bench.mlops import bind_active_run, flatten_params, get_backend
+from anchor_bench.mlops.registry import BackendFactory
+from anchor_bench.schema.base import BaseConfig
+from anchor_bench.schema.mlops import MLOpsConfig
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
@@ -29,8 +33,11 @@ class TaskRunner:
     def __init__(
         self,
         task_registry: Optional[Mapping[str, Type[BaseTask[Any]]]] = None,
+        *,
+        mlops_backend_resolver: BackendFactory = get_backend,
     ) -> None:
         self._tasks = dict(TASKS if task_registry is None else task_registry)
+        self._mlops_backend_resolver = mlops_backend_resolver
 
     def run(
         self,
@@ -64,11 +71,97 @@ class TaskRunner:
             output_directory / "config.yaml",
             config.model_dump(mode="json"),
         )
-        task_output = task_class(config).run(output_directory)
+
+        task = task_class(config)
+        mlops_config = getattr(config, "mlops", None)
+        if isinstance(mlops_config, MLOpsConfig):
+            return self._run_with_mlops(
+                task,
+                config,
+                mlops_config,
+                output_directory,
+                completion_marker,
+            )
+
+        return self._finalize_task(
+            task,
+            task.run(output_directory),
+            output_directory,
+            completion_marker,
+        )
+
+    def _run_with_mlops(
+        self,
+        task: BaseTask[Any],
+        config: BaseConfig,
+        mlops_config: MLOpsConfig,
+        output_directory: Path,
+        completion_marker: Path,
+    ) -> Path:
+        """Execute and finalize a task inside its backend-owned run context.
+
+        Validation and marker creation deliberately happen before the backend
+        context exits, so the tracking service observes finalization failures.
+        """
+
+        backend = self._mlops_backend_resolver(
+            mlops_config.backend,
+            **mlops_config.options,
+        )
+        tags = _tracking_tags(config)
+        try:
+            with backend.start_run(
+                mlops_config.experiment_name,
+                run_name=mlops_config.run_name,
+                tags=tags,
+            ) as run:
+                # Constructor options are backend-specific connection settings;
+                # log the portable task config and selected backend instead.
+                parameters = flatten_params(
+                    config.model_dump(mode="json", exclude={"mlops"})
+                )
+                parameters["anchor_bench/mlops/backend"] = mlops_config.backend
+                run.log_params(parameters)
+                with bind_active_run(run):
+                    task_output = task.run(output_directory)
+                return self._finalize_task(
+                    task,
+                    task_output,
+                    output_directory,
+                    completion_marker,
+                )
+        except BaseException:
+            # Backend __exit__ can fail after the marker was touched. Never leave
+            # a locally complete result when tracking finalization did not finish.
+            completion_marker.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _finalize_task(
+        task: BaseTask[Any],
+        task_output: Path,
+        output_directory: Path,
+        completion_marker: Path,
+    ) -> Path:
+        """Validate the task contract and mark its assigned output complete."""
+
         if task_output != output_directory:
             raise RuntimeError(
-                f"{task_class.__name__}.run() returned {task_output}, expected "
+                f"{type(task).__name__}.run() returned {task_output}, expected "
                 f"its assigned output directory {output_directory}."
             )
         completion_marker.touch()
         return task_output
+
+
+def _tracking_tags(config: BaseConfig) -> Dict[str, str]:
+    """Translate portable task labels into searchable backend string tags."""
+
+    raw_tags = getattr(config, "tags", None)
+    tags = {tag: "" for tag in raw_tags or [] if isinstance(tag, str) and tag}
+    tags["anchor_bench.task_type"] = config.type
+
+    description = getattr(config, "description", None)
+    if isinstance(description, str) and description:
+        tags["anchor_bench.description"] = description
+    return tags

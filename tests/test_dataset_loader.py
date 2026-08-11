@@ -1,4 +1,6 @@
+import hashlib
 from pathlib import Path
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -6,6 +8,7 @@ import pytest
 import anchor_bench.data.loader as loader_module
 from anchor_bench.data import DatasetLoader
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
+from anchor_bench.mlops import MLOpsRun
 
 
 def _rows(field, timestamps, values):
@@ -64,6 +67,42 @@ def test_loads_multiple_local_parquet_files_from_glob(tmp_path: Path) -> None:
 def test_rejects_local_glob_without_file_matches(tmp_path: Path) -> None:
     with pytest.raises(DatasetLoadError, match="glob did not match any files"):
         DatasetLoader.load(str(tmp_path / "*.parquet"), dt=0.02)
+
+
+def test_logs_dataset_lineage_and_opt_in_upload(tmp_path: Path) -> None:
+    dataset = pd.DataFrame(
+        _rows("actual_q", [0, 20_000_000], [1.0, 2.0])
+        + _rows("command_q", [0, 20_000_000], [2.0, 4.0])
+    )
+    source = _write_dataset(tmp_path, dataset)
+    tracker = Mock(spec=MLOpsRun)
+
+    DatasetLoader.load(
+        source,
+        dt=0.02,
+        dataset_tracker=tracker,
+        dataset_name="training-dataset",
+        dataset_context="training",
+        upload_dataset=True,
+    )
+
+    tracker.log_dataset.assert_called_once()
+    reported_dataset = tracker.log_dataset.call_args.args[0]
+    options = tracker.log_dataset.call_args.kwargs
+    pd.testing.assert_frame_equal(reported_dataset, dataset)
+    assert options == {
+        "source": str(source),
+        "digest": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "name": "training-dataset",
+        "context": "training",
+        "path": source,
+        "metadata": {
+            "digest_algorithm": "sha256",
+            "format": "parquet",
+            "size_bytes": source.stat().st_size,
+        },
+        "upload": True,
+    }
 
 
 def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:

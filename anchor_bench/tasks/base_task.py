@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generic, Type, TypeVar, get_args, get_origin
+from typing import Generic, Optional, Type, TypeVar, get_args, get_origin
 
+from anchor_bench.mlops import MLOpsRun, get_active_run
 from anchor_bench.schema.base import BaseConfig
 from anchor_bench.schema.helpers import _config_type
+from anchor_bench.schema.mlops import MLOpsConfig
 
 ConfigT = TypeVar("ConfigT", bound=BaseConfig)
 
@@ -53,3 +55,16 @@ class BaseTask(ABC, Generic[ConfigT]):
     @abstractmethod
     def run(self, output_directory: Path) -> Path:
         """Execute the task in a runner-provided output directory."""
+
+    @property
+    def mlops_run(self) -> Optional[MLOpsRun]:
+        """Return the active task run when MLOps reporting is configured."""
+
+        return get_active_run()
+
+    @property
+    def mlops_upload_dataset(self) -> bool:
+        """Return whether the configured MLOps run should upload dataset bytes."""
+
+        mlops_config = getattr(self.config, "mlops", None)
+        return isinstance(mlops_config, MLOpsConfig) and mlops_config.upload_dataset

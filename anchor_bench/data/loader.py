@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from glob import glob, has_magic
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Iterator, Sequence, Union
+from typing import TYPE_CHECKING, Iterator, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 import numpy as np
@@ -15,6 +16,9 @@ import pandas as pd
 
 from anchor_bench.data.datasets import download_from_huggingface
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
+
+if TYPE_CHECKING:
+    from anchor_bench.mlops import MLOpsRun
 
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
 NANOSECONDS_PER_SECOND = 1_000_000_000
@@ -30,17 +34,48 @@ class DatasetLoader:
         *,
         dt: float,
         http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
+        dataset_tracker: Optional[MLOpsRun] = None,
+        dataset_name: str = "dataset",
+        dataset_context: str = "input",
+        upload_dataset: bool = False,
     ) -> pd.DataFrame:
-        """Acquire Parquet files, read them, and resample their signals."""
+        """Acquire, optionally track, and resample one or more Parquet files.
+
+        Each materialized file is reported before concatenation and resampling.
+        Optional upload also happens here so remotely downloaded data still exists
+        until the backend has finished consuming it.
+        """
 
         with DatasetLoader._get_files(
             source,
             http_timeout_seconds=http_timeout_seconds,
         ) as dataset_files:
-            datasets = [
-                DatasetLoader._read_file(dataset_file, source)
-                for dataset_file in dataset_files
-            ]
+            datasets = []
+            for index, dataset_file in enumerate(dataset_files):
+                dataset = DatasetLoader._read_file(dataset_file, source)
+                datasets.append(dataset)
+                if dataset_tracker is not None:
+                    tracked_name = (
+                        dataset_name
+                        if len(dataset_files) == 1
+                        else f"{dataset_name}-{index}"
+                    )
+                    # Fingerprint the materialized file rather than the DataFrame so
+                    # the digest identifies exactly the bytes a later run can reuse.
+                    dataset_tracker.log_dataset(
+                        dataset,
+                        source=str(source),
+                        digest=DatasetLoader._sha256(dataset_file, source),
+                        name=tracked_name,
+                        context=dataset_context,
+                        path=dataset_file,
+                        metadata={
+                            "digest_algorithm": "sha256",
+                            "format": "parquet",
+                            "size_bytes": dataset_file.stat().st_size,
+                        },
+                        upload=upload_dataset,
+                    )
         dataset = pd.concat(datasets, ignore_index=True)
         return DatasetLoader._resample(dataset, dt)
 
@@ -102,6 +137,21 @@ class DatasetLoader:
             raise DatasetLoadError(
                 f"Could not load Parquet dataset from {source}: {error}."
             ) from error
+
+    @staticmethod
+    def _sha256(dataset_file: Path, source: Union[str, Path]) -> str:
+        """Return the SHA-256 digest for one materialized dataset file."""
+
+        digest = hashlib.sha256()
+        try:
+            with dataset_file.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+        except OSError as error:
+            raise DatasetLoadError(
+                f"Could not fingerprint Parquet dataset from {source}: {error}."
+            ) from error
+        return digest.hexdigest()
 
     @staticmethod
     def _local_path(source: Union[str, Path]) -> Path:
