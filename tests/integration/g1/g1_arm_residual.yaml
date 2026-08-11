@@ -68,7 +68,7 @@ training:
     inputs: standard
     outputs: none
   checkpoint:
-    every_n_epochs: 5
+    every_n_epochs: 2
 
 validation:
   validators:

@@ -78,4 +78,4 @@ def test_trains_and_validates_g1_example(
     assert (output / ".completed").is_file()
     assert (output / "history.yaml").is_file()
     assert (output / "validation.yaml").is_file()
-    assert (output / "checkpoints" / "epoch-000005.pt").is_file()
+    assert (output / "checkpoints" / "epoch-000002.pt").is_file()
