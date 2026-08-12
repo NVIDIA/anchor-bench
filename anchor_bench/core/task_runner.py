@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, Union
 
@@ -11,11 +11,13 @@ from anchor_bench.core.artifacts import (
     get_or_create_output_folder,
     write_yaml,
 )
-from anchor_bench.errors import TaskNotFoundError
-from anchor_bench.mlops import bind_active_run, flatten_params, get_backend
-from anchor_bench.mlops.registry import BackendFactory
-from anchor_bench.schema.base import BaseConfig
-from anchor_bench.schema.mlops import MLOpsConfig
+from anchor_bench.errors import MLOpsBackendNotFoundError, TaskNotFoundError
+from anchor_bench.mlops import (
+    MLOpsBackend,
+    bind_active_run,
+    flatten_params,
+)
+from anchor_bench.schema.mlops import MLOpsConfig, MLOpsTaskConfig
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
@@ -34,10 +36,10 @@ class TaskRunner:
         self,
         task_registry: Optional[Mapping[str, Type[BaseTask[Any]]]] = None,
         *,
-        mlops_backend_resolver: BackendFactory = get_backend,
+        mlops_backends: Optional[Mapping[str, Callable[..., MLOpsBackend]]] = None,
     ) -> None:
         self._tasks = dict(TASKS if task_registry is None else task_registry)
-        self._mlops_backend_resolver = mlops_backend_resolver
+        self._mlops_backends = dict(mlops_backends or {})
 
     def run(
         self,
@@ -73,8 +75,8 @@ class TaskRunner:
         )
 
         task = task_class(config)
-        mlops_config = getattr(config, "mlops", None)
-        if isinstance(mlops_config, MLOpsConfig):
+        if isinstance(config, MLOpsTaskConfig) and config.mlops is not None:
+            mlops_config = config.mlops
             return self._run_with_mlops(
                 task,
                 config,
@@ -93,7 +95,7 @@ class TaskRunner:
     def _run_with_mlops(
         self,
         task: BaseTask[Any],
-        config: BaseConfig,
+        config: MLOpsTaskConfig,
         mlops_config: MLOpsConfig,
         output_directory: Path,
         completion_marker: Path,
@@ -104,10 +106,14 @@ class TaskRunner:
         context exits, so the tracking service observes finalization failures.
         """
 
-        backend = self._mlops_backend_resolver(
-            mlops_config.backend,
-            **mlops_config.options,
-        )
+        backend_factory = self._mlops_backends.get(mlops_config.backend)
+        if backend_factory is None:
+            known_backends = ", ".join(sorted(self._mlops_backends)) or "none"
+            raise MLOpsBackendNotFoundError(
+                f"Unknown MLOps backend {mlops_config.backend!r}. "
+                f"Available backends: {known_backends}."
+            )
+        backend = backend_factory(**mlops_config.options)
         tags = _tracking_tags(config)
         try:
             with backend.start_run(
@@ -154,14 +160,12 @@ class TaskRunner:
         return task_output
 
 
-def _tracking_tags(config: BaseConfig) -> Dict[str, str]:
+def _tracking_tags(config: MLOpsTaskConfig) -> Dict[str, str]:
     """Translate portable task labels into searchable backend string tags."""
 
-    raw_tags = getattr(config, "tags", None)
-    tags = {tag: "" for tag in raw_tags or [] if isinstance(tag, str) and tag}
+    tags = {tag: "" for tag in config.tags or [] if tag}
     tags["anchor_bench.task_type"] = config.type
 
-    description = getattr(config, "description", None)
-    if isinstance(description, str) and description:
-        tags["anchor_bench.description"] = description
+    if config.description:
+        tags["anchor_bench.description"] = config.description
     return tags

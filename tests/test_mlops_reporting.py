@@ -1,23 +1,20 @@
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 import pandas as pd
 import pytest
 
 from anchor_bench.core import task_runner
 from anchor_bench.core.task_runner import TaskRunner
+from anchor_bench.errors import MLOpsBackendNotFoundError
 from anchor_bench.mlops import MLOpsBackend, MLOpsRun, get_active_run
 from anchor_bench.mlops.base import ParameterValue
-from anchor_bench.schema.base import BaseConfig
-from anchor_bench.schema.mlops import MLOpsConfig
+from anchor_bench.schema.mlops import MLOpsConfig, MLOpsTaskConfig
 from anchor_bench.tasks.base_task import BaseTask
 
 
-class TrackedConfig(BaseConfig):
-    description: str
-    tags: List[str]
-    mlops: MLOpsConfig
+class TrackedConfig(MLOpsTaskConfig):
     payload: Dict[str, Any]
 
 
@@ -153,9 +150,10 @@ class ReportingTask(BaseTask[TrackedConfig]):
         return "tracked"
 
     def run(self, output_directory: Path) -> Path:
-        assert self.mlops_run is not None
-        self.mlops_run.log_metrics({"validation/loss": 0.25}, step=4)
-        self.mlops_run.log_artifact(
+        mlops_run = get_active_run()
+        assert mlops_run is not None
+        mlops_run.log_metrics({"validation/loss": 0.25}, step=4)
+        mlops_run.log_artifact(
             "checkpoint.pt",
             collection="training-checkpoints",
             artifact_type="model",
@@ -182,13 +180,31 @@ def _tracked_config() -> TrackedConfig:
     )
 
 
+def test_task_runner_reports_unknown_backend(monkeypatch, tmp_path):
+    config = _tracked_config().model_copy(
+        update={"mlops": MLOpsConfig(backend="missing")}
+    )
+    monkeypatch.setattr(task_runner, "parse", lambda path: config)
+    monkeypatch.setattr(
+        task_runner,
+        "get_or_create_output_folder",
+        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+    )
+
+    with pytest.raises(
+        MLOpsBackendNotFoundError,
+        match="Available backends: none",
+    ):
+        TaskRunner({"tracked": ReportingTask}).run("tracked.yaml")
+
+
 def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_path):
     config = _tracked_config()
     backend = RecordingBackend()
-    resolver_calls = []
+    factory_options = []
 
-    def resolve_backend(name, **options):
-        resolver_calls.append((name, options))
+    def create_backend(**options):
+        factory_options.append(options)
         return backend
 
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
@@ -200,12 +216,12 @@ def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_pa
 
     result = TaskRunner(
         {"tracked": ReportingTask},
-        mlops_backend_resolver=resolve_backend,
+        mlops_backends={"recording": create_backend},
     ).run("tracked.yaml")
 
     assert result == tmp_path
+    assert factory_options == [{"api_token": "must-not-be-logged"}]
     assert (result / ".completed").is_file()
-    assert resolver_calls == [("recording", {"api_token": "must-not-be-logged"})]
     assert backend.start_arguments == (
         "actuator-training",
         "gru-seed-42",
@@ -238,7 +254,7 @@ def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_pa
 def test_active_run_is_reset_when_task_fails(monkeypatch, tmp_path):
     class FailingTask(BaseTask[TrackedConfig]):
         def run(self, output_directory: Path) -> Path:
-            assert self.mlops_run is not None
+            assert get_active_run() is not None
             raise RuntimeError("training failed")
 
     config = _tracked_config()
@@ -253,7 +269,7 @@ def test_active_run_is_reset_when_task_fails(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="training failed"):
         TaskRunner(
             {"tracked": FailingTask},
-            mlops_backend_resolver=lambda name, **options: backend,
+            mlops_backends={"recording": lambda **options: backend},
         ).run("tracked.yaml")
 
     assert backend.context.exit_exception_type is RuntimeError
@@ -264,7 +280,7 @@ def test_active_run_is_reset_when_task_fails(monkeypatch, tmp_path):
 def test_output_validation_failure_marks_tracked_run_failed(monkeypatch, tmp_path):
     class MisdirectedTask(BaseTask[TrackedConfig]):
         def run(self, output_directory: Path) -> Path:
-            assert self.mlops_run is not None
+            assert get_active_run() is not None
             return output_directory.parent
 
     config = _tracked_config()
@@ -282,7 +298,7 @@ def test_output_validation_failure_marks_tracked_run_failed(monkeypatch, tmp_pat
     ):
         TaskRunner(
             {"tracked": MisdirectedTask},
-            mlops_backend_resolver=lambda name, **options: backend,
+            mlops_backends={"recording": lambda **options: backend},
         ).run("tracked.yaml")
 
     assert backend.context.exit_exception_type is RuntimeError
@@ -309,7 +325,7 @@ def test_backend_exit_failure_removes_completion_marker(monkeypatch, tmp_path):
     with pytest.raises(OSError, match="run finalization failed"):
         TaskRunner(
             {"tracked": ReportingTask},
-            mlops_backend_resolver=lambda name, **options: backend,
+            mlops_backends={"recording": lambda **options: backend},
         ).run("tracked.yaml")
 
     assert backend.context.exit_exception_type is None
@@ -335,7 +351,7 @@ def test_artifact_failure_fails_run_without_completion_marker(monkeypatch, tmp_p
     with pytest.raises(OSError, match="artifact upload failed"):
         TaskRunner(
             {"tracked": ReportingTask},
-            mlops_backend_resolver=lambda name, **options: backend,
+            mlops_backends={"recording": lambda **options: backend},
         ).run("tracked.yaml")
 
     assert backend.context.exit_exception_type is OSError

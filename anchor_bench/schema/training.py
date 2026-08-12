@@ -15,9 +15,9 @@ from pydantic import (
 )
 from typing_extensions import TypeAlias
 
-from anchor_bench.schema.base import BaseConfig, StrictBaseModel
+from anchor_bench.schema.base import StrictBaseModel
 from anchor_bench.schema.dataset import ParquetDatasetConfig
-from anchor_bench.schema.mlops import MLOpsConfig
+from anchor_bench.schema.mlops import MLOpsTaskConfig
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 CategoricalValue: TypeAlias = Union[
@@ -277,16 +277,10 @@ class TrainingValidationConfig(StrictBaseModel):
     validators: Annotated[List[TrainingValidatorConfig], Field(min_length=1)]
 
 
-class TrainingConfig(BaseConfig):
+class TrainingConfig(MLOpsTaskConfig):
     """Top-level configuration for the architecture-agnostic training pipeline."""
 
     type: Literal["training"]  # pyright: ignore[reportIncompatibleVariableOverride]
-    description: Optional[str] = None
-    tags: Optional[List[str]] = None
-    mlops: Optional[MLOpsConfig] = Field(
-        default=None,
-        description="Optional experiment-tracking configuration for this task.",
-    )
     dataset: ParquetDatasetConfig
     simulation: SimulationConfig
     input_features: Annotated[

@@ -174,7 +174,7 @@ def test_optional_metadata_and_search_can_be_omitted(valid_config_data):
     assert config.search is None
 
 
-def test_mlops_backend_can_be_configured_as_a_plugin(valid_config_data):
+def test_mlops_backend_can_be_configured_by_name(valid_config_data):
     data = deepcopy(valid_config_data)
     data["mlops"] = {
         "backend": "custom",

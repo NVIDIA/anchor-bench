@@ -39,17 +39,20 @@ removes it if task execution or backend finalization fails.
 
 ## Reporting from task code
 
-The active run is available through `BaseTask.mlops_run` and the context-local
-`get_active_run()` helper:
+The active run is available through the context-local `get_active_run()` helper:
 
 ```python
+from anchor_bench.mlops import get_active_run
+
+
 def run(self, output_directory):
-    if self.mlops_run is not None:
-        self.mlops_run.log_metrics(
+    mlops_run = get_active_run()
+    if mlops_run is not None:
+        mlops_run.log_metrics(
             {"validation/loss": validation_loss},
             step=epoch,
         )
-        self.mlops_run.log_artifact(
+        mlops_run.log_artifact(
             checkpoint_path,
             collection="training-checkpoints",
             artifact_type="model",
@@ -91,6 +94,13 @@ Do not retain a run and log to it after leaving its context.
 
 ## Adding another backend
 
-Implement `MLOpsBackend` and `MLOpsRun`, then construct that backend at the
-application integration boundary. Backend-specific constructor options remain
-outside the portable interfaces.
+Implement `MLOpsBackend` and `MLOpsRun`, then pass its factory to the runner:
+
+```python
+runner = TaskRunner(mlops_backends={"custom": CustomBackend})
+runner.run("config.yaml")
+```
+
+The factory receives backend-specific keyword options from `mlops.options`. The
+mapping belongs to that runner, so applications can extend or replace their own
+backend choices without process-global registration.
