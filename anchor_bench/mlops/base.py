@@ -67,7 +67,6 @@ class MLOpsRun(ABC):
                 [str(column) for column in dataset.columns],
                 separators=(",", ":"),
             ),
-            f"{prefix}/uploaded": upload,
         }
         if metadata is not None:
             parameters.update(
@@ -75,15 +74,18 @@ class MLOpsRun(ABC):
             )
         self.log_params(parameters)
 
-        if not upload:
-            return
-        if path is None:
-            raise ValueError("A local dataset path is required when upload is enabled.")
-        self.log_artifact(
-            path,
-            collection=name,
-            artifact_type="dataset",
-        )
+        if upload:
+            if path is None:
+                raise ValueError(
+                    "A local dataset path is required when upload is enabled."
+                )
+            self.log_artifact(
+                path,
+                collection=name,
+                artifact_type="dataset",
+            )
+
+        self.log_params({f"{prefix}/uploaded": upload})
 
     @abstractmethod
     def log_artifact(

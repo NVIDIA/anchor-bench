@@ -84,6 +84,37 @@ def test_default_dataset_logging_records_lineage_and_optional_payload(
     )
 
 
+def test_default_dataset_logging_does_not_record_failed_upload(
+    tmp_path: Path,
+) -> None:
+    class FailingArtifactRun(RecordingRun):
+        def log_artifact(
+            self,
+            path: Union[str, Path],
+            *,
+            collection: Optional[str] = None,
+            artifact_type: str = "anchor-bench",
+        ) -> None:
+            raise RuntimeError("upload failed")
+
+    dataset = pd.DataFrame({"value": [1.0]})
+    source_path = tmp_path / "dataset.parquet"
+    source_path.write_text("dataset", encoding="utf-8")
+    run = FailingArtifactRun()
+
+    with pytest.raises(RuntimeError, match="upload failed"):
+        run.log_dataset(
+            dataset,
+            source="datasets/actuator.parquet",
+            digest="abc123",
+            name="training-dataset",
+            path=source_path,
+            upload=True,
+        )
+
+    assert "datasets/training-dataset/uploaded" not in run.params
+
+
 def test_flatten_params_encodes_nested_json_values() -> None:
     assert flatten_params(
         {
