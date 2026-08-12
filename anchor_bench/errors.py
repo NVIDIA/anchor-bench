@@ -30,15 +30,7 @@ class MLOpsError(AnchorBenchError):
 
 
 class MLOpsBackendNotFoundError(MLOpsError):
-    """Raised when an MLOps backend is not registered or installed."""
-
-
-class MLOpsDependencyError(MLOpsError, ImportError):
-    """Raised when an optional backend dependency is unavailable."""
-
-
-class MLOpsPluginError(MLOpsError):
-    """Raised when an MLOps plugin cannot be loaded or constructed."""
+    """Raised when an MLOps backend is not registered."""
 
 
 class MLOpsTrackingError(MLOpsError):

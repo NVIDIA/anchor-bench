@@ -16,11 +16,6 @@ ParameterValue = Union[str, int, float, bool]
 class MLOpsRun(ABC):
     """One active experiment run owned by an MLOps backend."""
 
-    @property
-    @abstractmethod
-    def run_id(self) -> str:
-        """Return the backend's stable identifier for this run."""
-
     @abstractmethod
     def log_params(self, params: Mapping[str, ParameterValue]) -> None:
         """Log immutable run parameters."""
@@ -33,10 +28,6 @@ class MLOpsRun(ABC):
         step: Optional[int] = None,
     ) -> None:
         """Log scalar metrics at an optional run-global, monotonic step."""
-
-    @abstractmethod
-    def set_tags(self, tags: Mapping[str, str]) -> None:
-        """Add or replace searchable run metadata."""
 
     def log_dataset(
         self,

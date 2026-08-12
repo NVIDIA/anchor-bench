@@ -14,7 +14,7 @@ class MLOpsConfig(StrictBaseModel):
 
     backend: str = Field(
         min_length=1,
-        description="Registered backend or entry-point name.",
+        description="Backend name selected by the application.",
     )
     experiment_name: str = Field(
         default="anchor-bench",

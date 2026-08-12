@@ -1,24 +1,21 @@
 # MLOps backends
 
 Anchor Bench exposes one tracking interface for run parameters, scalar metrics,
-tags, datasets, and local artifacts. Backend plugins are discovered through the
-`anchor_bench.mlops_backends` Python entry-point group and selected explicitly
-by name.
+tags, datasets, and local artifacts. Applications choose and construct the backend
+at their integration boundary.
 
 ## Installation
 
-Install the plugin and tracking SDK for the backend you use. Importing
-`anchor_bench.mlops` does not import a backend-specific SDK; the selected plugin
-owns its optional dependencies.
+Install the tracking SDK required by the backend implementation you use.
 
 ## Tracking a run
 
-`get_backend()` selects an installed or runtime-registered plugin by name:
+Construct the backend directly:
 
 ```python
-from anchor_bench.mlops import get_backend
+from my_anchor_backend import CustomBackend
 
-backend = get_backend("custom", endpoint="https://tracking.example")
+backend = CustomBackend(endpoint="https://tracking.example")
 
 with backend.start_run(
     "actuator-training",
@@ -67,23 +64,6 @@ explicit argument.
 
 ## Adding another backend
 
-Implement `MLOpsBackend` and `MLOpsRun`, then publish the factory as an entry
-point. No Anchor Bench registry change is required:
-
-```toml
-[project.entry-points."anchor_bench.mlops_backends"]
-custom = "my_anchor_plugin:CustomBackend"
-```
-
-The entry-point object must be a callable that accepts backend-specific keyword
-options and returns an `MLOpsBackend`. For application-local integrations, the
-same factory can be registered at runtime:
-
-```python
-from anchor_bench.mlops import register_backend
-
-register_backend("custom", CustomBackend)
-```
-
-Backend names are case-insensitive. Duplicate names are rejected so an
-installed plugin cannot silently replace another integration.
+Implement `MLOpsBackend` and `MLOpsRun`, then construct that backend at the
+application integration boundary. Backend-specific constructor options remain
+outside the portable interfaces.

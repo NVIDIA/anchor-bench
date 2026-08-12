@@ -17,12 +17,7 @@ class RecordingRun(MLOpsRun):
     def __init__(self) -> None:
         self.params: dict[str, ParameterValue] = {}
         self.metrics: list[tuple[dict[str, float], Optional[int]]] = []
-        self.tags: list[dict[str, str]] = []
         self.artifacts: list[tuple[Path, Optional[str], str]] = []
-
-    @property
-    def run_id(self) -> str:
-        return "recording-run"
 
     def log_params(self, params: Mapping[str, ParameterValue]) -> None:
         self.params.update(params)
@@ -34,9 +29,6 @@ class RecordingRun(MLOpsRun):
         step: Optional[int] = None,
     ) -> None:
         self.metrics.append((dict(metrics), step))
-
-    def set_tags(self, tags: Mapping[str, str]) -> None:
-        self.tags.append(dict(tags))
 
     def log_artifact(
         self,
