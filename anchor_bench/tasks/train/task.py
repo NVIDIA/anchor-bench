@@ -12,6 +12,7 @@ import pandas as pd
 
 from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.data import DatasetLoader
+from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.training import (
     CategoricalSearchParameter,
     FloatSearchParameter,
@@ -82,15 +83,19 @@ class TrainingTask(BaseTask[TrainingConfig]):
     def run(self, output_directory: Path) -> Path:
         """Train the network and persist its mapped trajectories."""
 
+        mlops_run = get_active_run()
+
         # Track the acquired source before processors transform it so lineage
         # remains tied to reusable input bytes.
         dataset = DatasetLoader.load(
             self.config.dataset.source,
             dt=float(self.config.dataset.resampling.dt),
-            dataset_tracker=self.mlops_run,
+            dataset_tracker=mlops_run,
             dataset_name="training-dataset",
             dataset_context="training",
-            upload_dataset=self.mlops_upload_dataset,
+            upload_dataset=(
+                self.config.mlops.upload_dataset if self.config.mlops else False
+            ),
         )
 
         simulation = self.config.simulation
@@ -161,7 +166,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         )
         # Validator metrics follow the epoch or trial series without moving the
         # run-global step backwards; the completed directory is uploaded last.
-        if self.mlops_run is not None:
+        if mlops_run is not None:
             validation_metrics = {
                 f"validation/{validation.name}/{name}": float(value)
                 for validation in validation_results
@@ -173,8 +178,8 @@ class TrainingTask(BaseTask[TrainingConfig]):
                     if self.config.search is not None
                     else self.config.training.epochs
                 )
-                self.mlops_run.log_metrics(validation_metrics, step=step)
-            self.mlops_run.log_artifact(
+                mlops_run.log_metrics(validation_metrics, step=step)
+            mlops_run.log_artifact(
                 output_directory,
                 collection="training-output",
                 artifact_type="model",
@@ -189,6 +194,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         """Wrap repeated trainer executions in the configured Optuna loop."""
 
         search = self.config.search
+        mlops_run = get_active_run()
         if search is None:
             raise RuntimeError("Training search configuration is missing.")
         if search.objective.metric != "validation_loss":
@@ -236,8 +242,8 @@ class TrainingTask(BaseTask[TrainingConfig]):
             value = self._validation_loss(result)
             if not isfinite(value):
                 raise optuna.TrialPruned("Validation loss is not finite.")
-            if self.mlops_run is not None:
-                self.mlops_run.log_metrics(
+            if mlops_run is not None:
+                mlops_run.log_metrics(
                     {"search/validation_loss": value},
                     step=trial.number,
                 )
