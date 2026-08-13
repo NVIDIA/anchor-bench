@@ -7,6 +7,7 @@ from typing import ClassVar, Dict, List, Sequence, Tuple
 
 import newton
 import numpy as np
+import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.core.simulation.registry import create_simulation_context
@@ -52,6 +53,7 @@ class NewtonPopulationEvaluator:
             dtype=np.int64,
         )
         self._initialize_simulation()
+        self._step_graph = self._capture_step_graph()
 
     def _initialize_simulation(self) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
@@ -257,9 +259,39 @@ class NewtonPopulationEvaluator:
             raise RuntimeError("Newton control does not expose joint position targets")
         joint_target_q.assign(targets)
 
+    def _capture_step_graph(self) -> wp.Graph:
+        with wp.ScopedCapture(device=self._simulation_context.model.device) as capture:
+            self._simulate_control_interval()
+        graph = capture.graph
+        if graph is None:
+            raise RuntimeError("Warp did not return a captured simulation graph")
+        return graph
+
+    def _simulate_control_interval(self) -> None:
+        """Advance one interval and return its final state to ``context.state_in``."""
+        context = self._simulation_context
+        state_in = context.state_in
+        state_out = context.state_out
+
+        for index in range(self.control_substeps):
+            state_in.clear_forces()
+            context.solver.step(
+                state_in=state_in,
+                state_out=state_out,
+                control=context.control,
+                contacts=context.contacts,
+                dt=self.physics_dt,
+            )
+
+            if self.control_substeps % 2 and index == self.control_substeps - 1:
+                # The final state needs to be in state_in, also for an uneven substep count
+                state_in.assign(state_out)
+            else:
+                # Swap buffers for next iteration
+                state_in, state_out = state_out, state_in
+
     def _step_control_interval(self) -> None:
-        for _ in range(self.control_substeps):
-            self._simulation_context.step(dt=self.physics_dt)
+        wp.capture_launch(self._step_graph)
 
 
 def _joint_names(config: ActuatorSysIdConfig) -> List[str]:

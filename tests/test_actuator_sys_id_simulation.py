@@ -6,6 +6,7 @@ from typing import cast
 import newton
 import numpy as np
 import pytest
+import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -213,6 +214,10 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
             np.asarray([[0], [1]]),
         ),
     )
+    graph = object()
+    monkeypatch.setattr(
+        NewtonPopulationEvaluator, "_capture_step_graph", lambda self: graph
+    )
 
     evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
 
@@ -221,6 +226,7 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
+    assert evaluator._step_graph is graph
     assert context.solver_options == {
         "solver": "newton",
         "integrator": "implicitfast",
@@ -258,6 +264,55 @@ def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
     scores = evaluator.evaluate([{}, {}], [short, long])
 
     np.testing.assert_allclose(scores, [1.0, 3.0])
+
+
+def test_odd_substeps_copy_output_back_to_graph_input_state():
+    class FakeState:
+        def __init__(self, value):
+            self.value = value
+            self.clear_count = 0
+            self.assign_count = 0
+
+        def clear_forces(self):
+            self.clear_count += 1
+
+        def assign(self, other):
+            self.value = other.value
+            self.assign_count += 1
+
+    class FakeSolver:
+        def __init__(self):
+            self.steps = []
+
+        def step(self, **values):
+            state_in = values["state_in"]
+            state_out = values["state_out"]
+            state_out.value = state_in.value + 1
+            self.steps.append((state_in, state_out))
+
+    state_0 = FakeState(0)
+    state_1 = FakeState(0)
+    solver = FakeSolver()
+    context = SimpleNamespace(
+        state_in=state_0,
+        state_out=state_1,
+        solver=solver,
+        control=object(),
+        contacts=object(),
+    )
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.control_substeps = 3
+    evaluator.physics_dt = 0.001
+    evaluator._simulation_context = cast(NewtonSimulationContext, context)
+
+    evaluator._simulate_control_interval()
+    evaluator._simulate_control_interval()
+
+    assert context.state_in is state_0
+    assert context.state_out is state_1
+    assert state_0.value == 6
+    assert state_0.assign_count == 2
+    assert len(solver.steps) == 6
 
 
 def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch):
@@ -398,6 +453,16 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     evaluator._base_q = np.zeros(4, dtype=np.float32)
     evaluator._base_qd = np.zeros(4, dtype=np.float32)
     evaluator._base_targets = np.full(6, -9.0, dtype=np.float32)
+    evaluator._step_graph = cast("wp.Graph", object())
+    monkeypatch.setattr(
+        simulation_module.wp,
+        "capture_launch",
+        lambda graph: [
+            context.step(dt=evaluator.physics_dt)
+            for _ in range(evaluator.control_substeps)
+        ],
+    )
+
     monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
 
     population: list[Candidate] = [
