@@ -268,25 +268,27 @@ class NewtonPopulationEvaluator:
         return graph
 
     def _simulate_control_interval(self) -> None:
+        """Advance one interval and return its final state to ``context.state_in``."""
         context = self._simulation_context
-        state_0 = context.state_in
-        state_1 = context.state_out
-        copy_final_state = self.control_substeps % 2 == 1
+        state_in = context.state_in
+        state_out = context.state_out
 
         for index in range(self.control_substeps):
-            state_0.clear_forces()
+            state_in.clear_forces()
             context.solver.step(
-                state_in=state_0,
-                state_out=state_1,
+                state_in=state_in,
+                state_out=state_out,
                 control=context.control,
                 contacts=context.contacts,
                 dt=self.physics_dt,
             )
 
-            if copy_final_state and index == self.control_substeps - 1:
-                state_0.assign(state_1)
+            if self.control_substeps % 2 and index == self.control_substeps - 1:
+                # The final state needs to be in state_in, also for an uneven substep count
+                state_in.assign(state_out)
             else:
-                state_0, state_1 = state_1, state_0
+                # Swap buffers for next iteration
+                state_in, state_out = state_out, state_in
 
     def _step_control_interval(self) -> None:
         wp.capture_launch(self._step_graph)
