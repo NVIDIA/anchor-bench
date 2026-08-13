@@ -14,8 +14,11 @@ The currently implemented functionality is limited to:
 - generating piecewise actuator command trajectories as Parquet datasets;
 - loading local or HTTP(S) Parquet datasets and resampling their signals onto a
   uniform time grid;
-- preparing mapped training trajectories as Parquet artifacts; and
-- loading a USD model and its initial state through the optional Newton runtime.
+- preparing mapped training trajectories as Parquet artifacts;
+- loading a USD model and its initial state through the optional Newton runtime;
+  and
+- tracking portable run parameters, metrics, tags, and artifacts through
+  pluggable MLOps backends.
 
 The actuator system-identification pipeline fits actuator parameters by
 evaluating CMA-ES populations in replicated Newton worlds and writes the best
@@ -47,6 +50,11 @@ For development, install the test and quality-check dependencies:
 ```bash
 uv sync --extra dev
 ```
+
+Install the plugin and tracking SDK for the backend you use. Backend packages
+are discovered lazily and are not needed for tasks that do not use MLOps
+tracking. See the [MLOps backend guide](docs/mlops.md) for the shared API and
+plugin contract.
 
 ## Command-line usage
 

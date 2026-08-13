@@ -23,3 +23,15 @@ class DatasetLoadError(AnchorBenchError):
 
 class DatasetAlignmentError(AnchorBenchError):
     """Raised when dataset signals cannot be aligned."""
+
+
+class MLOpsError(AnchorBenchError):
+    """Base class for MLOps backend and tracking failures."""
+
+
+class MLOpsBackendNotFoundError(MLOpsError):
+    """Raised when an MLOps backend is not registered."""
+
+
+class MLOpsTrackingError(MLOpsError):
+    """Raised when an MLOps backend cannot create or update a tracked run."""
