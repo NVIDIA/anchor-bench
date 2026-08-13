@@ -174,7 +174,7 @@ def _tracked_config() -> TrackedConfig:
             backend="recording",
             experiment_name="actuator-training",
             run_name="gru-seed-42",
-            options={"api_token": "must-not-be-logged"},
+            options={"mode": "offline"},
         ),
         payload={
             "epochs": 4,
@@ -249,7 +249,7 @@ def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_pa
     ).run("tracked.yaml")
 
     assert result == tmp_path
-    assert factory_options == [{"api_token": "must-not-be-logged"}]
+    assert factory_options == [{"mode": "offline"}]
     assert (result / ".completed").is_file()
     assert backend.start_arguments == (
         "actuator-training",
@@ -266,6 +266,11 @@ def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_pa
         "description": "Exercise reporting.",
         "tags/0": "baseline",
         "tags/1": "so101",
+        "mlops/backend": "recording",
+        "mlops/experiment_name": "actuator-training",
+        "mlops/run_name": "gru-seed-42",
+        "mlops/upload_dataset": False,
+        "mlops/options/mode": "offline",
         "payload/epochs": 4,
         "payload/nested/enabled": True,
         "payload/nested/missing": "null",

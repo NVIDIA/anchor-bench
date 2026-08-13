@@ -142,7 +142,7 @@ def test_mlflow_backend_adapts_run_operations(monkeypatch, tmp_path):
     assert fake_mlflow.registry_uri == "file:///default-registry"
 
 
-def test_mlflow_translates_sdk_errors_and_redacts_uri_credentials(monkeypatch):
+def test_mlflow_translates_sdk_errors_without_changing_the_message(monkeypatch):
     fake_mlflow = FakeMLflow()
     monkeypatch.setattr(mlflow_backend, "mlflow", fake_mlflow)
 
@@ -160,8 +160,10 @@ def test_mlflow_translates_sdk_errors_and_redacts_uri_credentials(monkeypatch):
     ):
         pytest.fail("The run should not start.")
 
-    assert "http://***@mlflow.example:5000" in str(error.value)
-    assert "secret" not in str(error.value)
+    assert (
+        str(error.value) == "MLflow tracking failed: API request to "
+        "http://user:secret@mlflow.example:5000 failed"
+    )
 
 
 def test_mlflow_applies_bounded_http_defaults_for_one_run(monkeypatch):

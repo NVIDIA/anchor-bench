@@ -126,11 +126,7 @@ class TaskRunner:
                 run_name=mlops_config.run_name,
                 tags=tags,
             ) as run:
-                # Constructor options are backend-specific connection settings;
-                # log the portable task config and selected backend instead.
-                parameters = flatten_params(
-                    config.model_dump(mode="json", exclude={"mlops"})
-                )
+                parameters = flatten_params(config.model_dump(mode="json"))
                 parameters["anchor_bench/mlops/backend"] = mlops_config.backend
                 run.log_params(parameters)
                 with bind_active_run(run):

@@ -36,7 +36,7 @@ class MLOpsConfig(StrictBaseModel):
     options: Dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "Backend constructor options persisted with the run configuration; "
-            "credentials must be configured outside the YAML."
+            "Backend constructor options persisted and logged with the run "
+            "configuration."
         ),
     )

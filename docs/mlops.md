@@ -136,13 +136,13 @@ must exist before they are logged. Missing or failed artifact uploads fail the
 task, so the local `.completed` marker is not written for an incompletely
 tracked run.
 
-Backend-specific `mlops.options` are used to construct the backend but are
-deliberately excluded from logged parameters. Do not put credentials, access
-tokens, or other secrets in the run YAML, including under `mlops.options`.
-Anchor Bench persists the validated configuration in the output directory, and
-successful tasks upload that directory as a run artifact. Configure credentials
-through the backend SDK's supported environment variables or credential store
-instead. The backend context records successful or failed completion and the
+Backend-specific `mlops.options` are used to construct the backend and are
+logged alongside the rest of the flattened task configuration. Anchor Bench
+does not filter sensitive values from YAML configuration. It persists the
+validated configuration in the output directory, and successful tasks upload
+that directory as a run artifact. Users are responsible for ensuring their
+configuration does not disclose values they do not want stored by the selected
+backend. The backend context records successful or failed completion and the
 active run is cleared even if the task raises an exception.
 
 `mlops.upload_dataset` defaults to `false`. Set it to `true` to upload dataset

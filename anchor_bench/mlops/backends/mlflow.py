@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -23,7 +22,6 @@ _DEFAULT_HTTP_REQUEST_TIMEOUT = 30
 _DEFAULT_HTTP_REQUEST_MAX_RETRIES = 2
 _HTTP_REQUEST_TIMEOUT_ENV = "MLFLOW_HTTP_REQUEST_TIMEOUT"
 _HTTP_REQUEST_MAX_RETRIES_ENV = "MLFLOW_HTTP_REQUEST_MAX_RETRIES"
-_URI_CREDENTIALS_PATTERN = re.compile(r"(https?://)[^/@\s]+@", re.IGNORECASE)
 
 
 class MLflowRun(MLOpsRun):
@@ -286,8 +284,7 @@ def _translate_mlflow_errors(mlflow: ModuleType) -> Generator[None, None, None]:
     except Exception as error:
         if not _is_mlflow_exception(mlflow, error):
             raise
-        message = _URI_CREDENTIALS_PATTERN.sub(r"\1***@", str(error))
-        raise MLOpsTrackingError(f"MLflow tracking failed: {message}") from error
+        raise MLOpsTrackingError(f"MLflow tracking failed: {error}") from error
 
 
 def _is_mlflow_exception(mlflow: ModuleType, error: Exception) -> bool:
