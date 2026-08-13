@@ -141,6 +141,7 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.simulation.usd_path == "assets/robots/so101.usd"
     assert isinstance(config.model, GruModelConfig)
     assert isinstance(config.training.loss, HuberLossConfig)
+    assert config.mlops is None
     assert config.training.normalization.inputs == "standard"
     assert config.training.normalization.outputs == "standard"
     assert config.search is not None
@@ -171,6 +172,26 @@ def test_optional_metadata_and_search_can_be_omitted(valid_config_data):
     assert config.description is None
     assert config.tags is None
     assert config.search is None
+
+
+def test_mlops_backend_can_be_configured_by_name(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["mlops"] = {
+        "backend": "custom",
+        "experiment_name": "actuator-training",
+        "run_name": "gru-seed-42",
+        "upload_dataset": True,
+        "options": {"entity": "robotics", "mode": "offline"},
+    }
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.mlops is not None
+    assert config.mlops.backend == "custom"
+    assert config.mlops.experiment_name == "actuator-training"
+    assert config.mlops.run_name == "gru-seed-42"
+    assert config.mlops.upload_dataset is True
+    assert config.mlops.options == {"entity": "robotics", "mode": "offline"}
 
 
 def test_simulation_defaults_to_newton(valid_config_data):

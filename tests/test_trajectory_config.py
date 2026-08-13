@@ -46,6 +46,14 @@ def config_data():
     }
 
 
+def test_config_rejects_mlops_configuration(config_data):
+    data = deepcopy(config_data)
+    data["mlops"] = {"backend": "mlflow"}
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TrajectoryConfig.model_validate(data)
+
+
 def test_config_applies_piece_defaults(config_data):
     data = deepcopy(config_data)
     data["trajectories"][0]["pieces"] = [
