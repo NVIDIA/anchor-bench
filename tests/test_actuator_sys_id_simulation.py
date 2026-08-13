@@ -7,7 +7,6 @@ from typing import Any, cast
 import newton
 import numpy as np
 import pytest
-import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -167,6 +166,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
         def __init__(self):
             self.created_world_count = None
             self.solver_options = None
+            self.prepared_step = None
             self.template = SimpleNamespace(
                 joint_target_mode=[0],
                 joint_target_ke=[0.0],
@@ -204,6 +204,10 @@ def test_newton_evaluator_uses_shared_simulation_context(
             self.solver_options = solver_options
             configure_builder(self.template)
 
+        def prepare_step_graph(self, *, dt, substeps):
+            self.prepared_step = (dt, substeps)
+            return True
+
     context = FakeContext()
     config = _config(tmp_path)
     monkeypatch.setattr(simulation_module, "NewtonSimulationContext", FakeContext)
@@ -226,10 +230,6 @@ def test_newton_evaluator_uses_shared_simulation_context(
             np.asarray([[0], [1]]),
         ),
     )
-    graph = object()
-    monkeypatch.setattr(
-        NewtonPopulationEvaluator, "_capture_step_graph", lambda self: graph
-    )
 
     with caplog.at_level(logging.DEBUG, logger=simulation_module.__name__):
         evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
@@ -239,7 +239,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
-    assert evaluator._step_graph is graph
+    assert context.prepared_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
         "solver": "newton",
         "integrator": "implicitfast",
@@ -325,55 +325,6 @@ def test_position_error_kernel_accumulates_all_worlds_and_samples():
     )
 
     np.testing.assert_allclose(score_sums.numpy(), [0.0, 4.0])
-
-
-def test_odd_substeps_copy_output_back_to_graph_input_state():
-    class FakeState:
-        def __init__(self, value):
-            self.value = value
-            self.clear_count = 0
-            self.assign_count = 0
-
-        def clear_forces(self):
-            self.clear_count += 1
-
-        def assign(self, other):
-            self.value = other.value
-            self.assign_count += 1
-
-    class FakeSolver:
-        def __init__(self):
-            self.steps = []
-
-        def step(self, **values):
-            state_in = values["state_in"]
-            state_out = values["state_out"]
-            state_out.value = state_in.value + 1
-            self.steps.append((state_in, state_out))
-
-    state_0 = FakeState(0)
-    state_1 = FakeState(0)
-    solver = FakeSolver()
-    context = SimpleNamespace(
-        state_in=state_0,
-        state_out=state_1,
-        solver=solver,
-        control=object(),
-        contacts=object(),
-    )
-    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
-    evaluator.control_substeps = 3
-    evaluator.physics_dt = 0.001
-    evaluator._simulation_context = cast(NewtonSimulationContext, context)
-
-    evaluator._simulate_control_interval()
-    evaluator._simulate_control_interval()
-
-    assert context.state_in is state_0
-    assert context.state_out is state_1
-    assert state_0.value == 6
-    assert state_0.assign_count == 2
-    assert len(solver.steps) == 6
 
 
 def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch):
@@ -497,13 +448,16 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 )
             )
 
-        def step(self, *, dt):
-            self.step_dts.append(dt)
-            self.target_history.append(
-                np.array(self.control.joint_target_q.numpy(), copy=True)
-            )
-            if len(self.step_dts) % 2 == 0:
-                self.state_in.joint_q.assign(next(self._simulated_positions))
+        def step(self, *, dt, substeps=1, use_graph=False):
+            assert use_graph
+            physics_dt = dt / substeps
+            for _ in range(substeps):
+                self.step_dts.append(physics_dt)
+                self.target_history.append(
+                    np.array(self.control.joint_target_q.numpy(), copy=True)
+                )
+                if len(self.step_dts) % 2 == 0:
+                    self.state_in.joint_q.assign(next(self._simulated_positions))
 
     context = FakeContext()
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
@@ -528,16 +482,6 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     evaluator._joint_q_indices_device = cast(Any, object())
     score_sums = FakeScoreArray([0.0, 0.0])
     evaluator._score_sums = cast(Any, score_sums)
-    evaluator._step_graph = cast("wp.Graph", object())
-    monkeypatch.setattr(
-        simulation_module.wp,
-        "capture_launch",
-        lambda graph: [
-            context.step(dt=evaluator.physics_dt)
-            for _ in range(evaluator.control_substeps)
-        ],
-    )
-
     monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
     monkeypatch.setattr(
         simulation_module.wp,
