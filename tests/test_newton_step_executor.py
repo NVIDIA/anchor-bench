@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
+import newton
 import pytest
 from typing_extensions import Self
 
@@ -104,6 +105,47 @@ class FakeSolver:
         self.steps.append(dt)
 
 
+def _fake_executor(
+    *,
+    state_in: FakeState,
+    state_out: FakeState,
+    solver: FakeSolver,
+    control: Any,
+) -> NewtonStepExecutor:
+    """Cast test doubles once at the concrete Newton API boundary."""
+
+    return NewtonStepExecutor(
+        model=cast(newton.Model, SimpleNamespace(device="cpu")),
+        solver=cast(newton.solvers.SolverBase, solver),
+        state_in=cast(newton.State, state_in),
+        state_out=cast(newton.State, state_out),
+        control=cast(newton.Control, control),
+        contacts=None,
+    )
+
+
+@pytest.mark.parametrize("substeps", [2, 3])
+def test_eager_steps_keep_the_input_state_canonical(substeps: int) -> None:
+    recorder = GraphRecorder()
+    state_in = FakeState(recorder)
+    state_out = FakeState(recorder)
+    solver = FakeSolver(recorder)
+    executor = _fake_executor(
+        state_in=state_in,
+        state_out=state_out,
+        solver=solver,
+        control=SimpleNamespace(increment=1.0),
+    )
+
+    executor.step(dt=0.1 * substeps, substeps=substeps)
+
+    assert executor.state_in is state_in
+    assert executor.state_out is state_out
+    assert state_in.value == pytest.approx(substeps)
+    assert solver.steps == pytest.approx([0.1] * substeps)
+    assert state_in.assign_count == (1 if substeps % 2 else 0)
+
+
 @pytest.mark.parametrize("substeps", [2, 3])
 def test_captured_steps_reuse_canonical_state_and_live_controls(
     monkeypatch: pytest.MonkeyPatch,
@@ -120,21 +162,19 @@ def test_captured_steps_reuse_canonical_state_and_live_controls(
     state_out = FakeState(recorder)
     control = SimpleNamespace(increment=1.0)
     solver = FakeSolver(recorder)
-    executor = NewtonStepExecutor(
-        model=SimpleNamespace(device="cpu"),
-        solver=solver,
+    executor = _fake_executor(
         state_in=state_in,
         state_out=state_out,
+        solver=solver,
         control=control,
-        contacts=object(),
     )
     dt = 0.1 * substeps
 
-    assert executor.prepare_graph(dt=dt, substeps=substeps)
+    executor.capture_graph(dt=dt, substeps=substeps)
     assert state_in.value == 0.0
-    executor.step(dt=dt, substeps=substeps, use_graph=True)
+    executor.step(dt=dt, substeps=substeps)
     control.increment = 2.0
-    executor.step(dt=dt, substeps=substeps, use_graph=True)
+    executor.step(dt=dt, substeps=substeps)
 
     assert recorder.capture_count == 1
     assert executor.state_in is state_in
@@ -144,7 +184,7 @@ def test_captured_steps_reuse_canonical_state_and_live_controls(
     assert state_in.assign_count == (2 if substeps % 2 else 0)
 
 
-def test_eager_step_invalidates_graph_bound_to_previous_state_buffers(
+def test_step_uses_eager_execution_without_a_matching_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = GraphRecorder()
@@ -156,29 +196,28 @@ def test_eager_step_invalidates_graph_bound_to_previous_state_buffers(
     monkeypatch.setattr(newton_stepper.wp, "capture_launch", recorder.launch)
     state_in = FakeState(recorder)
     state_out = FakeState(recorder)
-    executor = NewtonStepExecutor(
-        model=SimpleNamespace(device="cpu"),
-        solver=FakeSolver(recorder),
+    executor = _fake_executor(
         state_in=state_in,
         state_out=state_out,
+        solver=FakeSolver(recorder),
         control=SimpleNamespace(increment=1.0),
-        contacts=object(),
     )
 
-    executor.step(dt=0.1, use_graph=True)
+    executor.step(dt=0.2)
+    executor.capture_graph(dt=0.1)
+    executor.step(dt=0.2)
     executor.step(dt=0.1)
-    executor.step(dt=0.1, use_graph=True)
 
-    assert recorder.capture_count == 2
-    assert executor.state_in is state_out
-    assert state_out.value == 3.0
+    assert recorder.capture_count == 1
+    assert executor.state_in is state_in
+    assert state_in.value == 3.0
 
 
 @pytest.mark.parametrize(
     ("use_mujoco_cpu", "update_data_interval"),
     [(True, 1), (False, 2)],
 )
-def test_graph_request_falls_back_for_unsupported_solver_modes(
+def test_capture_falls_back_for_unsupported_solver_modes(
     use_mujoco_cpu: bool,
     update_data_interval: int,
 ) -> None:
@@ -188,17 +227,16 @@ def test_graph_request_falls_back_for_unsupported_solver_modes(
     solver = FakeSolver(recorder)
     solver.use_mujoco_cpu = use_mujoco_cpu
     solver.update_data_interval = update_data_interval
-    executor = NewtonStepExecutor(
-        model=SimpleNamespace(device="cpu"),
-        solver=solver,
+    executor = _fake_executor(
         state_in=state_in,
         state_out=state_out,
+        solver=solver,
         control=SimpleNamespace(increment=1.0),
-        contacts=object(),
     )
 
-    executor.step(dt=0.1, use_graph=True)
+    executor.capture_graph(dt=0.1)
+    executor.step(dt=0.1)
 
     assert recorder.capture_count == 0
-    assert executor.state_in is state_out
-    assert state_out.value == 1.0
+    assert executor.state_in is state_in
+    assert state_in.value == 1.0

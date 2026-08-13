@@ -173,27 +173,17 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         self._ensure_initialized()
         return self._solver
 
-    def prepare_step_graph(self, *, dt: float, substeps: int = 1) -> bool:
-        """Prepare a reusable Warp graph for one simulation interval."""
+    def capture_step_graph(self, *, dt: float, substeps: int = 1) -> None:
+        """Capture a reusable Warp graph for one simulation interval."""
 
         self._ensure_initialized()
-        return self._step_executor.prepare_graph(dt=dt, substeps=substeps)
+        self._step_executor.capture_graph(dt=dt, substeps=substeps)
 
-    def step(
-        self,
-        *,
-        dt: float,
-        substeps: int = 1,
-        use_graph: bool = False,
-    ) -> None:
+    def step(self, *, dt: float, substeps: int = 1) -> None:
         """Advance every world over one eager or graph-captured interval."""
 
         self._ensure_initialized()
-        self._step_executor.step(
-            dt=dt,
-            substeps=substeps,
-            use_graph=use_graph,
-        )
+        self._step_executor.step(dt=dt, substeps=substeps)
         self._state = self._step_executor.state_in
 
     def _load(self, usd_path: Path) -> Tuple[newton.Model, newton.State]:

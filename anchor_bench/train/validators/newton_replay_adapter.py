@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, Mapping
 
+import newton
 import numpy as np
+import warp as wp
 
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.train.utils import (
@@ -122,8 +124,9 @@ class _NewtonReplayAdapter:
                 "Newton replay contains unknown joints: " + ", ".join(unknown)
             )
         q = self._joint_array(self._model.joint_q, position, 0)
+        _, state_qd = self._state_joint_arrays(self._step_executor.state_in)
         recorded_qd = self._joint_array(
-            self._step_executor.state_in.joint_qd,
+            state_qd,
             velocity,
             1,
             clear=True,
@@ -133,10 +136,16 @@ class _NewtonReplayAdapter:
             self._step_executor.state_in,
             self._step_executor.state_out,
         ):
-            state.joint_q.assign(q)
-            state.joint_qd.assign(recorded_qd)
+            state_q, state_qd = self._state_joint_arrays(state)
+            state_q.assign(q)
+            state_qd.assign(recorded_qd)
         self._write_control(command, {})
         return self._read_state()
+
+    def capture_step_graph(self, *, dt: float) -> None:
+        """Capture the configured replay interval when the solver supports it."""
+
+        self._step_executor.capture_graph(dt=dt, substeps=self._substeps)
 
     def step(
         self,
@@ -148,11 +157,7 @@ class _NewtonReplayAdapter:
         if not np.isfinite(dt) or dt <= 0.0:
             raise ValueError("Newton replay timestep must be finite and positive.")
         self._write_control(command, effort)
-        self._step_executor.step(
-            dt=dt,
-            substeps=self._substeps,
-            use_graph=True,
-        )
+        self._step_executor.step(dt=dt, substeps=self._substeps)
         return self._read_state()
 
     def solver_pd(self, joint: str, command: float, state: _ReplayState) -> float:
@@ -260,10 +265,21 @@ class _NewtonReplayAdapter:
             result[self._indices[joint][coordinate]] = float(value)
         return result
 
+    @staticmethod
+    def _state_joint_arrays(state: newton.State) -> tuple[wp.array, wp.array]:
+        """Return required replay joint buffers after narrowing optional arrays."""
+
+        joint_q = state.joint_q
+        joint_qd = state.joint_qd
+        if joint_q is None or joint_qd is None:
+            raise RuntimeError("Newton replay requires joint state buffers.")
+        return joint_q, joint_qd
+
     def _read_state(self) -> _ReplayState:
         state = self._step_executor.state_in
-        q = state.joint_q.numpy()
-        qd = state.joint_qd.numpy()
+        joint_q, joint_qd = self._state_joint_arrays(state)
+        q = joint_q.numpy()
+        qd = joint_qd.numpy()
         return _ReplayState(
             position={
                 joint: float(q[index[0]]) for joint, index in self._indices.items()

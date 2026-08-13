@@ -166,7 +166,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
         def __init__(self):
             self.created_world_count = None
             self.solver_options = None
-            self.prepared_step = None
+            self.captured_step = None
             self.template = SimpleNamespace(
                 joint_target_mode=[0],
                 joint_target_ke=[0.0],
@@ -204,8 +204,8 @@ def test_newton_evaluator_uses_shared_simulation_context(
             self.solver_options = solver_options
             configure_builder(self.template)
 
-        def prepare_step_graph(self, *, dt, substeps):
-            self.prepared_step = (dt, substeps)
+        def capture_step_graph(self, *, dt, substeps):
+            self.captured_step = (dt, substeps)
             return True
 
     context = FakeContext()
@@ -239,7 +239,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
-    assert context.prepared_step == (pytest.approx(0.005), 5)
+    assert context.captured_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
         "solver": "newton",
         "integrator": "implicitfast",
@@ -448,8 +448,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 )
             )
 
-        def step(self, *, dt, substeps=1, use_graph=False):
-            assert use_graph
+        def step(self, *, dt, substeps=1):
             physics_dt = dt / substeps
             for _ in range(substeps):
                 self.step_dts.append(physics_dt)

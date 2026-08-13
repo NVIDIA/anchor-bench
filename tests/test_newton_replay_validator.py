@@ -60,6 +60,7 @@ class FakeReplayAdapter(newton_validator._NewtonReplayAdapter):
         self.velocity: dict[str, float] = {}
         self.steps: list[tuple[dict[str, float], dict[str, float], float]] = []
         self.reset_count = 0
+        self.captured_dts: list[float] = []
         self.closed = False
         self.instances.append(self)
 
@@ -76,6 +77,11 @@ class FakeReplayAdapter(newton_validator._NewtonReplayAdapter):
         self.position = dict(position)
         self.velocity = dict(velocity)
         return self._state()
+
+    def capture_step_graph(self, *, dt: float) -> None:
+        """Record explicit graph capture after the replay timestep is known."""
+
+        self.captured_dts.append(dt)
 
     def step(
         self,
@@ -251,6 +257,7 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
     assert adapter.substeps == 4
     assert adapter.disable_contacts is True
     assert adapter.reset_count == 1
+    assert adapter.captured_dts == [1.0]
     assert [step[1] for step in adapter.steps] == [
         {"joint": 1.0},
         {"joint": 1.0},

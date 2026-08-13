@@ -90,7 +90,7 @@ class NewtonPopulationEvaluator:
         )
         self._initialize_simulation()
         self._initialize_score_buffers()
-        self._simulation_context.prepare_step_graph(
+        self._simulation_context.capture_step_graph(
             dt=self.physics_dt * self.control_substeps,
             substeps=self.control_substeps,
         )
@@ -353,7 +353,6 @@ class NewtonPopulationEvaluator:
         self._simulation_context.step(
             dt=self.physics_dt * self.control_substeps,
             substeps=self.control_substeps,
-            use_graph=True,
         )
 
 

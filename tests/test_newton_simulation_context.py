@@ -38,9 +38,13 @@ class FakeState:
 
     def __init__(self) -> None:
         self.clear_count = 0
+        self.assign_count = 0
 
     def clear_forces(self) -> None:
         self.clear_count += 1
+
+    def assign(self, other: "FakeState") -> None:
+        self.assign_count += 1
 
 
 class FakeModelBuilder:
@@ -313,7 +317,7 @@ def test_rejects_a_key_without_builder_configuration(
     assert configured == [FakeModelBuilder.instances[0]]
 
 
-def test_context_steps_and_rotates_owned_states(
+def test_context_steps_with_stable_owned_states(
     fake_newton_usd: Path,
 ) -> None:
     context = NewtonSimulationContext(str(fake_newton_usd))
@@ -326,9 +330,10 @@ def test_context_steps_and_rotates_owned_states(
     context.step(dt=0.01)
 
     assert state_in.clear_count == 1
-    assert context.state_in is state_out
-    assert context.state_out is state_in
-    assert context.state is state_out
+    assert state_in.assign_count == 1
+    assert context.state_in is state_in
+    assert context.state_out is state_out
+    assert context.state is state_in
     assert FakeSolver.instances[0].steps == [
         {
             "state_in": state_in,

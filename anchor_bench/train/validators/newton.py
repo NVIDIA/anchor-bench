@@ -408,6 +408,8 @@ class NewtonReplayValidator(BaseValidator):
             if len(timestamps) > 1
             else 0.0
         )
+        if len(timestamps) > 1:
+            adapter.capture_step_graph(dt=dt)
         command_joints = tuple(sequence.command.columns)
         commands = sequence.command.to_numpy(dtype=float)
         input_columns = tuple(
