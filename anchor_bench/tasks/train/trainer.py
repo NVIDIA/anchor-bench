@@ -13,6 +13,7 @@ import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
+from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.training import LossConfig, OptimizerConfig, TrainingConfig
 from anchor_bench.tasks.train.data import SequenceDataset, create_data_loaders
 from anchor_bench.tasks.train.model_registry import get_model
@@ -36,7 +37,6 @@ class TrainingResult:
     model: nn.Module
     history: list[EpochLoss]
     normalization: NormalizationStatistics
-    artifact_path: Optional[Path] = None
 
 
 class Trainer:
@@ -49,12 +49,20 @@ class Trainer:
         *,
         device: Optional[torch.device | str] = None,
         checkpoint_directory: Optional[Path] = None,
+        report_metrics: bool = True,
+        checkpoint_collection: str = "training-checkpoints",
     ) -> None:
-        """Create the model, loss function, optimizer, and data loaders."""
+        """Create the model, loss function, optimizer, and data loaders.
+
+        report_metrics controls per-epoch curves, which searches disable to
+        avoid reusing steps. Checkpoint artifacts remain independently enabled.
+        """
 
         _set_seed(config.training.seed)
         self.config = config
         self.checkpoint_directory = checkpoint_directory
+        self.report_metrics = report_metrics
+        self.checkpoint_collection = checkpoint_collection
         if config.training.checkpoint is not None and checkpoint_directory is None:
             raise ValueError("Checkpointing requires a checkpoint directory.")
         self.data_loaders = create_data_loaders(dataset, config)
@@ -117,6 +125,14 @@ class Trainer:
                     validation=validation_loss,
                 )
             )
+            metrics = {"training/loss": training_loss}
+            if validation_loss is not None:
+                metrics["validation/loss"] = validation_loss
+            mlops_run = get_active_run()
+            # Epochs are one-based and provide the monotonic step shared by
+            # training and validation loss.
+            if self.report_metrics and mlops_run is not None:
+                mlops_run.log_metrics(metrics, step=epoch)
 
             checkpoint = self.config.training.checkpoint
             if checkpoint is not None and epoch % checkpoint.every_n_epochs == 0:
@@ -155,6 +171,15 @@ class Trainer:
             temporary_path,
         )
         temporary_path.replace(path)
+        mlops_run = get_active_run()
+        # Publish only the atomically renamed file so a backend never observes a
+        # partial checkpoint.
+        if mlops_run is not None:
+            mlops_run.log_artifact(
+                path,
+                collection=self.checkpoint_collection,
+                artifact_type="model",
+            )
 
     def _train_epoch(self) -> float:
         """Update model weights for every independent training window."""

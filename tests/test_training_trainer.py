@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 import torch
 from torch import nn
 
+from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     MODEL_REGISTRY,
@@ -164,7 +165,9 @@ def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
     step = Mock(wraps=trainer.optimizer.step)
     monkeypatch.setattr(trainer.optimizer, "step", step)
 
-    result = trainer.train()
+    mlops_run = Mock(spec=MLOpsRun)
+    with bind_active_run(mlops_run):
+        result = trainer.train()
 
     assert step.call_count == config.training.epochs * len(trainer.data_loaders.train)
     assert any(
@@ -175,6 +178,10 @@ def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
     assert all(entry.training >= 0.0 for entry in result.history)
     assert all(entry.validation is None for entry in result.history)
     assert result.model.training is False
+    assert mlops_run.log_metrics.call_args_list == [
+        call({"training/loss": entry.training}, step=entry.epoch)
+        for entry in result.history
+    ]
 
 
 def test_training_is_repeatable_for_the_configured_seed() -> None:
@@ -260,6 +267,13 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
     config_data["training"]["epochs"] = 5
     config_data["training"]["checkpoint"] = {"every_n_epochs": 2}
     config_data["training"]["sequence"] = {"length": 2}
+    config_data["mlops"] = {
+        "backend": "custom",
+        "experiment_name": "training",
+        "run_name": "baseline",
+        "upload_dataset": True,
+        "options": {"mode": "offline"},
+    }
     config = TrainingConfig.model_validate(config_data)
     checkpoint_directory = tmp_path / "checkpoints"
     trainer = Trainer(
@@ -269,7 +283,9 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
         checkpoint_directory=checkpoint_directory,
     )
 
-    trainer.train()
+    mlops_run = Mock(spec=MLOpsRun)
+    with bind_active_run(mlops_run):
+        trainer.train()
 
     assert sorted(path.name for path in checkpoint_directory.iterdir()) == [
         "epoch-000002.pt",
@@ -287,9 +303,28 @@ def test_trainer_saves_interval_checkpoints(tmp_path: Path) -> None:
         "outputs": {"method": "none", "mean": (0.0,), "standard_deviation": (1.0,)},
     }
     assert checkpoint["config"]["training"]["checkpoint"] == {"every_n_epochs": 2}
+    assert checkpoint["config"]["mlops"] == {
+        "backend": "custom",
+        "experiment_name": "training",
+        "run_name": "baseline",
+        "upload_dataset": True,
+        "options": {"mode": "offline"},
+    }
     assert checkpoint["model_state_dict"].keys() == trainer.model.state_dict().keys()
     assert checkpoint["optimizer_state_dict"]["state"]
     assert not list(checkpoint_directory.glob("*.tmp"))
+    assert mlops_run.log_artifact.call_args_list == [
+        call(
+            checkpoint_directory / "epoch-000002.pt",
+            collection="training-checkpoints",
+            artifact_type="model",
+        ),
+        call(
+            checkpoint_directory / "epoch-000004.pt",
+            collection="training-checkpoints",
+            artifact_type="model",
+        ),
+    ]
 
 
 def test_trainer_requires_directory_when_checkpointing() -> None:
