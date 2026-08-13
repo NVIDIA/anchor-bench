@@ -1,6 +1,6 @@
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 import pandas as pd
 import pytest
@@ -10,11 +10,15 @@ from anchor_bench.core.task_runner import TaskRunner
 from anchor_bench.errors import MLOpsBackendNotFoundError
 from anchor_bench.mlops import MLOpsBackend, MLOpsRun, get_active_run
 from anchor_bench.mlops.base import ParameterValue
-from anchor_bench.schema.mlops import MLOpsConfig, MLOpsTaskConfig
+from anchor_bench.schema.base import BaseConfig
+from anchor_bench.schema.mlops import MLOpsConfig
 from anchor_bench.tasks.base_task import BaseTask
 
 
-class TrackedConfig(MLOpsTaskConfig):
+class TrackedConfig(BaseConfig):
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    mlops: Optional[MLOpsConfig] = None
     payload: Dict[str, Any]
 
 

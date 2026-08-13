@@ -18,6 +18,7 @@ mlops:
   backend: custom
   experiment_name: actuator-training
   run_name: gru-seed-42
+  upload_dataset: true
   options:
     endpoint: https://tracking.example
 ```
@@ -71,7 +72,8 @@ size, raw row count and columns before resampling. Remote datasets are recorded
 while their temporary materialization still exists, allowing explicitly enabled
 payload uploads to complete before cleanup.
 
-Dataset bytes are not uploaded by default. The portable
+`mlops.upload_dataset` defaults to `false`. Set it to `true` to upload dataset
+bytes in addition to recording lineage. The portable
 `MLOpsRun.log_dataset()` implementation always records lineage parameters and
 logs the materialized file as a `dataset` artifact only when upload is enabled.
 Backends can override the method to add native dataset relationships.

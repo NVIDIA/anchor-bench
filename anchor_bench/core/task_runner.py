@@ -17,7 +17,8 @@ from anchor_bench.mlops import (
     bind_active_run,
     flatten_params,
 )
-from anchor_bench.schema.mlops import MLOpsConfig, MLOpsTaskConfig
+from anchor_bench.schema.base import BaseConfig
+from anchor_bench.schema.mlops import MLOpsConfig
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
@@ -75,8 +76,8 @@ class TaskRunner:
         )
 
         task = task_class(config)
-        if isinstance(config, MLOpsTaskConfig) and config.mlops is not None:
-            mlops_config = config.mlops
+        mlops_config = getattr(config, "mlops", None)
+        if isinstance(mlops_config, MLOpsConfig):
             return self._run_with_mlops(
                 task,
                 config,
@@ -95,7 +96,7 @@ class TaskRunner:
     def _run_with_mlops(
         self,
         task: BaseTask[Any],
-        config: MLOpsTaskConfig,
+        config: BaseConfig,
         mlops_config: MLOpsConfig,
         output_directory: Path,
         completion_marker: Path,
@@ -160,12 +161,14 @@ class TaskRunner:
         return task_output
 
 
-def _tracking_tags(config: MLOpsTaskConfig) -> Dict[str, str]:
+def _tracking_tags(config: BaseConfig) -> Dict[str, str]:
     """Translate portable task labels into searchable backend string tags."""
 
-    tags = {tag: "" for tag in config.tags or [] if tag}
+    raw_tags = getattr(config, "tags", None)
+    tags = {tag: "" for tag in raw_tags or [] if isinstance(tag, str) and tag}
     tags["anchor_bench.task_type"] = config.type
 
-    if config.description:
-        tags["anchor_bench.description"] = config.description
+    description = getattr(config, "description", None)
+    if isinstance(description, str) and description:
+        tags["anchor_bench.description"] = description
     return tags

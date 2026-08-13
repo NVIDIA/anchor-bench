@@ -8,9 +8,9 @@ from typing import Annotated, List, Literal, Optional, Union
 from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
 from typing_extensions import TypeAlias
 
-from anchor_bench.schema.base import StrictBaseModel
+from anchor_bench.schema.base import BaseConfig, StrictBaseModel
 from anchor_bench.schema.dataset import ParquetDatasetConfig
-from anchor_bench.schema.mlops import MLOpsTaskConfig
+from anchor_bench.schema.mlops import MLOpsConfig
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
@@ -112,8 +112,14 @@ class NewtonSimulationConfig(StrictBaseModel):
         return self
 
 
-class ActuatorSysIdConfig(MLOpsTaskConfig):
+class ActuatorSysIdConfig(BaseConfig):
     type: Literal["actuator_sys_id"]  # pyright: ignore[reportIncompatibleVariableOverride]
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    mlops: Optional[MLOpsConfig] = Field(
+        default=None,
+        description="Optional experiment-tracking configuration for this task.",
+    )
     joint_parameters: Annotated[List[JointParameterGroup], Field(min_length=1)]
     optimizer: CmaesOptimizerConfig
     simulation: NewtonSimulationConfig

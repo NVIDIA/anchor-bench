@@ -9,7 +9,13 @@ from anchor_bench.core.artifacts import (
     resolve_repo_root,
 )
 from anchor_bench.schema.base import BaseConfig
-from anchor_bench.schema.mlops import MLOpsConfig, MLOpsTaskConfig
+from anchor_bench.schema.mlops import MLOpsConfig
+
+
+class ConfigWithMLOps(BaseConfig):
+    """Minimal top-level config used to exercise artifact serialization."""
+
+    mlops: MLOpsConfig
 
 
 def test_get_or_create_output_folder_writes_config(tmp_path: Path):
@@ -30,7 +36,7 @@ def test_get_or_create_output_folder_writes_config(tmp_path: Path):
 
 
 def test_get_or_create_output_folder_preserves_mlops_options(tmp_path: Path):
-    config = MLOpsTaskConfig(
+    config = ConfigWithMLOps(
         type="example",
         mlops=MLOpsConfig(
             backend="custom",
@@ -45,8 +51,6 @@ def test_get_or_create_output_folder_preserves_mlops_options(tmp_path: Path):
 
     assert yaml.safe_load((output_folder / "config.yaml").read_text()) == {
         "type": "example",
-        "description": None,
-        "tags": None,
         "mlops": {
             "backend": "custom",
             "experiment_name": "training",
