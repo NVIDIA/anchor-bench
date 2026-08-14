@@ -210,11 +210,20 @@ Newton adapter:
 ```python
 from anchor_bench.core import NewtonSimulationContext
 
-model, state = NewtonSimulationContext("robot.usda").load()
+context = NewtonSimulationContext("robot.usda")
+model, state = context.load()
+
+context.capture_step_graph(dt=0.01, substeps=2)
+context.step(dt=0.01, substeps=2)
 ```
 
-This adapter only constructs the Newton model and initial state; it does not run
-a simulation.
+`capture_step_graph` captures a reusable Warp graph for the requested interval
+when the solver supports capture. `step` then advances every world with that
+graph when its `dt` and `substeps` match, or executes the interval eagerly.
+
+The `state` property is the canonical input and current-result buffer. The
+`state_next` property is the stable output buffer used while computing a step;
+after each complete interval, the current result is available through `state`.
 
 ## Testing and quality checks
 

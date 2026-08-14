@@ -39,12 +39,14 @@ class FakeState:
     def __init__(self) -> None:
         self.clear_count = 0
         self.assign_count = 0
+        self.assigned_from: FakeState | None = None
 
     def clear_forces(self) -> None:
         self.clear_count += 1
 
     def assign(self, other: "FakeState") -> None:
         self.assign_count += 1
+        self.assigned_from = other
 
 
 class FakeModelBuilder:
@@ -331,6 +333,7 @@ def test_context_steps_with_stable_owned_states(
 
     assert state.clear_count == 1
     assert state.assign_count == 1
+    assert state.assigned_from is state_next
     assert context.state is state
     assert context.state_next is state_next
     assert context.state is state

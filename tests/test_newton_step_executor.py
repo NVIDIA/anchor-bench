@@ -126,6 +126,8 @@ def _fake_executor(
 
 @pytest.mark.parametrize("substeps", [2, 3])
 def test_eager_steps_keep_the_current_state_canonical(substeps: int) -> None:
+    """Keep eager results in the stable current-state buffer."""
+
     recorder = GraphRecorder()
     state = FakeState(recorder)
     state_next = FakeState(recorder)
@@ -151,6 +153,8 @@ def test_captured_steps_reuse_canonical_state_and_live_controls(
     monkeypatch: pytest.MonkeyPatch,
     substeps: int,
 ) -> None:
+    """Reuse stable state buffers and live controls in captured steps."""
+
     recorder = GraphRecorder()
     monkeypatch.setattr(
         newton_stepper.wp,
@@ -187,6 +191,8 @@ def test_captured_steps_reuse_canonical_state_and_live_controls(
 def test_step_uses_eager_execution_without_a_matching_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Use eager execution when the captured interval does not match."""
+
     recorder = GraphRecorder()
     monkeypatch.setattr(
         newton_stepper.wp,
@@ -221,6 +227,8 @@ def test_capture_falls_back_for_unsupported_solver_modes(
     use_mujoco_cpu: bool,
     update_data_interval: int,
 ) -> None:
+    """Fall back to eager execution for unsupported solver modes."""
+
     recorder = GraphRecorder()
     state = FakeState(recorder)
     state_next = FakeState(recorder)
@@ -240,3 +248,37 @@ def test_capture_falls_back_for_unsupported_solver_modes(
     assert recorder.capture_count == 0
     assert executor.state is state
     assert state.value == 1.0
+
+
+@pytest.mark.parametrize(
+    ("dt", "substeps", "message"),
+    [
+        (0.0, 1, "simulation timestep must be finite and positive"),
+        (float("nan"), 1, "simulation timestep must be finite and positive"),
+        (0.1, 0, "simulation substeps must be a positive integer"),
+        (0.1, True, "simulation substeps must be a positive integer"),
+    ],
+)
+@pytest.mark.parametrize("method_name", ["step", "capture_graph"])
+def test_rejects_invalid_interval_parameters_without_solver_calls(
+    dt: float,
+    substeps: int,
+    message: str,
+    method_name: str,
+) -> None:
+    """Reject invalid intervals before invoking the solver."""
+
+    recorder = GraphRecorder()
+    solver = FakeSolver(recorder)
+    executor = _fake_executor(
+        state=FakeState(recorder),
+        state_next=FakeState(recorder),
+        solver=solver,
+        control=SimpleNamespace(increment=1.0),
+    )
+
+    method = getattr(executor, method_name)
+    with pytest.raises(ValueError, match=message):
+        method(dt=dt, substeps=substeps)
+
+    assert solver.steps == []
