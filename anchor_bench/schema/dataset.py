@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Dict, Literal, Union
 
 from pydantic import Field, StrictFloat, StrictInt
 from typing_extensions import TypeAlias
@@ -28,4 +28,11 @@ class ParquetDatasetConfig(StrictBaseModel):
 
     type: Literal["parquet"]
     source: NonEmptyString
+    joint_name_mapping: Dict[NonEmptyString, NonEmptyString] = Field(
+        default_factory=dict,
+        description=(
+            "Optional mapping from Parquet joint prefixes to the corresponding "
+            "USD joint names. Unmapped joint names are left unchanged."
+        ),
+    )
     resampling: ResamplingConfig

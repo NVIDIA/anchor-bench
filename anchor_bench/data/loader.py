@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from glob import glob, has_magic
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Iterator, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Iterator, Mapping, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 import numpy as np
@@ -38,6 +38,7 @@ class DatasetLoader:
         dataset_name: str = "dataset",
         dataset_context: str = "input",
         upload_dataset: bool = False,
+        joint_name_mapping: Optional[Mapping[str, str]] = None,
     ) -> pd.DataFrame:
         """Acquire, optionally track, and resample one or more Parquet files.
 
@@ -77,7 +78,11 @@ class DatasetLoader:
                         upload=upload_dataset,
                     )
         dataset = pd.concat(datasets, ignore_index=True)
-        return DatasetLoader._resample(dataset, dt)
+        return DatasetLoader._resample(
+            dataset,
+            dt,
+            joint_name_mapping=joint_name_mapping,
+        )
 
     @staticmethod
     @contextmanager
@@ -165,10 +170,17 @@ class DatasetLoader:
         return expanded_path
 
     @staticmethod
-    def _resample(dataset: pd.DataFrame, dt: float) -> pd.DataFrame:
+    def _resample(
+        dataset: pd.DataFrame,
+        dt: float,
+        *,
+        joint_name_mapping: Optional[Mapping[str, str]] = None,
+    ) -> pd.DataFrame:
         """Resample every experiment onto its own uniform time grid."""
 
         dt_ns = DatasetLoader._validate_resampling(dataset, dt)
+        if joint_name_mapping:
+            dataset = DatasetLoader._map_joint_names(dataset, joint_name_mapping)
         resampled_experiments: list[pd.DataFrame] = []
 
         for experiment, episode in dataset.groupby("experiment", sort=False):
@@ -184,6 +196,48 @@ class DatasetLoader:
             raise DatasetAlignmentError("Dataset does not contain any experiments.")
 
         return pd.concat(resampled_experiments)
+
+    @staticmethod
+    def _map_joint_names(
+        dataset: pd.DataFrame,
+        joint_name_mapping: Mapping[str, str],
+    ) -> pd.DataFrame:
+        """Translate joint prefixes while preserving each field's feature name."""
+
+        def mapped_field(field: object) -> object:
+            if not isinstance(field, str):
+                return field
+            joint_name, separator, feature = field.rpartition("/")
+            mapped_name = joint_name_mapping.get(joint_name)
+            if not separator or mapped_name is None:
+                return field
+            return f"{mapped_name}/{feature}"
+
+        source_fields = dataset["field"]
+        mapped_fields = source_fields.map(mapped_field)
+        field_pairs = pd.DataFrame(
+            {
+                "experiment": dataset["experiment"],
+                "source": source_fields,
+                "mapped": mapped_fields,
+            }
+        ).drop_duplicates()
+        collisions = field_pairs.duplicated(
+            subset=["experiment", "mapped"],
+            keep=False,
+        )
+        if collisions.any():
+            names = ", ".join(
+                sorted(map(str, field_pairs.loc[collisions, "mapped"].unique()))
+            )
+            raise DatasetAlignmentError(
+                "Joint name mapping produces conflicting fields: " + names + "."
+            )
+        if mapped_fields.equals(source_fields):
+            return dataset
+        mapped_dataset = dataset.copy()
+        mapped_dataset["field"] = mapped_fields
+        return mapped_dataset
 
     @staticmethod
     def _validate_resampling(

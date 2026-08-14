@@ -121,6 +121,9 @@ simulation:
 dataset:
   type: parquet
   source: runs/actuator.parquet
+  # Optional: translate Parquet joint prefixes to the names authored in the USD.
+  joint_name_mapping:
+    recorded_hip: hip
   resampling:
     type: uniform
     dt: 0.005
@@ -163,6 +166,30 @@ dataset = DatasetLoader.load("recording.parquet", dt=0.02)
 ```
 
 Input data must contain `time_ns`, `experiment`, `field`, and `value` columns.
+When Parquet and USD joint names differ, set `dataset.joint_name_mapping` from
+each Parquet joint prefix to its USD joint name. The mapping is partial: joint
+prefixes not listed there remain unchanged. The USD name (the mapping value) is
+the canonical name used internally and must also be used in
+`joint_parameters[].names`. For example, `recorded_hip: hip` converts
+`recorded_hip/actual_q` to `hip/actual_q`, and the corresponding joint parameter
+group must contain `names: [hip]`.
+
+Multiple aliases may map to the same USD joint when loading a Parquet glob:
+
+```yaml
+dataset:
+  source: recordings/*.parquet
+  joint_name_mapping:
+    recorded_hip: hip
+    HIP: hip
+    Hip: hip
+```
+
+This supports files or experiments that use different aliases. Within one
+experiment, however, only one alias may identify a given USD joint. If multiple
+source aliases in the same experiment map to the same field, the loader reports
+a conflict instead of silently merging their samples.
+
 The returned data frame uses `(experiment, time_ns)` as its index and one column
 per signal field.
 

@@ -155,6 +155,7 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         dataset_name: str,
         dataset_context: str,
         upload_dataset: bool,
+        joint_name_mapping: Mapping[str, str],
     ) -> pd.DataFrame:
         """Record configured loading arguments."""
 
@@ -162,6 +163,7 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         assert dataset_name == "training-dataset"
         assert dataset_context == "training"
         assert upload_dataset is False
+        assert joint_name_mapping == {}
         events.append(f"load:{source}:{dt}")
         return loaded
 

@@ -244,6 +244,45 @@ def test_resamples_joint_signals_with_independent_timestamps(tmp_path: Path) -> 
     assert result["shoulder/actual_q"].tolist() == pytest.approx([2.0, 2.45454545455])
 
 
+def test_maps_parquet_joint_names_before_resampling(tmp_path: Path) -> None:
+    dataset = pd.DataFrame(
+        _rows("recorded_hip/actual_q", [0, 10_000_000], [1.0, 1.5])
+        + _rows("knee/actual_q", [0, 10_000_000], [2.0, 2.5])
+        + _rows("recorded_hip/command_q", [0, 10_000_000], [1.1, 1.6])
+    )
+    source = _write_dataset(tmp_path, dataset)
+
+    result = DatasetLoader.load(
+        source,
+        dt=0.01,
+        joint_name_mapping={"recorded_hip": "/robot/joints/hip"},
+    )
+
+    assert result.columns.tolist() == [
+        "/robot/joints/hip/actual_q",
+        "knee/actual_q",
+        "/robot/joints/hip/command_q",
+    ]
+
+
+def test_rejects_joint_name_mapping_field_collisions(tmp_path: Path) -> None:
+    dataset = pd.DataFrame(
+        _rows("recorded_hip/actual_q", [0, 10_000_000], [1.0, 1.5])
+        + _rows("hip/actual_q", [0, 10_000_000], [2.0, 2.5])
+    )
+    source = _write_dataset(tmp_path, dataset)
+
+    with pytest.raises(
+        DatasetAlignmentError,
+        match="mapping produces conflicting fields: hip/actual_q",
+    ):
+        DatasetLoader.load(
+            source,
+            dt=0.01,
+            joint_name_mapping={"recorded_hip": "hip"},
+        )
+
+
 def test_starts_uniform_grid_at_signal_intersection(tmp_path: Path) -> None:
     dataset = pd.DataFrame(
         _rows("elbow/actual_q", [0, 10_000_000], [1.0, 1.5])

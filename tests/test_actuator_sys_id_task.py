@@ -99,6 +99,7 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         dataset_name,
         dataset_context,
         upload_dataset,
+        joint_name_mapping,
     ):
         assert path == "actuator.parquet"
         assert dt == 0.005
@@ -106,6 +107,7 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         assert dataset_name == "system-identification-dataset"
         assert dataset_context == "system-identification"
         assert upload_dataset is False
+        assert joint_name_mapping == {}
         return dataset
 
     monkeypatch.setattr(
@@ -119,6 +121,46 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
     )
 
     assert len(trajectories) == 1
+    np.testing.assert_allclose(
+        trajectories[0].commanded_position,
+        [[0.0], [1.0]],
+    )
+    np.testing.assert_allclose(
+        trajectories[0].measured_position,
+        [[0.1], [0.8]],
+    )
+
+
+def test_load_trajectories_maps_parquet_joint_names_to_usd_names(tmp_path):
+    rows = []
+    for field, values in (
+        ("recorded_hip/command_q", [0.0, 1.0]),
+        ("recorded_hip/actual_q", [0.1, 0.8]),
+    ):
+        rows.extend(
+            {
+                "time_ns": timestamp,
+                "experiment": "wave",
+                "field": field,
+                "value": value,
+            }
+            for timestamp, value in zip((0, 5_000_000), values)
+        )
+    source = tmp_path / "mapped.parquet"
+    pd.DataFrame(rows).to_parquet(source, index=False)
+    config = _config(
+        tmp_path,
+        dataset={
+            "type": "parquet",
+            "source": str(source),
+            "joint_name_mapping": {"recorded_hip": "hip"},
+            "resampling": {"type": "uniform", "dt": 0.005},
+        },
+    )
+
+    trajectories = load_trajectories(config.dataset, joint_names=["hip"])
+
+    assert trajectories[0].joint_names == ["hip"]
     np.testing.assert_allclose(
         trajectories[0].commanded_position,
         [[0.0], [1.0]],
