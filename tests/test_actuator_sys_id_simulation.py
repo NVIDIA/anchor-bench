@@ -344,11 +344,11 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
             state.joint_q.assign([-1.0, -1.0])
             state.joint_qd.assign([1.0, 1.0])
 
-    state_in = SimpleNamespace(
+    state = SimpleNamespace(
         joint_q=FakeArray([0.0, 0.0]),
         joint_qd=FakeArray([0.0, 0.0]),
     )
-    state_out = SimpleNamespace(
+    state_next = SimpleNamespace(
         joint_q=FakeArray([0.0, 0.0]),
         joint_qd=FakeArray([0.0, 0.0]),
     )
@@ -356,8 +356,8 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
     context = SimpleNamespace(
         model=object(),
         solver=solver,
-        state_in=state_in,
-        state_out=state_out,
+        state=state,
+        state_next=state_next,
     )
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
     evaluator._simulation_context = cast(NewtonSimulationContext, context)
@@ -374,15 +374,15 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
 
     evaluator._reset(np.asarray([0.75], dtype=np.float32))
 
-    assert solver.reset_states == [state_in]
+    assert solver.reset_states == [state]
     assert fk_calls == [
-        (context.model, state_in.joint_q, state_in.joint_qd, state_in),
-        (context.model, state_out.joint_q, state_out.joint_qd, state_out),
+        (context.model, state.joint_q, state.joint_qd, state),
+        (context.model, state_next.joint_q, state_next.joint_qd, state_next),
     ]
-    np.testing.assert_allclose(state_in.joint_q.values, [0.75, 0.75])
-    np.testing.assert_allclose(state_out.joint_q.values, [0.75, 0.75])
-    np.testing.assert_allclose(state_in.joint_qd.values, [0.0, 0.0])
-    np.testing.assert_allclose(state_out.joint_qd.values, [0.0, 0.0])
+    np.testing.assert_allclose(state.joint_q.values, [0.75, 0.75])
+    np.testing.assert_allclose(state_next.joint_q.values, [0.75, 0.75])
+    np.testing.assert_allclose(state.joint_qd.values, [0.0, 0.0])
+    np.testing.assert_allclose(state_next.joint_qd.values, [0.0, 0.0])
 
 
 def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
@@ -427,11 +427,11 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 joint_friction=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_damping=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
-            self.state_in = SimpleNamespace(
+            self.state = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
-            self.state_out = SimpleNamespace(
+            self.state_next = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
@@ -456,7 +456,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                     np.array(self.control.joint_target_q.numpy(), copy=True)
                 )
                 if len(self.step_dts) % 2 == 0:
-                    self.state_in.joint_q.assign(next(self._simulated_positions))
+                    self.state.joint_q.assign(next(self._simulated_positions))
 
     context = FakeContext()
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
@@ -489,7 +489,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     )
 
     def launch_position_error(measured_positions, sample_index):
-        simulated = context.state_in.joint_q.values[evaluator._joint_q_indices]
+        simulated = context.state.joint_q.values[evaluator._joint_q_indices]
         measured = measured_positions.values.reshape(-1, 2)[sample_index]
         error = simulated - measured[np.newaxis, :]
         score_sums.values += np.sum(np.square(error), axis=1)
@@ -554,7 +554,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     np.testing.assert_allclose(context.target_history[::2], expected_targets)
     np.testing.assert_allclose(context.target_history[1::2], expected_targets)
     np.testing.assert_allclose(context.step_dts, [0.001] * 4)
-    assert context.state_in.joint_q.numpy_calls == 0
+    assert context.state.joint_q.numpy_calls == 0
     assert score_sums.numpy_calls == 1
-    assert context.solver.reset_states == [context.state_in]
+    assert context.solver.reset_states == [context.state]
     assert len(context.solver.changed_flags) == 1

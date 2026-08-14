@@ -71,8 +71,8 @@ class _NewtonReplayAdapter:
         if solver_type is None:
             raise RuntimeError("Newton replay requires newton.solvers.SolverMuJoCo.")
         self._model = model
-        state_in = simulation_context.state
-        state_out = model.state()
+        state = simulation_context.state
+        state_next = model.state()
         self._control = model.control()
         self.output_joints = output_joints
         self._substeps = substeps
@@ -97,8 +97,8 @@ class _NewtonReplayAdapter:
         self._step_executor = NewtonStepExecutor(
             model=model,
             solver=self._solver,
-            state_in=state_in,
-            state_out=state_out,
+            state=state,
+            state_next=state_next,
             control=self._control,
             contacts=None,
             clear_forces=False,
@@ -124,17 +124,17 @@ class _NewtonReplayAdapter:
                 "Newton replay contains unknown joints: " + ", ".join(unknown)
             )
         q = self._joint_array(self._model.joint_q, position, 0)
-        _, state_qd = self._state_joint_arrays(self._step_executor.state_in)
+        _, state_qd = self._state_joint_arrays(self._step_executor.state)
         recorded_qd = self._joint_array(
             state_qd,
             velocity,
             1,
             clear=True,
         )
-        self._solver.reset(self._step_executor.state_in)
+        self._solver.reset(self._step_executor.state)
         for state in (
-            self._step_executor.state_in,
-            self._step_executor.state_out,
+            self._step_executor.state,
+            self._step_executor.state_next,
         ):
             state_q, state_qd = self._state_joint_arrays(state)
             state_q.assign(q)
@@ -276,7 +276,7 @@ class _NewtonReplayAdapter:
         return joint_q, joint_qd
 
     def _read_state(self) -> _ReplayState:
-        state = self._step_executor.state_in
+        state = self._step_executor.state
         joint_q, joint_qd = self._state_joint_arrays(state)
         q = joint_q.numpy()
         qd = joint_qd.numpy()

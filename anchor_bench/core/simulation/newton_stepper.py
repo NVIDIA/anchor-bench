@@ -11,9 +11,9 @@ import warp as wp
 class NewtonStepExecutor:
     """Advance a Newton solver while preserving stable state-buffer identities.
 
-    Every interval starts and ends in ``state_in``. For odd substep counts, the
-    final result is copied from ``state_out`` back to that canonical buffer. The
-    same interval routine is used eagerly and during Warp graph capture.
+    Every interval starts and ends in ``state``. For odd substep counts,
+    the final result is copied from ``state_next`` back to that canonical buffer.
+    The same interval routine is used eagerly and during Warp graph capture.
     """
 
     def __init__(
@@ -21,16 +21,16 @@ class NewtonStepExecutor:
         *,
         model: newton.Model,
         solver: newton.solvers.SolverBase,
-        state_in: newton.State,
-        state_out: newton.State,
+        state: newton.State,
+        state_next: newton.State,
         control: newton.Control | None,
         contacts: newton.Contacts | None,
         clear_forces: bool = True,
     ) -> None:
         self._model = model
         self._solver = solver
-        self._state_in = state_in
-        self._state_out = state_out
+        self._state = state
+        self._state_next = state_next
         self._control = control
         self._contacts = contacts
         self._clear_forces = clear_forces
@@ -38,16 +38,16 @@ class NewtonStepExecutor:
         self._graph_key: tuple[float, int] | None = None
 
     @property
-    def state_in(self) -> newton.State:
-        """Return the current input state."""
+    def state(self) -> newton.State:
+        """Return the current state."""
 
-        return self._state_in
+        return self._state
 
     @property
-    def state_out(self) -> newton.State:
-        """Return the available output state."""
+    def state_next(self) -> newton.State:
+        """Return the buffer for the next state."""
 
-        return self._state_out
+        return self._state_next
 
     def capture_graph(self, *, dt: float, substeps: int = 1) -> None:
         """Capture one reusable interval graph when supported."""
@@ -90,27 +90,27 @@ class NewtonStepExecutor:
         return getattr(self._solver, "update_data_interval", 1) in (0, 1)
 
     def _simulate_interval(self, physics_dt: float, substeps: int) -> None:
-        canonical = self._state_in
-        state_in = canonical
-        state_out = self._state_out
+        canonical = self._state
+        state = canonical
+        state_next = self._state_next
         for index in range(substeps):
-            self._step_once(state_in, state_out, physics_dt)
+            self._step_once(state, state_next, physics_dt)
             if substeps % 2 and index == substeps - 1:
-                canonical.assign(state_out)
+                canonical.assign(state_next)
             else:
-                state_in, state_out = state_out, state_in
+                state, state_next = state_next, state
 
     def _step_once(
         self,
-        state_in: newton.State,
-        state_out: newton.State,
+        state: newton.State,
+        state_next: newton.State,
         dt: float,
     ) -> None:
         if self._clear_forces:
-            state_in.clear_forces()
+            state.clear_forces()
         self._solver.step(
-            state_in=state_in,
-            state_out=state_out,
+            state_in=state,
+            state_out=state_next,
             control=self._control,
             contacts=self._contacts,
             dt=dt,

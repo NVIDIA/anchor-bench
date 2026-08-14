@@ -100,22 +100,22 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         builder = self._create_builder()
         builder.replicate(template, world_count=world_count)
         model = builder.finalize()
-        state_in = model.state()
-        state_out = model.state()
+        state = model.state()
+        state_next = model.state()
         control = model.control()
         contacts = model.contacts()
         solver = newton.solvers.SolverMuJoCo(model, **requested_solver_options)
         step_executor = NewtonStepExecutor(
             model=model,
             solver=solver,
-            state_in=state_in,
-            state_out=state_out,
+            state=state,
+            state_next=state_next,
             control=control,
             contacts=contacts,
         )
 
         self._model = model
-        self._state = state_in
+        self._state = state
         self._control = control
         self._contacts = contacts
         self._solver = solver
@@ -139,18 +139,11 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         return self._world_count
 
     @property
-    def state_in(self) -> newton.State:
-        """Return the current input state for all worlds."""
+    def state_next(self) -> newton.State:
+        """Return the next state buffer for all worlds."""
 
         self._ensure_initialized()
-        return self._step_executor.state_in
-
-    @property
-    def state_out(self) -> newton.State:
-        """Return the current output state for all worlds."""
-
-        self._ensure_initialized()
-        return self._step_executor.state_out
+        return self._step_executor.state_next
 
     @property
     def control(self) -> newton.Control:
@@ -184,16 +177,16 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
 
         self._ensure_initialized()
         self._step_executor.step(dt=dt, substeps=substeps)
-        self._state = self._step_executor.state_in
+        self._state = self._step_executor.state
 
     def _load(self, usd_path: Path) -> Tuple[newton.Model, newton.State]:
-        """Return the owned model and input state, initializing if needed."""
+        """Return the owned model and current state, initializing if needed."""
 
         self._ensure_initialized()
         model = self._model
         if model is None:
             raise RuntimeError("Newton simulation context did not initialize a model.")
-        return model, self.state_in
+        return model, self._step_executor.state
 
     def _ensure_initialized(self) -> None:
         """Initialize the default simulation if no explicit request was made."""

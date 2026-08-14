@@ -192,8 +192,8 @@ def test_lazily_builds_one_newton_model_and_state(
     assert state is fake_model.states[0]
     assert loaded_model is model
     assert loaded_state is state
-    assert context.state_in is fake_model.states[0]
-    assert context.state_out is fake_model.states[1]
+    assert context.state is fake_model.states[0]
+    assert context.state_next is fake_model.states[1]
     assert context.control is fake_model.control_buffer
     assert context.contacts is fake_model.contacts_buffer
     assert context.solver is FakeSolver.instances[0]
@@ -323,21 +323,21 @@ def test_context_steps_with_stable_owned_states(
     context = NewtonSimulationContext(str(fake_newton_usd))
     context.initialize()
     fake_model = FakeModelBuilder.instances[1].model
-    state_in, state_out = fake_model.states
-    assert context.state_in is state_in
-    assert context.state_out is state_out
+    state, state_next = fake_model.states
+    assert context.state is state
+    assert context.state_next is state_next
 
     context.step(dt=0.01)
 
-    assert state_in.clear_count == 1
-    assert state_in.assign_count == 1
-    assert context.state_in is state_in
-    assert context.state_out is state_out
-    assert context.state is state_in
+    assert state.clear_count == 1
+    assert state.assign_count == 1
+    assert context.state is state
+    assert context.state_next is state_next
+    assert context.state is state
     assert FakeSolver.instances[0].steps == [
         {
-            "state_in": state_in,
-            "state_out": state_out,
+            "state_in": state,
+            "state_out": state_next,
             "control": context.control,
             "contacts": context.contacts,
             "dt": 0.01,

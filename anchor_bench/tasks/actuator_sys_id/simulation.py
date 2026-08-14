@@ -303,7 +303,7 @@ class NewtonPopulationEvaluator:
         measured_positions: wp.array,
         sample_index: int,
     ) -> None:
-        state_joint_q = self._simulation_context.state_in.joint_q
+        state_joint_q = self._simulation_context.state.joint_q
         if state_joint_q is None:
             raise RuntimeError("Newton state does not expose joint positions")
         wp.launch(
@@ -319,15 +319,14 @@ class NewtonPopulationEvaluator:
             outputs=[self._score_sums],
             device=self._device,
         )
-
     def _reset(self, measured_position: np.ndarray) -> None:
         joint_q = np.array(self._base_q, copy=True)
         joint_qd = np.array(self._base_qd, copy=True)
         joint_q[self._joint_q_indices] = measured_position[np.newaxis, :]
         joint_qd[self._joint_dof_indices] = 0.0
         context = self._simulation_context
-        context.solver.reset(context.state_in)
-        for state in (context.state_in, context.state_out):
+        context.solver.reset(context.state)
+        for state in (context.state, context.state_next):
             state_joint_q = state.joint_q
             state_joint_qd = state.joint_qd
             if state_joint_q is None or state_joint_qd is None:
