@@ -1,21 +1,22 @@
 # MLOps backends
 
 Anchor Bench exposes one tracking interface for run parameters, scalar metrics,
-tags, and local artifacts. Applications choose and construct backends at their
-integration boundary.
+tags, and local artifacts. MLflow is a bundled backend included in every task
+runner by default. Applications can inject custom backends per runner.
 
 ## Installation
 
-Install the tracking SDK required by the backend implementation you use.
+The default Anchor Bench installation includes the MLflow SDK and imports the
+MLflow backend when `anchor_bench.mlops` is imported.
 
 ## Tracking a run
 
-Construct a backend directly for standalone tracking:
+Construct the bundled MLflow backend directly for standalone tracking:
 
 ```python
-from my_anchor_backend import CustomBackend
+from anchor_bench.mlops import MLflowBackend
 
-backend = CustomBackend(endpoint="https://tracking.example")
+backend = MLflowBackend(tracking_uri="sqlite:///outputs/mlflow.db")
 
 with backend.start_run(
     "actuator-training",
@@ -35,17 +36,37 @@ The run context owns backend completion and failure handling. Do not retain a
 run and log to it after leaving the context.
 
 Tracking is opt-in for both training and actuator system identification. When an
-`mlops` block is present, its backend name is required:
+`mlops` block is present, MLflow is the default backend:
 
 ```yaml
 mlops:
-  backend: custom
+  backend: mlflow
   experiment_name: actuator-training
   run_name: gru-seed-42
   upload_dataset: true
   options:
-    endpoint: https://tracking.example
+    # Tracking Server or backend store for experiment and run metadata.
+    tracking_uri: sqlite:///outputs/mlflow.db
+    # Optional separate model-registry backend. When omitted, MLflow keeps its
+    # current registry setting, which normally follows the tracking URI.
+    # registry_uri: sqlite:///outputs/registry.db
+    # Per-attempt timeout in seconds for MLflow HTTP operations.
+    # http_request_timeout: 30
+    # Number of retries after the initial MLflow HTTP request.
+    # http_request_max_retries: 2
 ```
+
+URI overrides apply only for the lifetime of the Anchor Bench run. The MLflow
+backend restores the SDK's previous tracking and registry URIs when the run
+finishes or fails, so sequential runs do not inherit each other's stores.
+
+Anchor Bench defaults MLflow HTTP operations to a 30-second timeout and two
+retries, reducing the wait for an unreachable server from MLflow's much longer
+SDK defaults. Existing `MLFLOW_HTTP_REQUEST_TIMEOUT` and
+`MLFLOW_HTTP_REQUEST_MAX_RETRIES` environment values are honored unless the
+corresponding options above are set explicitly. The environment is restored
+after each run. Increase the timeout when a remote service or artifact store
+legitimately needs longer than 30 seconds without making progress.
 
 ### Dataset inputs
 
@@ -61,21 +82,34 @@ when the tracking store is an appropriate home for the source data:
 
 ```yaml
 mlops:
-  backend: custom
+  backend: mlflow
   experiment_name: actuator-training
   upload_dataset: true
 ```
 
-Backends receive the same portable dataset parameters. Upload-enabled runs also
-log the Parquet file as an artifact with type `dataset`. The upload occurs
-while remote downloads are still materialized, before their temporary directory
-is removed.
+MLflow records native dataset-input lineage and, when upload is enabled, stores
+the Parquet file as a dataset artifact. Because MLflow limits its native dataset
+digest to 36 characters, that field contains a prefix of the SHA-256; the full
+digest remains available in the portable dataset parameters and the
+`anchor_bench.dataset_digest` input tag. Third-party backends receive the same
+portable dataset parameters; upload-enabled runs additionally log an artifact
+with type `dataset`. The upload occurs while remote
+downloads are still materialized, before their temporary directory is removed.
+
+For local inspection, start the UI against the same store:
+
+```bash
+uv run mlflow ui --backend-store-uri sqlite:///outputs/mlflow.db --port 5000
+```
 
 `TaskRunner` constructs the selected backend automatically before calling the
 task. It logs the validated task configuration as flattened parameters, starts
 the configured experiment, and binds the active run to the task:
 
 ```python
+from anchor_bench.mlops import get_active_run
+
+
 def run(self, output_directory):
     # Report exactly where the metric or artifact is produced.
     mlops_run = get_active_run()
@@ -96,19 +130,19 @@ across backends. During hyperparameter search, Anchor Bench reports one
 `search/validation_loss` value per trial and suppresses the individual trial
 epoch curves; this prevents different trials from reusing the same run steps.
 
-An artifact `collection` is a logical output group. Backends decide how to
-map collections into their artifact store. Files and directories
+An artifact `collection` is a logical output group. MLflow maps it to a
+subdirectory beneath the run artifact root. Files and directories
 must exist before they are logged. Missing or failed artifact uploads fail the
 task, so the local `.completed` marker is not written for an incompletely
 tracked run.
 
-Backend-specific `mlops.options` are used to construct the backend but are
-deliberately excluded from logged parameters. Do not put credentials, access
-tokens, or other secrets in the run YAML, including under `mlops.options`.
-Anchor Bench persists the validated configuration in the output directory, and
-successful tasks upload that directory as a run artifact. Configure credentials
-through the backend SDK's supported environment variables or credential store
-instead. The backend context records successful or failed completion and the
+Backend-specific `mlops.options` are used to construct the backend and are
+logged alongside the rest of the flattened task configuration. Anchor Bench
+does not filter sensitive values from YAML configuration. It persists the
+validated configuration in the output directory, and successful tasks upload
+that directory as a run artifact. Users are responsible for ensuring their
+configuration does not disclose values they do not want stored by the selected
+backend. The backend context records successful or failed completion and the
 active run is cleared even if the task raises an exception.
 
 `mlops.upload_dataset` defaults to `false`. Set it to `true` to upload dataset
@@ -136,11 +170,11 @@ type: actuator_sys_id
 description: Identify the SO-101 arm actuators.
 tags: [so101, baseline]
 mlops:
-  backend: custom
+  backend: mlflow
   experiment_name: actuator-identification
   run_name: so101-baseline
   options:
-    endpoint: https://tracking.example
+    tracking_uri: sqlite:///outputs/mlflow.db
 ```
 
 The task reports `optimization/best_mse`,
@@ -149,25 +183,24 @@ The task reports `optimization/best_mse`,
 output directory is logged in the `sysid-output` collection with artifact type
 `actuator-sysid`.
 
+## Bundled backend
+
+The bundled MLflow adapter is included in every task runner and is
+selected by default.
+
 ## Adding another backend
 
-Implement `MLOpsBackend` and `MLOpsRun`, then publish the factory as an entry
-point. No Anchor Bench registry change is required:
-
-```toml
-[project.entry-points."anchor_bench.mlops_backends"]
-custom = "my_anchor_plugin:CustomBackend"
-```
-
-The entry-point object must be a callable that accepts backend-specific keyword
-options and returns an `MLOpsBackend`. For application-local integrations, the
-same factory can be registered at runtime:
+Implement `MLOpsBackend` and `MLOpsRun`, then pass the backend factory to the
+runner. The factory receives backend-specific keyword options from
+`mlops.options` and must return an `MLOpsBackend`:
 
 ```python
-from anchor_bench.mlops import register_backend
+from anchor_bench.core.task_runner import TaskRunner
+from my_anchor_backend import CustomBackend
 
-register_backend("custom", CustomBackend)
+runner = TaskRunner(mlops_backends={"custom": CustomBackend})
+runner.run("config.yaml")
 ```
 
-Backend names are case-insensitive. Duplicate names are rejected so an
-installed plugin cannot silently replace another integration.
+Custom mappings extend the bundled defaults for that runner only. Passing the
+name `mlflow` intentionally overrides the bundled backend for that runner.

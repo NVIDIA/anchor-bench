@@ -9,6 +9,7 @@ description = "Configuration-driven task runner for Anchor Bench."
 requires-python = ">=3.10"
 dependencies = [
   "cmaes",
+  "mlflow>=3.0,<4",
   "newton==1.4.0",
   "numpy>=1.23,<3",
   "optuna>=4.9,<5",

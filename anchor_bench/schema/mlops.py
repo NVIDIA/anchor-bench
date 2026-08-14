@@ -13,6 +13,7 @@ class MLOpsConfig(StrictBaseModel):
     """Select a backend without coupling task schemas to its SDK."""
 
     backend: str = Field(
+        default="mlflow",
         min_length=1,
         description="MLOps backend name available to the task runner.",
     )
@@ -35,7 +36,7 @@ class MLOpsConfig(StrictBaseModel):
     options: Dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "Backend constructor options persisted with the run configuration; "
-            "credentials must be configured outside the YAML."
+            "Backend constructor options persisted and logged with the run "
+            "configuration."
         ),
     )
