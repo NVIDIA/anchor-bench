@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import Mock, call
 
@@ -145,6 +146,7 @@ def test_trainer_builds_configured_optimizer() -> None:
 
 def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Run optimizer updates for each independent batch and collect losses."""
 
@@ -166,7 +168,10 @@ def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
     monkeypatch.setattr(trainer.optimizer, "step", step)
 
     mlops_run = Mock(spec=MLOpsRun)
-    with bind_active_run(mlops_run):
+    with (
+        bind_active_run(mlops_run),
+        caplog.at_level(logging.INFO, logger="anchor_bench.tasks.train.trainer"),
+    ):
         result = trainer.train()
 
     assert step.call_count == config.training.epochs * len(trainer.data_loaders.train)
@@ -182,6 +187,12 @@ def test_trainer_updates_weights_once_per_batch_and_reports_epochs(
         call({"training/loss": entry.training}, step=entry.epoch)
         for entry in result.history
     ]
+    assert any(
+        message.startswith("Starting training epochs=2 device=cpu training_batches=")
+        for message in caplog.messages
+    )
+    assert any(message.startswith("Training epoch=1/2") for message in caplog.messages)
+    assert any(message.startswith("Training epoch=2/2") for message in caplog.messages)
 
 
 def test_training_is_repeatable_for_the_configured_seed() -> None:

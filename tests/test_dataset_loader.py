@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -33,17 +34,22 @@ def _write_dataset(tmp_path: Path, dataset: pd.DataFrame) -> Path:
     return source
 
 
-def test_loads_and_resamples_local_parquet_file(tmp_path: Path) -> None:
+def test_loads_and_resamples_local_parquet_file(tmp_path: Path, caplog) -> None:
     dataset = pd.DataFrame(
         _rows("actual_q", [0, 20_000_000], [1.0, 2.0])
         + _rows("command_q", [0, 20_000_000], [2.0, 4.0])
     )
     source = _write_dataset(tmp_path, dataset)
 
-    result = DatasetLoader.load(source, dt=0.02)
+    with caplog.at_level(logging.INFO, logger="anchor_bench.data.loader"):
+        result = DatasetLoader.load(source, dt=0.02)
 
     assert result.columns.tolist() == ["actual_q", "command_q"]
     assert result.index.get_level_values("time_ns").tolist() == [0, 20_000_000]
+    assert any(
+        message.startswith(f"Loaded dataset source={source} files=1 rows=4")
+        for message in caplog.messages
+    )
 
 
 def test_loads_multiple_local_parquet_files_from_glob(tmp_path: Path) -> None:

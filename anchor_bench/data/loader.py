@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from glob import glob, has_magic
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
 NANOSECONDS_PER_SECOND = 1_000_000_000
 REQUIRED_COLUMNS = {"time_ns", "experiment", "field", "value"}
+
+logger = logging.getLogger(__name__)
 
 
 class DatasetLoader:
@@ -53,6 +56,7 @@ class DatasetLoader:
         ) as dataset_files:
             datasets = []
             for index, dataset_file in enumerate(dataset_files):
+                logger.debug("Reading dataset file path=%s", dataset_file)
                 dataset = DatasetLoader._read_file(dataset_file, source)
                 datasets.append(dataset)
                 if dataset_tracker is not None:
@@ -78,11 +82,20 @@ class DatasetLoader:
                         upload=upload_dataset,
                     )
         dataset = pd.concat(datasets, ignore_index=True)
-        return DatasetLoader._resample(
+        resampled = DatasetLoader._resample(
             dataset,
             dt,
             joint_name_mapping=joint_name_mapping,
         )
+        logger.info(
+            "Loaded dataset source=%s files=%d rows=%d resampled_rows=%d dt=%s",
+            source,
+            len(datasets),
+            len(dataset.index),
+            len(resampled.index),
+            dt,
+        )
+        return resampled
 
     @staticmethod
     @contextmanager

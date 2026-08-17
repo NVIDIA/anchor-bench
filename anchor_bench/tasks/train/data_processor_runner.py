@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Mapping, Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class DataProcessorRunner:
@@ -24,6 +27,12 @@ class DataProcessorRunner:
             if data_processor_name is None:
                 continue
 
+            logger.debug(
+                "Starting data processor name=%s feature=%s rows=%d",
+                data_processor_name,
+                feature,
+                len(result.index),
+            )
             data_processor = getattr(data_processor_registry, data_processor_name)
             generated = DataProcessorRunner._validate_result(
                 result,
@@ -33,6 +42,12 @@ class DataProcessorRunner:
             )
 
             result[generated.columns] = generated
+            logger.debug(
+                "Completed data processor name=%s feature=%s generated_columns=%d",
+                data_processor_name,
+                feature,
+                len(generated.columns),
+            )
 
         return result
 

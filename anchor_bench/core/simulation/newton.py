@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Hashable
 from math import isfinite
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any, Callable, Mapping, Tuple
 import newton
 
 from anchor_bench.core.simulation import SimulationContext
+
+logger = logging.getLogger(__name__)
 
 
 class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
@@ -85,6 +88,12 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
                 )
             return
 
+        logger.info(
+            "Initializing Newton simulation path=%s worlds=%d fixed_base=%s",
+            self.usd_path,
+            world_count,
+            self.fixed_base,
+        )
         template = self._create_usd_builder()
         if configure_builder is not None:
             configure_builder(template)
@@ -109,6 +118,12 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         self._configuration_key = configuration_key
         self._solver_options = requested_solver_options
         self._initialized = True
+        logger.info(
+            "Initialized Newton simulation path=%s worlds=%d fixed_base=%s",
+            self.usd_path,
+            world_count,
+            self.fixed_base,
+        )
 
     @property
     def world_count(self) -> int:

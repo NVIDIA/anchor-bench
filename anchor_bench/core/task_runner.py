@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, Union
@@ -25,6 +26,8 @@ from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
 from anchor_bench.tasks.train.task import TrainingTask
 from anchor_bench.tasks.trajectory import TrajectoryTask
+
+logger = logging.getLogger(__name__)
 
 TASKS: Dict[str, Type[BaseTask[Any]]] = {
     ActuatorSysIdTask.name(): ActuatorSysIdTask,
@@ -53,6 +56,7 @@ class TaskRunner:
         force: bool = False,
         output: Optional[Union[str, Path]] = None,
     ) -> Path:
+        logger.debug("Parsing task configuration path=%s", config_path)
         config = parse(config_path)
         task_type = config.type
         task_class = self._tasks.get(task_type)
@@ -70,7 +74,18 @@ class TaskRunner:
             output_folder=output,
         )
         if already_completed and not force:
+            logger.info(
+                "Skipping completed task type=%s output=%s",
+                task_type,
+                output_directory,
+            )
             return output_directory
+        if already_completed:
+            logger.warning(
+                "Forcing completed task type=%s output=%s",
+                task_type,
+                output_directory,
+            )
 
         completion_marker = output_directory / COMPLETION_MARKER
         completion_marker.unlink(missing_ok=True)
@@ -78,24 +93,30 @@ class TaskRunner:
             output_directory / "config.yaml",
             config.model_dump(mode="json"),
         )
+        logger.debug(
+            "Wrote resolved configuration path=%s", output_directory / "config.yaml"
+        )
 
         task = task_class(config)
+        logger.info("Starting task type=%s output=%s", task_type, output_directory)
         mlops_config = getattr(config, "mlops", None)
         if isinstance(mlops_config, MLOpsConfig):
-            return self._run_with_mlops(
+            result = self._run_with_mlops(
                 task,
                 config,
                 mlops_config,
                 output_directory,
                 completion_marker,
             )
-
-        return self._finalize_task(
-            task,
-            task.run(output_directory),
-            output_directory,
-            completion_marker,
-        )
+        else:
+            result = self._finalize_task(
+                task,
+                task.run(output_directory),
+                output_directory,
+                completion_marker,
+            )
+        logger.info("Completed task type=%s output=%s", task_type, result)
+        return result
 
     def _run_with_mlops(
         self,
@@ -120,6 +141,11 @@ class TaskRunner:
             )
         backend = backend_factory(**mlops_config.options)
         tags = _tracking_tags(config)
+        logger.info(
+            "Starting MLOps run backend=%s experiment=%s",
+            mlops_config.backend,
+            mlops_config.experiment_name,
+        )
         try:
             with backend.start_run(
                 mlops_config.experiment_name,
@@ -158,6 +184,7 @@ class TaskRunner:
                 f"its assigned output directory {output_directory}."
             )
         completion_marker.touch()
+        logger.debug("Created completion marker path=%s", completion_marker)
         return task_output
 
 

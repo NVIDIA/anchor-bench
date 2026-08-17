@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from shutil import copyfileobj
 from tempfile import NamedTemporaryFile
@@ -12,6 +13,8 @@ from urllib.request import urlopen
 from anchor_bench.errors import DatasetLoadError
 
 HUGGING_FACE_HTTP_TIMEOUT_SECONDS = 60.0
+
+logger = logging.getLogger(__name__)
 
 
 def download_from_huggingface(
@@ -37,6 +40,7 @@ def download_from_huggingface(
     destination = folder / filename
     temporary_path = None
     try:
+        logger.info("Downloading dataset url=%s destination=%s", url, destination)
         folder.mkdir(parents=True, exist_ok=True)
         with (
             urlopen(
@@ -59,4 +63,9 @@ def download_from_huggingface(
         raise DatasetLoadError(
             f"Could not download Hugging Face dataset from {url}: {error}."
         ) from error
+    logger.info(
+        "Downloaded dataset destination=%s size_bytes=%d",
+        destination,
+        destination.stat().st_size,
+    )
     return destination

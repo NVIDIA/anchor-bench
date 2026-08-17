@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from unittest.mock import Mock
 
 import numpy as np
@@ -233,7 +234,7 @@ def test_load_trajectories_rejects_an_episode_without_a_transition(
         load_trajectories(_config(tmp_path).dataset, joint_names=["hip"])
 
 
-def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
+def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch, caplog):
     config = _config(tmp_path)
     trajectory = Trajectory(
         experiment="wave",
@@ -293,7 +294,13 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
     mlops_run = Mock(spec=MLOpsRun)
-    with bind_active_run(mlops_run):
+    with (
+        bind_active_run(mlops_run),
+        caplog.at_level(
+            logging.INFO,
+            logger="anchor_bench.tasks.actuator_sys_id.task",
+        ),
+    ):
         result = ActuatorSysIdTask(config).run(output_directory)
 
     assert result == output_directory
@@ -316,6 +323,10 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
         output_directory,
         collection="sysid-output",
         artifact_type="actuator-sysid",
+    )
+    assert any(
+        message.startswith("System identification generation=1/2 best_mse=0.25")
+        for message in caplog.messages
     )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -12,6 +13,7 @@ import pandas as pd
 
 from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.data import DatasetLoader
+from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.training import (
     CategoricalSearchParameter,
@@ -27,6 +29,8 @@ if TYPE_CHECKING:
     from anchor_bench.tasks.train.trainer import TrainingResult
 
 TRAJECTORIES_FILENAME = "trajectories.parquet"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,11 @@ class TrainingTask(BaseTask[TrainingConfig]):
             output_features=list(self.config.output_features),
             mappings=mappings,
         )
+        logger.info(
+            "Prepared training sequences count=%d rows=%d",
+            len(sequences),
+            len(dataset.index),
+        )
         from anchor_bench.tasks.train.trainer import Trainer
 
         search_result = None
@@ -161,10 +170,9 @@ class TrainingTask(BaseTask[TrainingConfig]):
             output_directory,
             search_result=search_result,
         )
-        self._write_trajectories(
-            sequences,
-            output_directory / TRAJECTORIES_FILENAME,
-        )
+        trajectories_path = output_directory / TRAJECTORIES_FILENAME
+        self._write_trajectories(sequences, trajectories_path)
+        logger.info("Wrote training artifacts output=%s", output_directory)
         # Validator metrics follow the epoch or trial series without moving the
         # run-global step backwards; the completed directory is uploaded last.
         if mlops_run is not None:
@@ -203,6 +211,12 @@ class TrainingTask(BaseTask[TrainingConfig]):
                 "Search currently supports only the 'validation_loss' objective."
             )
 
+        logger.info(
+            "Starting training search trials=%d objective=%s direction=%s",
+            search.trials,
+            search.objective.metric,
+            search.objective.direction,
+        )
         study = optuna.create_study(
             direction=search.objective.direction,
             sampler=optuna.samplers.TPESampler(seed=self.config.training.seed),
@@ -264,6 +278,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
                     parameters,
                     trial.number,
                 )
+            self._log_search_trial(trial.number, search.trials, value)
             return value
 
         study.optimize(objective, n_trials=search.trials)
@@ -271,6 +286,14 @@ class TrainingTask(BaseTask[TrainingConfig]):
             raise RuntimeError("Hyperparameter search did not complete any trials.")
 
         value, result, config, held_out, parameters, trial_number = best
+        logger.info(
+            "Completed training search completed_trials=%d best_trial=%d/%d "
+            "best_value=%g",
+            len(trials),
+            trial_number + 1,
+            search.trials,
+            value,
+        )
         return SearchResult(
             training_result=result,
             best_config=config,
@@ -281,6 +304,18 @@ class TrainingTask(BaseTask[TrainingConfig]):
             best_value=value,
             best_parameters=parameters,
             trials=tuple(trials),
+        )
+
+    @staticmethod
+    def _log_search_trial(number: int, total: int, value: float) -> None:
+        """Report every trial at DEBUG and rate-limited progress at INFO."""
+
+        current = number + 1
+        arguments = (current, total, value)
+        log = logger.info if should_log_progress(current, total) else logger.debug
+        log(
+            "Training search trial=%d/%d validation_loss=%g",
+            *arguments,
         )
 
     def _trial_config(

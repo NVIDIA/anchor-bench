@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -13,12 +14,15 @@ import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
+from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.training import LossConfig, OptimizerConfig, TrainingConfig
 from anchor_bench.tasks.train.data import SequenceDataset, create_data_loaders
 from anchor_bench.tasks.train.model_registry import get_model
 from anchor_bench.tasks.train.normalization import NormalizationStatistics
 from anchor_bench.tasks.train.task import MappedTrainingSequence
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,8 +58,9 @@ class Trainer:
     ) -> None:
         """Create the model, loss function, optimizer, and data loaders.
 
-        report_metrics controls per-epoch curves, which searches disable to
-        avoid reusing steps. Checkpoint artifacts remain independently enabled.
+        report_metrics controls per-epoch curves and console progress, which
+        searches disable to avoid nested reporting. Checkpoint artifacts remain
+        independently enabled.
         """
 
         _set_seed(config.training.seed)
@@ -114,6 +119,15 @@ class Trainer:
     def train(self) -> TrainingResult:
         """Run the configured epoch loop and return its model and history."""
 
+        log = logger.info if self.report_metrics else logger.debug
+        log(
+            "Starting training epochs=%d device=%s training_batches=%d "
+            "validation_batches=%d",
+            self.config.training.epochs,
+            self.device,
+            len(self.data_loaders.train),
+            len(self.data_loaders.validation),
+        )
         history = []
         for epoch in range(1, self.config.training.epochs + 1):
             training_loss = self._train_epoch()
@@ -133,6 +147,8 @@ class Trainer:
             # training and validation loss.
             if self.report_metrics and mlops_run is not None:
                 mlops_run.log_metrics(metrics, step=epoch)
+            if self.report_metrics:
+                self._log_epoch(epoch, training_loss, validation_loss)
 
             checkpoint = self.config.training.checkpoint
             if checkpoint is not None and epoch % checkpoint.every_n_epochs == 0:
@@ -142,6 +158,22 @@ class Trainer:
             model=self.model,
             history=history,
             normalization=self.data_loaders.normalization,
+        )
+
+    def _log_epoch(
+        self,
+        epoch: int,
+        training_loss: float,
+        validation_loss: Optional[float],
+    ) -> None:
+        """Report every epoch at DEBUG and rate-limited progress at INFO."""
+
+        total = self.config.training.epochs
+        arguments = (epoch, total, training_loss, validation_loss)
+        log = logger.info if should_log_progress(epoch, total) else logger.debug
+        log(
+            "Training epoch=%d/%d training_loss=%g validation_loss=%s",
+            *arguments,
         )
 
     def _save_checkpoint(
@@ -171,6 +203,7 @@ class Trainer:
             temporary_path,
         )
         temporary_path.replace(path)
+        logger.info("Saved training checkpoint epoch=%d path=%s", epoch, path)
         mlops_run = get_active_run()
         # Publish only the atomically renamed file so a backend never observes a
         # partial checkpoint.

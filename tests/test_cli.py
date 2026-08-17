@@ -47,6 +47,29 @@ def test_cli_passes_force_and_output_to_task_runner(tmp_path, monkeypatch):
     assert calls == [(str(config_path), True, str(output_path))]
 
 
+def test_cli_configures_requested_logging_level(monkeypatch, tmp_path):
+    configured = []
+
+    monkeypatch.setattr(
+        "anchor_bench.cli.configure_logging",
+        lambda verbosity, *, quiet: configured.append((verbosity, quiet)),
+    )
+    monkeypatch.setattr(
+        "anchor_bench.cli.TaskRunner.run",
+        lambda self, path, *, force=False, output=None: tmp_path / "output",
+    )
+
+    assert main(["--config", "config.yaml", "-vv"]) == 0
+    assert configured == [(2, False)]
+
+
+def test_cli_rejects_verbose_and_quiet_together() -> None:
+    with pytest.raises(SystemExit) as exit_error:
+        main(["--config", "config.yaml", "--verbose", "--quiet"])
+
+    assert exit_error.value.code == 2
+
+
 def test_cli_reports_mlops_tracking_errors(monkeypatch, capsys):
     def fail_to_run(self, path, *, force=False, output=None):
         raise MLOpsTrackingError("MLflow tracking failed: connection refused")

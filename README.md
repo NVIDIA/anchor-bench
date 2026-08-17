@@ -78,7 +78,11 @@ By default, task artifacts are written to a generated hash folder. Pass
 uv run anchor-bench --config path/to/config.yaml --output path/to/artifacts
 ```
 
-Use `--help` to display the available option:
+Task lifecycle and rate-limited progress logs are written to standard error at
+the `INFO` level. Pass `--verbose` (`-v`) for per-step debug output or `--quiet`
+(`-q`) to emit errors only. The two options are mutually exclusive.
+
+Use `--help` to display the available options:
 
 ```bash
 uv run anchor-bench --help

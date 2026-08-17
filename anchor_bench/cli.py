@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from anchor_bench.core.task_runner import TaskRunner
 from anchor_bench.errors import AnchorBenchError
+from anchor_bench.logging_utils import configure_logging
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,12 +32,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         help="Use this folder for task artifacts instead of a generated hash folder.",
     )
+    logging_group = parser.add_mutually_exclusive_group()
+    logging_group.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Enable debug logging. Repeat for compatibility with common CLI usage.",
+    )
+    logging_group.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Only emit errors.",
+    )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    configure_logging(args.verbose, quiet=args.quiet)
 
     try:
         TaskRunner().run(args.config, force=args.force, output=args.output)

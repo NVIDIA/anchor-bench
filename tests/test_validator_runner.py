@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
@@ -144,6 +145,7 @@ def test_rejects_registered_non_validator(
 
 def test_runs_validators_in_configuration_order(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Execute configured validators and collect results in declaration order."""
 
@@ -163,6 +165,7 @@ def test_runs_validators_in_configuration_order(
             config={"score": 0.75},
         ),
     ]
+    caplog.set_level(logging.INFO, logger="anchor_bench.tasks.train.validator_runner")
 
     results = ValidatorRunner.run(
         configs,
@@ -181,6 +184,12 @@ def test_runs_validators_in_configuration_order(
             type="simulation",
             metrics={"score": 0.75},
         ),
+    ]
+    assert [message for message in caplog.messages if "validator" in message] == [
+        "Starting validator name=held-out loss type=offline",
+        "Completed validator name=held-out loss type=offline metrics=1",
+        "Starting validator name=rollout tracking type=simulation",
+        "Completed validator name=rollout tracking type=simulation metrics=1",
     ]
 
 

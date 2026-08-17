@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
@@ -64,6 +65,7 @@ def _search_config() -> TrainingConfig:
 def test_search_trains_trials_and_retains_best_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Revalidate sampled configs and retain the lowest validation-loss run."""
 
@@ -115,7 +117,10 @@ def test_search_trains_trials_and_retains_best_model(
     monkeypatch.setattr("anchor_bench.tasks.train.trainer.Trainer", StubTrainer)
 
     mlops_run = Mock(spec=MLOpsRun)
-    with bind_active_run(mlops_run):
+    with (
+        bind_active_run(mlops_run),
+        caplog.at_level(logging.INFO, logger="anchor_bench.tasks.train.task"),
+    ):
         result = TrainingTask(_search_config())._search(dataset, tmp_path)
 
     assert len(trained_configs) == 3
@@ -156,6 +161,13 @@ def test_search_trains_trials_and_retains_best_model(
         entry.args[0]["search/validation_loss"]
         for entry in mlops_run.log_metrics.call_args_list
     ] == [trial.value for trial in result.trials]
+    assert (
+        "Starting training search trials=3 objective=validation_loss direction=minimize"
+    ) in caplog.messages
+    assert any(
+        message.startswith("Completed training search completed_trials=3 best_trial=")
+        for message in caplog.messages
+    )
 
 
 def test_search_prunes_non_finite_loss_before_tracking_trial(
@@ -231,3 +243,23 @@ def test_search_requires_validation_loss() -> None:
 
     with pytest.raises(ValueError, match="requires validation windows"):
         TrainingTask._validation_loss(result)
+
+
+def test_search_progress_uses_info_for_cadence_and_debug_between(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Keep cadence records visible at INFO and intermediate records at DEBUG."""
+
+    with caplog.at_level(logging.DEBUG, logger="anchor_bench.tasks.train.task"):
+        TrainingTask._log_search_trial(1, 100, 2.0)
+        TrainingTask._log_search_trial(4, 100, 1.0)
+
+    progress_records = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Training search")
+    ]
+    assert [record.levelno for record in progress_records] == [
+        logging.DEBUG,
+        logging.INFO,
+    ]

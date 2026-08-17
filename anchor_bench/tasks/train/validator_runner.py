@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
 from anchor_bench.train.validators import BaseValidator, ValidationResult
+
+logger = logging.getLogger(__name__)
 
 
 class _TrainingValidatorConfig(Protocol):
@@ -66,6 +69,11 @@ class ValidatorRunner:
 
         results = []
         for validator in ValidatorRunner.instantiate(validators):
+            logger.info(
+                "Starting validator name=%s type=%s",
+                validator.name,
+                validator.type,
+            )
             result = validator.validate(model, validation_dataset)
             if not isinstance(result, ValidationResult):
                 raise TypeError(
@@ -77,4 +85,10 @@ class ValidatorRunner:
                     f"{result.name!r} ({result.type!r})."
                 )
             results.append(result)
+            logger.info(
+                "Completed validator name=%s type=%s metrics=%d",
+                validator.name,
+                validator.type,
+                len(result.metrics),
+            )
         return results

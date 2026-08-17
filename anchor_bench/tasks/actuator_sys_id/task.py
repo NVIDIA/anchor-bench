@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
@@ -14,6 +16,8 @@ from anchor_bench.tasks.actuator_sys_id.optimizer import create_optimizer
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import NewtonPopulationEvaluator
 from anchor_bench.tasks.base_task import BaseTask
+
+logger = logging.getLogger(__name__)
 
 
 class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
@@ -62,6 +66,13 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
                     },
                     step=step.iteration,
                 )
+            self._log_optimization_step(
+                step.iteration + 1,
+                int(self.config.optimizer.max_iterations),
+                step.best_score,
+                step.mean_score,
+                completed=step.converged,
+            )
 
         best_parameters = parameter_space.decode(optimizer.best_candidate)
         write_artifacts(
@@ -80,4 +91,31 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
                 collection="sysid-output",
                 artifact_type="actuator-sysid",
             )
+        logger.info(
+            "Wrote system-identification artifacts output=%s best_mse=%g",
+            output_directory,
+            optimizer.best_score,
+        )
         return output_directory
+
+    @staticmethod
+    def _log_optimization_step(
+        current: int,
+        total: int,
+        best_mse: float,
+        mean_mse: float,
+        *,
+        completed: bool,
+    ) -> None:
+        """Report every generation at DEBUG and rate-limited progress at INFO."""
+
+        arguments = (current, total, best_mse, mean_mse)
+        log = (
+            logger.info
+            if completed or should_log_progress(current, total)
+            else logger.debug
+        )
+        log(
+            "System identification generation=%d/%d best_mse=%g mean_mse=%g",
+            *arguments,
+        )

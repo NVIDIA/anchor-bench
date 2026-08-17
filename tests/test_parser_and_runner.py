@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,19 @@ def test_runner_constructs_and_runs_registered_task(config_path):
     assert (result / ".completed").is_file()
     assert len(seen) == 1
     assert isinstance(seen[0], ActuatorSysIdConfig)
+
+
+def test_runner_logs_task_lifecycle(config_path, caplog):
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self, output_directory: Path) -> Path:
+            return output_directory
+
+    caplog.set_level(logging.INFO, logger="anchor_bench.core.task_runner")
+
+    output = TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))
+
+    assert f"Starting task type=actuator_sys_id output={output}" in caplog.messages
+    assert f"Completed task type=actuator_sys_id output={output}" in caplog.messages
 
 
 def test_runner_uses_explicit_output_folder(config_path, tmp_path):
