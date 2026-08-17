@@ -1,0 +1,43 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "version": 2,
+  "metadata": {
+    "tools": [
+      {
+        "name": "nSpect",
+        "vendor": "NVIDIA",
+        "version": "2.0.0"
+      }
+    ],
+    "supplier": {
+      "name": "NVIDIA"
+    },
+    "component": {
+      "name": "Anchorbench",
+      "type": "application",
+      "bom-ref": "f098d99d-ffc3-1be7-556a-3d574e24f8b7",
+      "version": "1.0.0",
+      "properties": [
+        {
+          "name": "nSpectId",
+          "value": "NSPECT-ECEP-44UT"
+        }
+      ]
+    },
+    "timestamp": "2026-08-17T19:54:11.294577+00:00"
+  },
+  "bomFormat": "CycloneDX",
+  "properties": [
+    {
+      "name": "disclaimers",
+      "value": "NOTICES AND DISCLAIMERS FOR NVIDIA SOFTWARE BILL OF MATERIALSAll information, including but not limited to an electronic file containing details of ingredients included in a particular NVIDIA named product (collectively \"SBOM\"), provided in this document constitutes NVIDIA Confidential Information and is subject to the confidentiality terms below.  You may (a) use the SBOM internally to investigate and track common vulnerability exposure and other product security issues, and (b) provide the SBOM to your customer, provided that it is disclosed under a non-disclosure agreement, using the same degree of care to protect the SBOM that you use to protect your own confidential information.  You may not use the SBOM to (i) reverse engineer any NVIDIA product, software, or process, and (ii) monetize the SBOM. Confidentiality. \"Confidential Information\" means any non-public information, including this SBOM and its terms, provided in any format by NVIDIA to you under this SBOM, that was designated or identified by NVIDIA as confidential, or should be known by you when exercising reasonable business judgment to be confidential given the nature or circumstances of its disclosure.Right to Use Confidential Information. You may use NVIDIA Confidential Information only to exercise its rights and perform its obligations under this SBOM. You may disclose NVIDIA Confidential Information to its affiliates, directors, officers, employees, contractors, independent external auditors, and advisors (including legal and accounting) who have a need to know that information in their work for you under this SBOM and who are bound to protect that information under obligations of confidentiality at least as restrictive as those described in this SBOM. You will not disclose NVIDIA Confidential Information to any third party, except as expressly authorized in this SBOM, without first having written approval of NVIDIA. You will protect NVIDIA Confidential Information with at least the same degree of care that you use to protect your own similar confidential and proprietary information, but no less than a reasonable degree of care. If the NVIDIA sends a written request, you will promptly return or destroy all Confidential Information received from NVIDIA, together with copies, except that a party may retain archival copies in accordance with its document retention policy or as required by law. Exceptions. Confidential Information does not and will not include information that: (i) was in the public domain at the time it was communicated to you by NVIDIA, or later entered the public domain other than by a breach of this SBOM by you, (ii) is or was rightfully received or known by you without restriction on disclosure or any obligation of confidentiality, (iii) is or was independently developed by or for you without using any of NVIDIA Confidential Information, or (iv) is or was generally made available by NVIDIA without restriction on disclosure. You will not be liable for disclosure of Confidential Information required to be disclosed in response to a valid order by a court or other governmental body of competent jurisdiction, if you provide NVIDIA with prior written notice of the required disclosure to permit the disclosing party to seek confidential treatment of such information and you disclose only the information necessary to comply with the requirements. To obtain the latest information, please contact your NVIDIA representative. Product or service performance varies by use, configuration and other factors. Your costs and results may vary. No product or component is absolutely secure. The SBOM is provided \"as is\", and is subject to change at anytime without notice.  TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, NVIDIA DISCLAIMS ALL WARRANTIES AND REPRESENTATIONS OF ANY KIND, WHETHER EXPRESS, IMPLIED OR STATUTORY, RELATING TO OR ARISING UNDER THIS DOCUMENT, INCLUDING, WITHOUT LIMITATION, THE WARRANTIES OF TITLE, NONINFRINGEMENT, MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, USAGE OF TRADE AND COURSE OF DEALING. NVIDIA products are not intended or authorized for use as critical components in a system or application where the use of or failure of such system or application developed with products, technology, software or services provided by NVIDIA could result in injury, death or catastrophic damage. Except for your express permitted use of the SBOM contained in this document, no license or right is granted by implication, estoppel or otherwise. If this document directly includes or links to third-party websites, products, services or information, please consult other sources to evaluate if and how to use that information since NVIDIA does not support, endorse or assume any responsibility for any third party offerings or its accuracy or usefulness.   The SBOM provided above has been generated using third party analysis tools as defined herein.  Please report any concerns regarding the accuracy to your Customer Support Manager. TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL NVIDIA BE LIABLE FOR ANY (I) INDIRECT, PUNITIVE, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES, OR (II) DAMAGES FOR THE (A) COST OF PROCURING SUBSTITUTE GOODS OR (B) LOSS OF PROFITS, REVENUES, USE, DATA OR GOODWILL ARISING OUT OF OR RELATED TO THIS DOCUMENT, WHETHER BASED ON BREACH OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, OR OTHERWISE, AND EVEN IF NVIDIA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES AND EVEN IF A PARTY'S REMEDIES FAIL THEIR ESSENTIAL PURPOSE. ADDITIONALLY, TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, NVIDIA'S TOTAL CUMULATIVE AGGREGATE LIABILITY FOR ANY AND ALL LIABILITIES, OBLIGATIONS OR CLAIMS ARISING OUT OF OR RELATED TO THIS DOCUMENT WILL NOT EXCEED FIVE U.S. DOLLARS (US$5). Statements in this document that refer to future plans or expectations are forward-looking statements. These statements are based on currently available information, beliefs, assumptions and involve many risks and uncertainties that could cause actual results to differ materially from those expressed or implied in these statements. For more information on the factors that could cause actual results to differ materially, see our most recent earnings release and SEC filings at NVIDIA Corporation SEC Filings(https://investor.nvidia.com/financial-info/sec-filings/default.aspx). (c) NVIDIA Corporation. All rights reserved. NVIDIA, the NVIDIA logo, and other NVIDIA marks are trademarks of NVIDIA Corporation or its affiliates. Other names and brands may be claimed as the property of others."
+    }
+  ],
+  "specVersion": "1.6",
+  "dependencies": [
+    {
+      "ref": "f098d99d-ffc3-1be7-556a-3d574e24f8b7"
+    }
+  ],
+  "serialNumber": "urn:uuid:13dcced8-41bc-4f8d-97dc-569b673bb43f"
+}
