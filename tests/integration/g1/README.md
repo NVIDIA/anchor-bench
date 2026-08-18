@@ -2,7 +2,7 @@
 
 This directory contains the complete reproducible G1 right-arm training example:
 
-- the exact G1 physics and base USD layers;
+- the corrected G1 TriHand asset and sparse training USD layers;
 - residual-torque and autoregressive full-torque training configs;
 - the identified actuator parameters used to generate the sparse USD opinions;
 - a revision-pinned downloader for all 15 Anchor-Lab recordings;
@@ -10,6 +10,11 @@ This directory contains the complete reproducible G1 right-arm training example:
 
 Run commands from the repository root.
 A CUDA-capable GPU is required for training and Newton replay.
+
+The robot asset is
+`nvidia/Anchor-Lab/robot_assets/g1_29dof_tri_hand_closed.usd` at revision
+`50881f268b6600251df6f2011cfaa5a392fb96eb` with SHA-256
+`9e61f39e3ace1cd60b3cf9eb7dc5422a02584ad5b23b049d2d792bbbec2b9ddc`.
 
 ## Setup
 

@@ -30,15 +30,15 @@ output_features:
 mapping:
   right_arm:
     inputs:
-      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_pitch_joint
-      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_roll_joint
-      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_yaw_joint
-      - /g1_29dof_with_hand_rev_1_0/joints/right_elbow_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_yaw_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_elbow_joint
     outputs:
-      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_pitch_joint
-      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_roll_joint
-      - /g1_29dof_with_hand_rev_1_0/joints/right_shoulder_yaw_joint
-      - /g1_29dof_with_hand_rev_1_0/joints/right_elbow_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_yaw_joint
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_elbow_joint
 
 model:
   type: gru

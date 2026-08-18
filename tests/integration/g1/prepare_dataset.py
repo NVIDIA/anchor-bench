@@ -12,7 +12,7 @@ from anchor_bench.data import download_from_huggingface
 ANCHOR_LAB_REVISION = "be6010113e7b769e68f2779fbdf321908725f929"
 DATASET_DIRECTORY = Path(__file__).parent / "data"
 DATASET_PATH = DATASET_DIRECTORY / "g1_arm_multijoint.parquet"
-ROBOT_PATH = "/g1_29dof_with_hand_rev_1_0/joints"
+ROBOT_PATH = "/g1_29dof_rev_1_0_tri_hand/joints"
 ENTITY_NAMES = {
     "right_elbow": f"{ROBOT_PATH}/right_elbow_joint",
     "right_shoulder_pitch": f"{ROBOT_PATH}/right_shoulder_pitch_joint",
