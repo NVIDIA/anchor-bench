@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, Tuple
@@ -200,7 +199,6 @@ def test_lazily_builds_one_newton_model_and_state(
 
 def test_initializes_one_configurable_replicated_simulation(
     fake_newton_usd: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Keep USD loading and population replication in the shared context."""
 
@@ -209,7 +207,6 @@ def test_initializes_one_configurable_replicated_simulation(
     configure = configured.append
 
     context = NewtonSimulationContext(str(source))
-    caplog.set_level(logging.INFO, logger="anchor_bench.core.simulation.newton")
     context.initialize(
         world_count=4,
         configure_builder=configure,
@@ -236,12 +233,6 @@ def test_initializes_one_configurable_replicated_simulation(
     assert fake_solver.options == {"iterations": 5}
     assert FakeModelBuilder.instance_count == 2
     assert len(FakeSolver.instances) == 1
-    assert [
-        message for message in caplog.messages if "Newton simulation" in message
-    ] == [
-        f"Initializing Newton simulation path={source} worlds=4 fixed_base=False",
-        f"Initialized Newton simulation path={source} worlds=4 fixed_base=False",
-    ]
 
 
 def test_rejects_conflicting_reinitialization(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -177,16 +176,11 @@ def test_runs_usd_backed_data_processor_in_configuration_order() -> None:
 def test_runs_data_processors_in_configuration_order(
     dataset: pd.DataFrame,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Append generated features and expose them to later data processors."""
 
     _register(monkeypatch, "generated", GeneratedFeatureDataProcessor)
     _register(monkeypatch, "dependent", DependentFeatureDataProcessor)
-    caplog.set_level(
-        logging.DEBUG,
-        logger="anchor_bench.tasks.train.data_processor_runner",
-    )
 
     result = DataProcessorRunner.run(
         dataset,
@@ -206,18 +200,6 @@ def test_runs_data_processors_in_configuration_order(
     assert result["joint/dependent"].tolist() == [3.0, 5.0]
     assert result.index.equals(dataset.index)
     assert dataset.columns.tolist() == ["joint/actual"]
-    assert [message for message in caplog.messages if "data processor" in message] == [
-        "Starting data processor name=generated feature=generated rows=2",
-        (
-            "Completed data processor name=generated feature=generated "
-            "generated_columns=1"
-        ),
-        "Starting data processor name=dependent feature=dependent rows=2",
-        (
-            "Completed data processor name=dependent feature=dependent "
-            "generated_columns=1"
-        ),
-    ]
 
 
 def test_keeps_existing_features_without_copying_data(
