@@ -70,6 +70,15 @@ class Trainer:
         self.checkpoint_collection = checkpoint_collection
         if config.training.checkpoint is not None and checkpoint_directory is None:
             raise ValueError("Checkpointing requires a checkpoint directory.")
+        feedback = config.training.feedback
+        if feedback is None:
+            self.feedback_indices = None
+        else:
+            self.feedback_indices = _feedback_indices(
+                dataset,
+                input_feature=feedback.input,
+                output_feature=feedback.output,
+            )
         self.data_loaders = create_data_loaders(dataset, config)
         train_dataset = self.data_loaders.train.dataset
         if not isinstance(train_dataset, SequenceDataset):
@@ -96,25 +105,6 @@ class Trainer:
             config.training.optimizer,
             self.model.parameters(),
         )
-        feedback = config.training.feedback
-        if feedback is None:
-            self.feedback_indices = None
-        else:
-            inputs = tuple(
-                index
-                for index, column in enumerate(dataset[0].inputs.columns)
-                if column.endswith(f"/{feedback.input}")
-            )
-            outputs = tuple(
-                index
-                for index, column in enumerate(dataset[0].targets.columns)
-                if column.endswith(f"/{feedback.output}")
-            )
-            if not inputs or len(inputs) != len(outputs):
-                raise ValueError(
-                    "Feedback input and output must map to the same number of columns."
-                )
-            self.feedback_indices = (inputs, outputs)
 
     def train(self) -> TrainingResult:
         """Run the configured epoch loop and return its model and history."""
@@ -336,6 +326,115 @@ class Trainer:
         if state is None:
             raise RuntimeError("GRU input sequence must not be empty.")
         return torch.cat(predictions, dim=1), state, feedback_value
+
+
+def _feedback_indices(
+    dataset: Sequence[MappedTrainingSequence],
+    *,
+    input_feature: str,
+    output_feature: str,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Pair feedback columns by entity and validate every sequence layout."""
+
+    if not dataset:
+        raise ValueError("Feedback training requires at least one mapped sequence.")
+
+    reference = dataset[0]
+    reference_layout = _feedback_layout(
+        reference,
+        input_feature=input_feature,
+        output_feature=output_feature,
+    )
+    reference_inputs, reference_outputs, input_indices, output_indices = (
+        reference_layout
+    )
+    for sequence in dataset[1:]:
+        inputs, outputs, _, _ = _feedback_layout(
+            sequence,
+            input_feature=input_feature,
+            output_feature=output_feature,
+        )
+        if (inputs, outputs) != (reference_inputs, reference_outputs):
+            raise ValueError(
+                f"Sequence {sequence.name!r} feedback column layout differs from "
+                f"reference sequence {reference.name!r}; expected inputs "
+                f"{reference_inputs!r} and targets {reference_outputs!r}, got "
+                f"inputs {inputs!r} and targets {outputs!r}."
+            )
+    return input_indices, output_indices
+
+
+def _feedback_layout(
+    sequence: MappedTrainingSequence,
+    *,
+    input_feature: str,
+    output_feature: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[int, ...]]:
+    """Return ordered feedback columns and entity-paired tensor indices."""
+
+    input_columns, inputs_by_entity = _feedback_columns(
+        sequence.inputs.columns,
+        feature=input_feature,
+        role="input",
+        sequence_name=sequence.name,
+    )
+    output_columns, outputs_by_entity = _feedback_columns(
+        sequence.targets.columns,
+        feature=output_feature,
+        role="target",
+        sequence_name=sequence.name,
+    )
+    if not input_columns:
+        raise ValueError(
+            f"Sequence {sequence.name!r} has no feedback input columns ending "
+            f"in '/{input_feature}'."
+        )
+
+    input_entities = set(inputs_by_entity)
+    output_entities = set(outputs_by_entity)
+    if input_entities != output_entities:
+        missing_targets = sorted(input_entities - output_entities)
+        missing_inputs = sorted(output_entities - input_entities)
+        raise ValueError(
+            f"Sequence {sequence.name!r} feedback entities differ between inputs "
+            f"and targets; missing targets for {missing_targets!r}, missing inputs "
+            f"for {missing_inputs!r}."
+        )
+
+    input_indices = tuple(inputs_by_entity.values())
+    output_indices = tuple(outputs_by_entity[entity] for entity in inputs_by_entity)
+    return input_columns, output_columns, input_indices, output_indices
+
+
+def _feedback_columns(
+    columns: Iterable[object],
+    *,
+    feature: str,
+    role: str,
+    sequence_name: str,
+) -> tuple[tuple[str, ...], dict[str, int]]:
+    """Collect one feedback column index per entity in dataframe order."""
+
+    suffix = f"/{feature}"
+    selected: list[str] = []
+    by_entity: dict[str, int] = {}
+    for index, column in enumerate(columns):
+        if not isinstance(column, str) or not column.endswith(suffix):
+            continue
+        entity = column[: -len(suffix)]
+        if not entity:
+            raise ValueError(
+                f"Sequence {sequence_name!r} has a feedback {role} column "
+                f"without an entity prefix: {column!r}."
+            )
+        if entity in by_entity:
+            raise ValueError(
+                f"Sequence {sequence_name!r} has duplicate feedback {role} "
+                f"columns for entity {entity!r}."
+            )
+        selected.append(column)
+        by_entity[entity] = index
+    return tuple(selected), by_entity
 
 
 def _create_loss(config: LossConfig) -> nn.Module:

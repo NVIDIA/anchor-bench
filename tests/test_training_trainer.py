@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock, call
 
+import pandas as pd
 import pytest
 import torch
 from torch import nn
@@ -14,6 +15,7 @@ from anchor_bench.tasks.train import (
     BaseModel,
     FeatureNormalization,
     GruModel,
+    MappedTrainingSequence,
     ModelOutput,
     NormalizationStatistics,
     Trainer,
@@ -21,6 +23,38 @@ from anchor_bench.tasks.train import (
 )
 from anchor_bench.tasks.train.trainer import _create_loss, _create_optimizer
 from tests.test_training_data import _config_data, _sequence
+
+
+def _feedback_config() -> TrainingConfig:
+    config_data = _config_data()
+    config_data["input_features"]["feedback"] = None
+    config_data["training"]["feedback"] = {
+        "input": "feedback",
+        "output": "target",
+        "initial_value": 2.0,
+    }
+    return TrainingConfig.model_validate(config_data)
+
+
+def _feedback_sequence(
+    name: str,
+    *,
+    input_columns: tuple[str, ...] = (
+        "joint_a/feedback",
+        "joint_b/feedback",
+    ),
+    target_columns: tuple[str, ...] = (
+        "joint_b/target",
+        "joint_a/target",
+    ),
+) -> MappedTrainingSequence:
+    values = [0.0, 1.0, 2.0, 3.0]
+    return MappedTrainingSequence(
+        experiment=name,
+        name=name,
+        inputs=pd.DataFrame({column: values for column in input_columns}),
+        targets=pd.DataFrame({column: values for column in target_columns}),
+    )
 
 
 def test_registry_builds_the_configured_model() -> None:
@@ -382,3 +416,69 @@ def test_trainer_feeds_prior_prediction_into_configured_input() -> None:
 
     assert model.seen == [2.0, 3.0, 4.0]
     assert predictions.flatten().tolist() == [3.0, 4.0, 5.0]
+
+
+def test_trainer_pairs_reordered_feedback_targets_by_entity() -> None:
+    sequence = _feedback_sequence("reference")
+
+    trainer = Trainer(_feedback_config(), [sequence], device="cpu")
+
+    assert trainer.feedback_indices == ((0, 1), (1, 0))
+
+
+@pytest.mark.parametrize(
+    ("sequence", "message"),
+    [
+        (
+            _feedback_sequence(
+                "missing-input",
+                input_columns=(),
+            ),
+            "no feedback input columns",
+        ),
+        (
+            _feedback_sequence(
+                "missing-target",
+                target_columns=("joint_a/target",),
+            ),
+            "feedback entities differ",
+        ),
+        (
+            _feedback_sequence(
+                "different-entity",
+                target_columns=("joint_a/target", "joint_c/target"),
+            ),
+            "feedback entities differ",
+        ),
+    ],
+)
+def test_trainer_rejects_mismatched_feedback_entities(
+    sequence: MappedTrainingSequence,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Trainer(_feedback_config(), [sequence], device="cpu")
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        _feedback_sequence(
+            "reordered-inputs",
+            input_columns=("joint_b/feedback", "joint_a/feedback"),
+        ),
+        _feedback_sequence(
+            "reordered-targets",
+            target_columns=("joint_a/target", "joint_b/target"),
+        ),
+    ],
+)
+def test_trainer_rejects_reordered_feedback_layouts(
+    later: MappedTrainingSequence,
+) -> None:
+    with pytest.raises(ValueError, match="feedback column layout differs"):
+        Trainer(
+            _feedback_config(),
+            [_feedback_sequence("reference"), later],
+            device="cpu",
+        )
