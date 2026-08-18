@@ -107,6 +107,74 @@ def test_sine_and_chirp_modify_only_selected_actuators(config_data):
     np.testing.assert_allclose(positions[:, 1], 0.5)
 
 
+@pytest.mark.parametrize(
+    ("piece", "expected"),
+    [
+        (
+            {"type": "hold", "duration_s": 0.04, "pose": "target"},
+            [[1.0, 0.25], [1.0, 0.25]],
+        ),
+        (
+            {
+                "type": "transition",
+                "duration_s": 0.04,
+                "to": "target",
+                "interpolation": "linear",
+            },
+            [[0.0, 0.5], [1.0, 0.25]],
+        ),
+        (
+            {
+                "type": "sine",
+                "duration_s": 0.04,
+                "ramp_s": 0.0,
+                "components": [
+                    {
+                        "actuator": "shoulder",
+                        "amplitude": 1.0,
+                        "frequency_hz": 0.0,
+                        "phase_rad": np.pi / 2.0,
+                    }
+                ],
+            },
+            [[1.0, 0.5], [1.0, 0.5]],
+        ),
+        (
+            {
+                "type": "chirp",
+                "duration_s": 0.04,
+                "ramp_s": 0.0,
+                "components": [
+                    {
+                        "actuator": "shoulder",
+                        "amplitude": 1.0,
+                        "start_frequency_hz": 0.0,
+                        "end_frequency_hz": 0.0,
+                        "phase_rad": np.pi / 2.0,
+                    }
+                ],
+            },
+            [[1.0, 0.5], [1.0, 0.5]],
+        ),
+    ],
+)
+def test_short_piece_emits_one_sample_and_updates_current_pose(
+    config_data,
+    piece,
+    expected,
+):
+    data = deepcopy(config_data)
+    data["trajectories"][0]["pieces"] = [
+        piece,
+        {"type": "hold", "duration_s": 0.1},
+    ]
+    config = TrajectoryConfig.model_validate(data)
+
+    positions = generate_positions(config, config.trajectories[0])
+
+    np.testing.assert_allclose(positions, expected)
+
+
 def test_dataset_uses_command_only_actuator_shape(config_data):
     dataset = generate_dataset(TrajectoryConfig.model_validate(config_data))
 
