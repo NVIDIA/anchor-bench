@@ -249,9 +249,9 @@ uv run ruff format --check anchor_bench tests
 uv run pyright
 ```
 
-## Documentation status
+## Documentation
 
-The guides in [`docs/`](docs/) describe an earlier architecture and are
-outdated. Do not use them as instructions for the current package. Until they
-are rewritten, this README, the source code, and the tests are the sources of
-truth for implemented behavior.
+The [documentation index](docs/README.md) links to supported user guides and
+clearly identifies filenames retained only as archive markers. Start with the
+[trajectory generation guide](docs/trajectory.md) for a complete
+configuration, command, and `trajectories.parquet` output contract.
