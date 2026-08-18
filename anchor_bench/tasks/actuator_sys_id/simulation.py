@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from math import isclose
 from typing import ClassVar, Dict, List, Sequence, Tuple
 
@@ -14,6 +15,8 @@ from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
+
+logger = logging.getLogger(__name__)
 
 
 @wp.kernel
@@ -162,6 +165,12 @@ class NewtonPopulationEvaluator:
             self.num_envs,
             dtype=wp.float64,
             device=device,
+        )
+        logger.debug(
+            "Initialized device score accumulation device=%s worlds=%d joints=%d",
+            device,
+            self.num_envs,
+            len(self.joint_names),
         )
 
     def _builder_configuration_key(self, initial: Candidate) -> tuple[object, ...]:

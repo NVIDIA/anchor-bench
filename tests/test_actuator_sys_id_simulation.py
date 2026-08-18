@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -150,7 +151,11 @@ def test_actuator_config_rejects_dataset_timestep_mismatch(tmp_path):
         _config(tmp_path, dataset_dt=0.01)
 
 
-def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
+def test_newton_evaluator_uses_shared_simulation_context(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
     class FakeArray:
         def __init__(self, values):
             self.values = np.asarray(values, dtype=np.float32)
@@ -226,7 +231,8 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
         NewtonPopulationEvaluator, "_capture_step_graph", lambda self: graph
     )
 
-    evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
+    with caplog.at_level(logging.DEBUG, logger=simulation_module.__name__):
+        evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
 
     assert evaluator._simulation_context is context
     assert evaluator._simulation_context.control is context.control
@@ -240,6 +246,10 @@ def test_newton_evaluator_uses_shared_simulation_context(tmp_path, monkeypatch):
         "iterations": 10,
         "ls_iterations": 4,
     }
+    assert (
+        "Initialized device score accumulation device=cpu worlds=2 joints=1"
+        in caplog.text
+    )
 
 
 def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
