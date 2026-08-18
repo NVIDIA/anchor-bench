@@ -206,7 +206,7 @@ Newton adapter:
 ```python
 from anchor_bench.core import NewtonSimulationContext
 
-model, state = NewtonSimulationContext().load("robot.usda")
+model, state = NewtonSimulationContext("robot.usda").load()
 ```
 
 This adapter only constructs the Newton model and initial state; it does not run
