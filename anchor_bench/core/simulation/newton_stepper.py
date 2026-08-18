@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from math import isfinite
 
 import newton
 import warp as wp
+
+logger = logging.getLogger(__name__)
 
 
 class NewtonStepExecutor:
@@ -57,10 +60,23 @@ class NewtonStepExecutor:
         if self._graph is not None and self._graph_key == key:
             return
         if not self._supports_graph_capture():
+            logger.debug(
+                "Newton step graph capture unsupported; using eager stepping "
+                "dt=%s substeps=%d solver=%s",
+                dt,
+                substeps,
+                type(self._solver).__name__,
+            )
             self._graph = None
             self._graph_key = None
             return
 
+        logger.debug(
+            "Capturing Newton step graph dt=%s substeps=%d device=%s",
+            dt,
+            substeps,
+            self._model.device,
+        )
         with wp.ScopedCapture(device=self._model.device) as capture:
             self._simulate_interval(physics_dt, substeps)
         graph = capture.graph
@@ -68,6 +84,12 @@ class NewtonStepExecutor:
             raise RuntimeError("Warp did not return a captured simulation graph.")
         self._graph = graph
         self._graph_key = key
+        logger.debug(
+            "Captured Newton step graph dt=%s substeps=%d device=%s",
+            dt,
+            substeps,
+            self._model.device,
+        )
 
     def step(self, *, dt: float, substeps: int = 1) -> None:
         """Launch a matching captured graph or advance the interval eagerly."""

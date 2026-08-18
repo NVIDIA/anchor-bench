@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import Any, Callable, cast
 
@@ -151,6 +152,7 @@ def test_eager_steps_keep_the_current_state_canonical(substeps: int) -> None:
 @pytest.mark.parametrize("substeps", [2, 3])
 def test_captured_steps_reuse_canonical_state_and_live_controls(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     substeps: int,
 ) -> None:
     """Reuse stable state buffers and live controls in captured steps."""
@@ -174,7 +176,8 @@ def test_captured_steps_reuse_canonical_state_and_live_controls(
     )
     dt = 0.1 * substeps
 
-    executor.capture_graph(dt=dt, substeps=substeps)
+    with caplog.at_level(logging.DEBUG, logger=newton_stepper.__name__):
+        executor.capture_graph(dt=dt, substeps=substeps)
     assert state.value == 0.0
     executor.step(dt=dt, substeps=substeps)
     control.increment = 2.0
@@ -186,6 +189,8 @@ def test_captured_steps_reuse_canonical_state_and_live_controls(
     assert state.value == pytest.approx(3.0 * substeps)
     assert solver.steps == pytest.approx([0.1] * (2 * substeps))
     assert state.assign_count == (2 if substeps % 2 else 0)
+    assert "Capturing Newton step graph" in caplog.text
+    assert "Captured Newton step graph" in caplog.text
 
 
 def test_step_uses_eager_execution_without_a_matching_graph(
@@ -224,6 +229,7 @@ def test_step_uses_eager_execution_without_a_matching_graph(
     [(True, 1), (False, 2)],
 )
 def test_capture_falls_back_for_unsupported_solver_modes(
+    caplog: pytest.LogCaptureFixture,
     use_mujoco_cpu: bool,
     update_data_interval: int,
 ) -> None:
@@ -242,12 +248,14 @@ def test_capture_falls_back_for_unsupported_solver_modes(
         control=SimpleNamespace(increment=1.0),
     )
 
-    executor.capture_graph(dt=0.1)
+    with caplog.at_level(logging.DEBUG, logger=newton_stepper.__name__):
+        executor.capture_graph(dt=0.1)
     executor.step(dt=0.1)
 
     assert recorder.capture_count == 0
     assert executor.state is state
     assert state.value == 1.0
+    assert "graph capture unsupported; using eager stepping" in caplog.text
 
 
 @pytest.mark.parametrize(
