@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any, Dict, List
 
 import numpy as np
@@ -13,6 +12,7 @@ import pandas as pd
 
 from anchor_bench.train.data_processors.base import BaseDataProcessor
 from anchor_bench.train.utils import (
+    MuJoCoBiasEvaluator,
     friction_torque,
     position_error,
     solver_pd,
@@ -246,70 +246,13 @@ class DynamicBiasDataProcessor(BaseDataProcessor):
         entities = _feature_entities(self.dataset, "actual_q")
         _require_entity_columns(self.dataset, entities, ["actual_q", "actual_dq"])
         model = self.simulation_context.model
-
-        newton = import_module("newton")
-        mujoco = import_module("mujoco")
-        solver_type = getattr(getattr(newton, "solvers", None), "SolverMuJoCo", None)
-        if solver_type is None:
-            raise RuntimeError("qfrc_bias requires newton.solvers.SolverMuJoCo.")
-        solver = solver_type(model, use_mujoco_cpu=True, disable_contacts=True)
-        missing = [
-            name
-            for name in ("mj_model", "mj_data", "mj_q_start", "mj_qd_start")
-            if getattr(solver, name, None) is None
-        ]
-        if missing:
-            raise RuntimeError(
-                "qfrc_bias requires SolverMuJoCo model access; missing: "
-                + ", ".join(missing)
-                + "."
-            )
-
-        labels = list(model.joint_label)
-        joint_indices = [labels.index(entity) for entity in entities]
-        mj_q_start = np.asarray(solver.mj_q_start.numpy(), dtype=np.int64)
-        mj_qd_start = np.asarray(solver.mj_qd_start.numpy(), dtype=np.int64)
-        q_addresses = np.asarray(
-            [mj_q_start[index] for index in joint_indices],
-            dtype=np.int64,
-        )
-        qd_addresses = np.asarray(
-            [mj_qd_start[index] for index in joint_indices],
-            dtype=np.int64,
-        )
-        if np.any(q_addresses < 0) or np.any(qd_addresses < 0):
-            raise ValueError("qfrc_bias entities must have MuJoCo coordinates.")
-
-        joint_qd_start = np.asarray(model.joint_qd_start.numpy(), dtype=np.int64)
-        dof_addresses = np.asarray(
-            [joint_qd_start[index] for index in joint_indices],
-            dtype=np.int64,
-        )
-        dof_ref_source = getattr(getattr(model, "mujoco", None), "dof_ref", None)
-        dof_ref = (
-            np.zeros(int(model.joint_dof_count), dtype=np.float64)
-            if dof_ref_source is None
-            else np.asarray(dof_ref_source.numpy(), dtype=np.float64)
-        )
-
         positions = self.dataset[_entity_columns(entities, ["actual_q"])].to_numpy(
             dtype=np.float64, copy=False
         )
         velocities = self.dataset[_entity_columns(entities, ["actual_dq"])].to_numpy(
             dtype=np.float64, copy=False
         )
-        default_qpos = np.array(solver.mj_data.qpos, dtype=np.float64, copy=True)
-        values = np.empty((len(self.dataset), len(entities)), dtype=np.float64)
-        for row in range(len(self.dataset)):
-            solver.mj_data.qpos[:] = default_qpos
-            solver.mj_data.qvel[:] = 0.0
-            solver.mj_data.qpos[q_addresses] = positions[row] + dof_ref[dof_addresses]
-            solver.mj_data.qvel[qd_addresses] = velocities[row]
-            mujoco.mj_forward(solver.mj_model, solver.mj_data)
-            values[row] = solver.mj_data.qfrc_bias[qd_addresses]
-
-        if not np.all(np.isfinite(values)):
-            raise ValueError("SolverMuJoCo produced non-finite qfrc_bias values.")
+        values = MuJoCoBiasEvaluator(model, entities).evaluate(positions, velocities)
         return pd.DataFrame(
             values,
             columns=pd.Index(

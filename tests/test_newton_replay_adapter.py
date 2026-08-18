@@ -214,3 +214,50 @@ def test_adapter_uses_layout_aware_position_target_index() -> None:
     adapter._write_control({"joint": 3.0}, {})
 
     assert adapter._control.joint_target_q.numpy().tolist() == [3.0]
+
+
+def test_adapter_uses_shared_single_state_bias_evaluator(
+    fake_newton: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cache one shared-helper evaluation for repeated reads of a replay state."""
+
+    calls: list[tuple[dict[str, float], dict[str, float]]] = []
+
+    class FakeBiasEvaluator:
+        def __init__(
+            self,
+            model: object,
+            entities: tuple[str, ...],
+            *,
+            solver_type: type[FakeSolver],
+        ) -> None:
+            assert entities == ("joint",)
+            assert solver_type is FakeSolver
+
+        def evaluate_state(
+            self,
+            position: dict[str, float],
+            velocity: dict[str, float],
+        ) -> dict[str, float]:
+            calls.append((position, velocity))
+            return {"joint": position["joint"] + 2.0 * velocity["joint"]}
+
+    monkeypatch.setattr(newton_replay_adapter, "MuJoCoBiasEvaluator", FakeBiasEvaluator)
+    adapter = _NewtonReplayAdapter(
+        _context(),
+        output_joints=("joint",),
+        residual=True,
+        substeps=1,
+    )
+    state = newton_replay_adapter._ReplayState(
+        position={"joint": 3.0},
+        velocity={"joint": 4.0},
+    )
+
+    first = adapter.dynamic_bias("joint", state)
+    second = adapter.dynamic_bias("joint", state)
+
+    assert first == 11.0
+    assert second == 11.0
+    assert calls == [({"joint": 3.0}, {"joint": 4.0})]

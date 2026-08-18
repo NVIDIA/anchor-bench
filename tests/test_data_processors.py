@@ -13,7 +13,9 @@ import pytest
 
 from anchor_bench.core import SimulationContext
 from anchor_bench.train import BaseDataProcessor
+from anchor_bench.train.data_processors import gru
 from anchor_bench.train.data_processors.gru import (
+    DynamicBiasDataProcessor,
     PositionErrorDataProcessor,
     PreviousTorqueDataProcessor,
     ResidualTorqueDataProcessor,
@@ -236,3 +238,47 @@ def test_previous_torque_shifts_within_each_experiment() -> None:
     assert result["shoulder/previous_torque"].tolist() == [0.0, 1.0, 0.0, 10.0]
     assert result["elbow/previous_torque"].tolist() == [0.0, 3.0, 0.0, 30.0]
     assert result.index.equals(dataset.index)
+
+
+def test_dynamic_bias_data_processor_uses_shared_batch_evaluator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass recorded entity states through the shared MuJoCo evaluator."""
+
+    dataset = pd.DataFrame(
+        {
+            "shoulder/actual_q": [1.0, 2.0],
+            "shoulder/actual_dq": [0.5, 1.5],
+            "elbow/actual_q": [3.0, 4.0],
+            "elbow/actual_dq": [2.5, 3.5],
+        },
+        index=pd.Index(["sample-a", "sample-b"]),
+    )
+    calls: list[tuple[tuple[str, ...], np.ndarray, np.ndarray]] = []
+
+    class FakeBiasEvaluator:
+        def __init__(self, model: object, entities: list[str]) -> None:
+            self.entities = tuple(entities)
+
+        def evaluate(
+            self,
+            positions: np.ndarray,
+            velocities: np.ndarray,
+        ) -> np.ndarray:
+            calls.append((self.entities, positions.copy(), velocities.copy()))
+            return positions + velocities
+
+    monkeypatch.setattr(gru, "MuJoCoBiasEvaluator", FakeBiasEvaluator)
+
+    result = DynamicBiasDataProcessor(dataset).process()
+
+    assert result.columns.tolist() == [
+        "shoulder/qfrc_bias",
+        "elbow/qfrc_bias",
+    ]
+    np.testing.assert_allclose(result.to_numpy(), [[1.5, 5.5], [3.5, 7.5]])
+    assert len(calls) == 1
+    entities, positions, velocities = calls[0]
+    assert entities == ("shoulder", "elbow")
+    np.testing.assert_allclose(positions, [[1.0, 3.0], [2.0, 4.0]])
+    np.testing.assert_allclose(velocities, [[0.5, 2.5], [1.5, 3.5]])
