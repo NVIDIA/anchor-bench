@@ -8,6 +8,7 @@ from typing import ClassVar, Dict, List, Sequence, Tuple
 
 import newton
 import numpy as np
+import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.core.simulation.registry import create_simulation_context
@@ -319,6 +320,7 @@ class NewtonPopulationEvaluator:
             outputs=[self._score_sums],
             device=self._device,
         )
+
     def _reset(self, measured_position: np.ndarray) -> None:
         joint_q = np.array(self._base_q, copy=True)
         joint_qd = np.array(self._base_qd, copy=True)

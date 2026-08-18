@@ -7,6 +7,7 @@ from typing import Any, cast
 import newton
 import numpy as np
 import pytest
+import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
