@@ -37,6 +37,12 @@ dev = [
 [project.scripts]
 anchor-bench = "anchor_bench.cli:main"
 
+[tool.uv]
+# Required, not redundant: the Black Duck OSS scanner only activates its uv
+# detector when pyproject.toml declares a [tool.uv] section. Removing this
+# makes the nSpect dependency scan fail with FAILURE_DETECTOR.
+managed = true
+
 [tool.setuptools.packages.find]
 include = ["anchor_bench*"]
 
