@@ -14,6 +14,7 @@ from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     EpochLoss,
     MappedTrainingSequence,
+    TrainingDataSplit,
     TrainingResult,
     TrainingTask,
     fit_normalization,
@@ -102,7 +103,9 @@ def test_search_trains_trials_and_retains_best_model(
             checkpoint_directories.append(checkpoint_directory)
             report_metrics_values.append(report_metrics)
             checkpoint_collections.append(checkpoint_collection)
-            self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
+            self.data_loaders = SimpleNamespace(
+                split=TrainingDataSplit((), tuple(sequences), ())
+            )
 
         def train(self) -> TrainingResult:
             value = float(self.config.model.hidden_size)
@@ -145,7 +148,7 @@ def test_search_trains_trials_and_retains_best_model(
         == result.best_parameters["model.hidden_size"]
     )
     assert result.training_result.model.search_value == result.best_value
-    assert result.validation_sequences == tuple(dataset)
+    assert result.split.validation == tuple(dataset)
     assert mlops_run.log_metrics.call_count == 3
     assert [entry.kwargs["step"] for entry in mlops_run.log_metrics.call_args_list] == [
         0,
@@ -182,7 +185,9 @@ def test_search_prunes_non_finite_loss_before_tracking_trial(
             report_metrics: bool,
             checkpoint_collection: str,
         ) -> None:
-            self.data_loaders = SimpleNamespace(validation_sequences=tuple(sequences))
+            self.data_loaders = SimpleNamespace(
+                split=TrainingDataSplit((), tuple(sequences), ())
+            )
 
         def train(self) -> TrainingResult:
             value = next(validation_losses)

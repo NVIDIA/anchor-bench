@@ -26,6 +26,7 @@ from anchor_bench.tasks.base_task import BaseTask
 from anchor_bench.tasks.train.data_processor_runner import DataProcessorRunner
 
 if TYPE_CHECKING:
+    from anchor_bench.tasks.train.data import TrainingDataSplit
     from anchor_bench.tasks.train.trainer import TrainingResult
 
 TRAJECTORIES_FILENAME = "trajectories.parquet"
@@ -66,13 +67,25 @@ class SearchResult:
 
     training_result: TrainingResult
     best_config: TrainingConfig
-    validation_sequences: tuple[MappedTrainingSequence, ...]
+    split: TrainingDataSplit
     objective_metric: str
     objective_direction: str
     best_trial: int
     best_value: float
     best_parameters: Mapping[str, Any]
     trials: tuple[SearchTrial, ...]
+
+    @property
+    def validation_sequences(self) -> tuple[MappedTrainingSequence, ...]:
+        """Return complete checkpoint-selection sequences."""
+
+        return self.split.validation
+
+    @property
+    def test_sequences(self) -> tuple[MappedTrainingSequence, ...]:
+        """Return complete final-held-out sequences."""
+
+        return self.split.test
 
 
 class TrainingTask(BaseTask[TrainingConfig]):
@@ -137,20 +150,24 @@ class TrainingTask(BaseTask[TrainingConfig]):
                 checkpoint_directory=output_directory / "checkpoints",
             )
             result = trainer.train()
-            validation_sequences = trainer.data_loaders.validation_sequences
+            split = trainer.data_loaders.split
             artifact_config = self.config
         else:
             search_result = self._search(sequences, output_directory)
             result = search_result.training_result
-            validation_sequences = search_result.validation_sequences
+            split = search_result.split
             artifact_config = search_result.best_config
 
         from anchor_bench.tasks.train.data import create_validation_dataset
         from anchor_bench.tasks.train.validator_runner import ValidatorRunner
 
+        evaluation_split = "test" if split.test else "validation"
+        evaluation_sequences = (
+            split.test if evaluation_split == "test" else split.validation
+        )
         validation_dataset = create_validation_dataset(
             dataset,
-            validation_sequences,
+            evaluation_sequences,
         )
 
         validation_model = result.normalization.wrap(result.model)
@@ -169,6 +186,8 @@ class TrainingTask(BaseTask[TrainingConfig]):
             artifact_config,
             output_directory,
             search_result=search_result,
+            data_split=split,
+            evaluation_split=evaluation_split,
         )
         trajectories_path = output_directory / TRAJECTORIES_FILENAME
         self._write_trajectories(sequences, trajectories_path)
@@ -177,7 +196,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         # run-global step backwards; the completed directory is uploaded last.
         if mlops_run is not None:
             validation_metrics = {
-                f"validation/{validation.name}/{name}": float(value)
+                f"{evaluation_split}/{validation.name}/{name}": float(value)
                 for validation in validation_results
                 for name, value in validation.metrics.items()
             }
@@ -227,7 +246,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
                 float,
                 TrainingResult,
                 TrainingConfig,
-                tuple[MappedTrainingSequence, ...],
+                TrainingDataSplit,
                 Mapping[str, Any],
                 int,
             ]
@@ -274,7 +293,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
                     value,
                     result,
                     trial_config,
-                    trainer.data_loaders.validation_sequences,
+                    trainer.data_loaders.split,
                     parameters,
                     trial.number,
                 )
@@ -285,7 +304,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         if best is None:
             raise RuntimeError("Hyperparameter search did not complete any trials.")
 
-        value, result, config, held_out, parameters, trial_number = best
+        value, result, config, split, parameters, trial_number = best
         logger.info(
             "Completed training search completed_trials=%d best_trial=%d/%d "
             "best_value=%g",
@@ -297,7 +316,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         return SearchResult(
             training_result=result,
             best_config=config,
-            validation_sequences=held_out,
+            split=split,
             objective_metric=search.objective.metric,
             objective_direction=search.objective.direction,
             best_trial=trial_number,

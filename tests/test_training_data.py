@@ -168,6 +168,51 @@ def test_data_loaders_hold_out_complete_experiments() -> None:
     assert targets.shape == (3, 2, 1)
 
 
+def test_data_loaders_apply_explicit_validation_and_test_experiments() -> None:
+    """Reserve named validation and test experiments without random selection."""
+
+    config_data = _config_data()
+    config_data["training"].pop("validation_ratio")
+    config_data["training"]["split"] = {
+        "validation_experiments": ["validation"],
+        "test_experiments": ["test"],
+    }
+    config = TrainingConfig.model_validate(config_data)
+    loaders = create_data_loaders(
+        [
+            _sequence("training-a", [0.0, 1.0]),
+            _sequence("validation", [2.0, 3.0]),
+            _sequence("training-b", [4.0, 5.0]),
+            _sequence("test", [6.0, 7.0]),
+        ],
+        config,
+    )
+
+    assert [sequence.experiment for sequence in loaders.split.training] == [
+        "training-a",
+        "training-b",
+    ]
+    assert [sequence.experiment for sequence in loaders.split.validation] == [
+        "validation"
+    ]
+    assert [sequence.experiment for sequence in loaders.split.test] == ["test"]
+
+
+def test_data_loaders_reject_missing_explicit_experiments() -> None:
+    """Fail clearly when a configured held-out experiment is absent."""
+
+    config_data = _config_data()
+    config_data["training"].pop("validation_ratio")
+    config_data["training"]["split"] = {
+        "validation_experiments": ["missing-validation"],
+        "test_experiments": ["missing-test"],
+    }
+    config = TrainingConfig.model_validate(config_data)
+
+    with pytest.raises(ValueError, match="missing from mapped sequences"):
+        create_data_loaders([_sequence("training", [0.0, 1.0])], config)
+
+
 def test_data_loaders_fit_standard_normalization_on_training_split_only() -> None:
     """Fit training statistics and retain held-out sequences in physical units."""
 

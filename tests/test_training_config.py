@@ -174,6 +174,64 @@ def test_optional_metadata_and_search_can_be_omitted(valid_config_data):
     assert config.search is None
 
 
+def test_training_can_select_explicit_validation_and_test_experiments(
+    valid_config_data,
+):
+    """Accept disjoint named experiments instead of a random validation ratio."""
+
+    data = deepcopy(valid_config_data)
+    data["training"].pop("validation_ratio")
+    data["training"]["split"] = {
+        "validation_experiments": ["checkpoint-motion"],
+        "test_experiments": ["final-motion"],
+    }
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.training.validation_ratio is None
+    assert config.training.split is not None
+    assert config.training.split.validation_experiments == ["checkpoint-motion"]
+    assert config.training.split.test_experiments == ["final-motion"]
+
+
+def test_training_rejects_overlapping_validation_and_test_experiments(
+    valid_config_data,
+):
+    """Keep checkpoint selection and final evaluation strictly disjoint."""
+
+    data = deepcopy(valid_config_data)
+    data["training"].pop("validation_ratio")
+    data["training"]["split"] = {
+        "validation_experiments": ["shared-motion"],
+        "test_experiments": ["shared-motion"],
+    }
+
+    with pytest.raises(ValidationError, match="must be disjoint"):
+        TrainingConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("keep_ratio", [False, True])
+def test_training_requires_exactly_one_split_strategy(
+    valid_config_data,
+    keep_ratio,
+):
+    """Reject missing or ambiguous experiment split configuration."""
+
+    data = deepcopy(valid_config_data)
+    if not keep_ratio:
+        data["training"].pop("validation_ratio")
+    else:
+        data["training"]["split"] = {
+            "validation_experiments": ["checkpoint-motion"],
+            "test_experiments": ["final-motion"],
+        }
+
+    with pytest.raises(
+        ValidationError, match="exactly one of validation_ratio or split"
+    ):
+        TrainingConfig.model_validate(data)
+
+
 def test_mlops_backend_can_be_configured_by_name(valid_config_data):
     data = deepcopy(valid_config_data)
     data["mlops"] = {

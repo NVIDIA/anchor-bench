@@ -14,6 +14,7 @@ from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.tasks.train import (
     MappedTrainingSequence,
+    TrainingDataSplit,
     TrainingTask,
     ValidationDataset,
 )
@@ -228,7 +229,9 @@ def test_training_task_runs_loader_data_processor_then_mapping(
             assert training_config is config
             assert checkpoint_directory.name == "checkpoints"
             prepared.extend(dataset)
-            self.data_loaders = SimpleNamespace(validation_sequences=tuple(dataset))
+            self.data_loaders = SimpleNamespace(
+                split=TrainingDataSplit((), tuple(dataset), ())
+            )
 
         def train(self) -> SimpleNamespace:
             """Record training execution."""
@@ -264,11 +267,15 @@ def test_training_task_runs_loader_data_processor_then_mapping(
         output_directory: object,
         *,
         search_result: object = None,
+        data_split: TrainingDataSplit,
+        evaluation_split: str,
     ) -> Path:
         """Record validation result persistence."""
 
         assert received_validation_results is validation_results
         assert (search_result is None) == (search_trials is None)
+        assert data_split.validation == tuple(prepared)
+        assert evaluation_split == "validation"
         events.append("save")
         return tmp_path / "artifacts"
 
@@ -289,7 +296,7 @@ def test_training_task_runs_loader_data_processor_then_mapping(
             )
             return SimpleNamespace(
                 training_result=training_result,
-                validation_sequences=tuple(dataset),
+                split=TrainingDataSplit((), tuple(dataset), ()),
                 best_config=config,
             )
 
@@ -402,7 +409,9 @@ def test_training_task_initializes_simulation_for_validators(
         ) -> None:
             """Accept the prepared training inputs."""
 
-            self.data_loaders = SimpleNamespace(validation_sequences=tuple(dataset))
+            self.data_loaders = SimpleNamespace(
+                split=TrainingDataSplit((), tuple(dataset), ())
+            )
             assert checkpoint_directory.name == "checkpoints"
 
         def train(self) -> SimpleNamespace:
@@ -453,25 +462,46 @@ def test_task_runner_registers_and_runs_training(
         "anchor_bench.tasks.train.task.create_simulation_context",
         lambda backend, path, *, fixed_base: object(),
     )
+    evaluated = []
+
+    def validate(validators, *, model, validation_dataset):
+        """Record the final-held-out dataset selected by the task."""
+
+        evaluated.append(validation_dataset)
+        return []
+
     monkeypatch.setattr(
         "anchor_bench.tasks.train.validator_runner.ValidatorRunner.run",
-        lambda validators, *, model, validation_dataset: [],
+        validate,
     )
 
     timestamps = [index * 20_000_000 for index in range(12)]
     dataset = pd.DataFrame(
-        {
-            "experiment": ["wave"] * 24,
-            "time_ns": timestamps * 2,
-            "field": ["shoulder/actual_q"] * 12 + ["shoulder/actual_effort"] * 12,
-            "value": [float(value) for value in range(12)]
-            + [float(value + 1) for value in range(12)],
-        }
+        [
+            {
+                "experiment": experiment,
+                "time_ns": timestamp,
+                "field": f"shoulder/{feature}",
+                "value": float(index + offset),
+            }
+            for experiment, offset in (
+                ("training", 0),
+                ("checkpoint", 100),
+                ("final", 200),
+            )
+            for feature in ("actual_q", "actual_effort")
+            for index, timestamp in enumerate(timestamps)
+        ]
     )
     dataset_path = tmp_path / "training.parquet"
     dataset.to_parquet(dataset_path)
     config_data = _config_data(str(dataset_path))
     config_data["input_features"] = {"actual_q": None}
+    config_data["training"].pop("validation_ratio")
+    config_data["training"]["split"] = {
+        "validation_experiments": ["checkpoint"],
+        "test_experiments": ["final"],
+    }
     config_data["mapping"] = {
         "shoulder": {"inputs": ["shoulder"], "outputs": ["shoulder"]}
     }
@@ -486,8 +516,15 @@ def test_task_runner_registers_and_runs_training(
     assert (output_directory / ".completed").is_file()
     assert (output_directory / "model.pt").is_file()
     assert (output_directory / "history.yaml").is_file()
-    assert (output_directory / "validation.yaml").is_file()
+    assert not (output_directory / "validation.yaml").exists()
+    assert (output_directory / "test.yaml").is_file()
+    assert yaml.safe_load((output_directory / "splits.yaml").read_text()) == {
+        "training": ["training"],
+        "validation": ["checkpoint"],
+        "test": ["final"],
+    }
     assert (output_directory / "metadata.yaml").is_file()
+    assert [sequence.experiment for sequence in evaluated[0].sequences] == ["final"]
     assert trajectories["mapping"].drop_duplicates().tolist() == ["shoulder"]
     assert trajectories.loc[
         trajectories["kind"] == "input", "feature"
