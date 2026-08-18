@@ -3,144 +3,31 @@
 [![Tests](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml/badge.svg?branch=refactor-main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
 [![Coverage](/../badges/badges/coverage.svg)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
 
-Anchor Bench is an early-stage, configuration-driven Python package for robot
-actuator tooling.
+Anchor Bench is an early-stage, configuration-driven toolkit for robot actuator
+workflows. It validates a YAML task, runs the corresponding implementation, and
+writes reproducible artifacts to a dedicated output directory.
 
-The currently implemented functionality is limited to:
+The current task types are:
 
-- parsing and strictly validating `actuator_sys_id`, `trajectory_v1`, and
-  `training` YAML configurations;
-- dispatching validated configurations through the task runner;
-- generating piecewise actuator command trajectories as Parquet datasets;
-- loading local or HTTP(S) Parquet datasets and resampling their signals onto a
-  uniform time grid;
-- preparing mapped training trajectories as Parquet artifacts;
-- loading a USD model and its initial state through the optional Newton runtime;
-  and
-- tracking portable run parameters, metrics, tags, and artifacts through the
-  bundled MLflow backend or custom backends injected into a task runner.
+| Task type | Purpose |
+| --- | --- |
+| `trajectory_v1` | Generate piecewise actuator command trajectories. |
+| `actuator_sys_id` | Fit actuator parameters by replaying recorded data in replicated Newton worlds. |
+| `training` | Prepare mapped trajectories and train recurrent actuator models. |
 
-The actuator system-identification pipeline fits actuator parameters by
-evaluating CMA-ES populations in replicated Newton worlds and writes the best
-parameters and optimization history to the task output directory.
+Anchor Bench also provides a Parquet dataset loader, a Newton USD adapter, and
+optional run tracking through the bundled MLflow backend.
 
-## Installation
+## Quick start
 
-Anchor Bench requires Python 3.10 or newer because Newton requires Python
-3.10+. Python 3.12 is recommended because it matches Isaac Lab's recommended
-Python version. The repository's `.python-version` configures uv to use Python
-3.12 by default.
-
-Anchor Bench uses [uv](https://docs.astral.sh/uv/) for environment and
-dependency management. From the repository root, create the environment and
-install the package:
+Anchor Bench requires Python 3.10 or newer and uses
+[uv](https://docs.astral.sh/uv/) for its environment and dependencies:
 
 ```bash
 uv sync
 ```
 
-Install the optional Newton dependency to use `NewtonSimulationContext`:
-
-```bash
-uv sync --extra simulation
-```
-
-For development, install the test and quality-check dependencies:
-
-```bash
-uv sync --extra dev
-```
-
-The default installation includes the bundled MLflow backend and its tracking
-SDK. See the [MLOps backend guide](docs/mlops.md) for the shared API, opt-in
-task-run lifecycle, task configuration, and backend contract.
-
-## Command-line usage
-
-The command-line interface accepts one YAML configuration file:
-
-```bash
-uv run anchor-bench --config path/to/config.yaml
-```
-
-Successful tasks write a `.completed` marker in their output directory. A
-later invocation with the same configuration skips the task while that marker
-is present. Pass `--force` to run it again:
-
-```bash
-uv run anchor-bench --config path/to/config.yaml --force
-```
-
-By default, task artifacts are written to a generated hash folder. Pass
-`--output` to use a specific folder instead:
-
-```bash
-uv run anchor-bench --config path/to/config.yaml --output path/to/artifacts
-```
-
-Task lifecycle and rate-limited progress logs are written to standard error at
-the `INFO` level. Pass `--verbose` (`-v`) for per-step debug output or `--quiet`
-(`-q`) to emit errors only. The two options are mutually exclusive.
-
-Use `--help` to display the available options:
-
-```bash
-uv run anchor-bench --help
-```
-
-The `actuator_sys_id`, `trajectory_v1`, and `training` configuration types are
-registered. A
-minimal actuator configuration looks like this:
-
-```yaml
-type: actuator_sys_id
-joint_parameters:
-  - names: [hip]
-    controller:
-      type: pd
-      clamps:
-        effort_limit: 120.0
-        velocity_limit: 30.0
-      stiffness: {lower: 1.0, upper: 100.0, initial: 20.0}
-      damping: {lower: 0.0, upper: 10.0}
-    parameters:
-      dry_friction: {lower: 0.0, upper: 1.0}
-      viscous_friction: {lower: 0.0, upper: 1.0}
-      armature: {lower: 0.0, upper: 0.1}
-optimizer:
-  type: python-cmaes
-  sigma: 0.5
-  max_iterations: 100
-  epsilon: 0.001
-simulation:
-  type: newton
-  usd_path: assets/robots/test.usd
-  physics_freq: 1000
-  control_freq: 200
-  render_freq: 60
-  solver:
-    type: warp_mujoco
-    solver_iterations: 10
-    line_search_iterations: 4
-dataset:
-  type: parquet
-  source: runs/actuator.parquet
-  # Optional: translate Parquet joint prefixes to the names authored in the USD.
-  joint_name_mapping:
-    recorded_hip: hip
-  resampling:
-    type: uniform
-    dt: 0.005
-```
-
-Configuration objects are strict: unknown fields, coerced values, invalid
-bounds, and unsupported `type` values are rejected.
-
-## Trajectory generation
-
-The `trajectory_v1` task generates ordered hold, transition, sine, and linear
-chirp pieces. The supplied actuator order defines every pose array and the
-output field order. For example:
+Run the included trajectory example:
 
 ```bash
 uv run anchor-bench \
@@ -148,20 +35,41 @@ uv run anchor-bench \
   --output outputs/so101_motion_pack
 ```
 
-The task writes `trajectories.parquet` in the long-form actuator dataset shape:
-`time_ns`, `time_utc`, `experiment`, `field`, and `value`. It contains only
-`<actuator>/command_q` fields. Synthetic time begins at the Unix epoch for each
-trajectory, making both timestamp columns deterministic. Piece durations are
-converted to sample counts with Python's round-to-nearest, ties-to-even
-behavior, and transition endpoints are excluded so the next piece begins at
-the exact target pose. A nonzero `ramp_s` applies a linear fade-in and fade-out
-envelope to sine and chirp offsets.
+The command validates the configuration and writes `config.yaml`,
+`trajectories.parquet`, and a `.completed` marker under the selected output
+directory. See [Running tasks](docs/running-tasks.md) for output selection,
+rerunning completed tasks, configuration behavior, and logging controls.
 
-## Dataset loading
+Task lifecycle and rate-limited progress logs are written to standard error.
+Pass `--verbose` (`-v`) for debug output or `--quiet` (`-q`) for errors only.
 
-`DatasetLoader` reads Parquet data from a local path or an HTTP(S) URL and
-linearly resamples each experiment over the time range shared by all its
-signals:
+Install the simulation components for workflows that import or run Newton
+models:
+
+```bash
+uv sync --extra simulation
+```
+
+Install contributor tools with:
+
+```bash
+uv sync --extra dev
+```
+
+## Documentation
+
+The [documentation index](docs/README.md) organizes the supported guides by
+workflow. Good starting points are:
+
+- [Trajectory generation](docs/trajectory.md)
+- [Actuator system identification](docs/system-identification.md)
+- [Training actuator models](docs/training.md)
+- [Dataset loading](docs/datasets.md)
+- [MLOps backends](docs/mlops.md)
+
+## Python API
+
+Load and uniformly resample a long-form Parquet dataset:
 
 ```python
 from anchor_bench.data import DatasetLoader
@@ -169,43 +77,7 @@ from anchor_bench.data import DatasetLoader
 dataset = DatasetLoader.load("recording.parquet", dt=0.02)
 ```
 
-Input data must contain `time_ns`, `experiment`, `field`, and `value` columns.
-When Parquet and USD joint names differ, set `dataset.joint_name_mapping` from
-each Parquet joint prefix to its USD joint name. The mapping is partial: joint
-prefixes not listed there remain unchanged. The USD name (the mapping value) is
-the canonical name used internally and must also be used in
-`joint_parameters[].names`. For example, `recorded_hip: hip` converts
-`recorded_hip/actual_q` to `hip/actual_q`, and the corresponding joint parameter
-group must contain `names: [hip]`.
-
-Multiple aliases may map to the same USD joint when loading a Parquet glob:
-
-```yaml
-dataset:
-  source: recordings/*.parquet
-  joint_name_mapping:
-    recorded_hip: hip
-    HIP: hip
-    Hip: hip
-```
-
-This supports files or experiments that use different aliases. Within one
-experiment, however, only one alias may identify a given USD joint. If multiple
-source aliases in the same experiment map to the same field, the loader reports
-a conflict instead of silently merging their samples.
-
-The returned data frame uses `(experiment, time_ns)` as its index and one column
-per signal field.
-
-The training task maps those signal columns into recurrent input and target
-trajectories and writes them to `trajectories.parquet` in its output directory.
-The artifact is long-form, with `sequence`, `mapping`, `kind`, `experiment`,
-`time_ns`, `feature`, and `value` columns.
-
-## Newton model loading
-
-After installing the `simulation` extra, a USD model can be loaded through the
-Newton adapter:
+After installing the `simulation` extra, load a USD model and its initial state:
 
 ```python
 from anchor_bench.core import NewtonSimulationContext
@@ -225,33 +97,23 @@ The `state` property is the canonical input and current-result buffer. The
 `state_next` property is the stable output buffer used while computing a step;
 after each complete interval, the current result is available through `state`.
 
-## Testing and quality checks
+`NewtonSimulationContext.load()` constructs the model and state; it does not
+run a simulation.
 
-Run the unit test suite with coverage:
+## Development
+
+Run the default unit suite and static checks from the repository root:
 
 ```bash
-uv run pytest --cov=anchor_bench --cov-report=term-missing
+uv run pytest
+uv run ruff check
+uv run ruff format --check
+uv run pyright
 ```
 
-Tests marked `integration` are excluded by default because they download an
-external dataset and exercise the dataset-loading workflow. Run them explicitly
-with network access:
+Tests marked `integration` are excluded by default. Run them explicitly when
+the required external data and runtime are available:
 
 ```bash
 uv run pytest -m integration
 ```
-
-Run the same static checks used by CI:
-
-```bash
-uv run ruff check anchor_bench tests
-uv run ruff format --check anchor_bench tests
-uv run pyright
-```
-
-## Documentation
-
-The [documentation index](docs/README.md) links to supported user guides and
-clearly identifies filenames retained only as archive markers. Start with the
-[trajectory generation guide](docs/trajectory.md) for a complete
-configuration, command, and `trajectories.parquet` output contract.

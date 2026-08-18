@@ -6,31 +6,25 @@ model or run a simulation.
 
 ## Run the included example
 
-From the repository root, install the package and run the example into a named
-output directory:
+From the repository root, run the example into a named output directory:
 
 ```bash
-uv sync
 uv run anchor-bench \
   --config examples/so101_motion_pack.yaml \
-  --output output/so101_motion_pack
+  --output outputs/so101_motion_pack
 ```
 
 A successful run creates:
 
 ```text
-output/so101_motion_pack/
+outputs/so101_motion_pack/
   config.yaml
   trajectories.parquet
   .completed
 ```
 
-`config.yaml` is the validated configuration used for the run. The
-`.completed` marker is written only after the task succeeds. Repeating the same
-command skips the completed output; add `--force` to regenerate it.
-
-If `--output` is omitted, Anchor Bench uses `output/<config-hash>/` from the
-repository root.
+`config.yaml` and `.completed` follow the common task artifact contract. See
+[Running tasks](running-tasks.md) for default output paths and rerun behavior.
 
 ## Configuration
 
@@ -119,7 +113,7 @@ indexed representation is needed:
 from anchor_bench.data import DatasetLoader
 
 dataset = DatasetLoader.load(
-    "output/so101_motion_pack/trajectories.parquet",
+    "outputs/so101_motion_pack/trajectories.parquet",
     dt=0.02,
 )
 ```

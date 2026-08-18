@@ -1,34 +1,27 @@
 # Anchor Bench documentation
 
-These pages describe the configuration-driven Anchor Bench package on the
-current `main` branch.
+These guides document the interfaces implemented by the current codebase.
 
-## Supported guides
+## Start here
 
-- [Project README](../README.md): installation, the `anchor-bench` command,
-  registered task types, dataset loading, Newton model loading, and development
-  checks.
-- [Trajectory generation](trajectory.md): configure and run a `trajectory_v1`
-  task and consume its `trajectories.parquet` artifact.
-- [MLOps backends](mlops.md): configure MLflow tracking or inject a custom
-  backend into `TaskRunner`.
+- [Project overview and installation](../README.md)
+- [Running tasks](running-tasks.md): invoke the CLI, select an output directory,
+  and understand completion markers.
 
-The complete trajectory example is
-[`examples/so101_motion_pack.yaml`](../examples/so101_motion_pack.yaml).
-Integration-specific G1 training fixtures are documented beside their tests in
-[`tests/integration/g1/README.md`](../tests/integration/g1/README.md).
+## Task guides
 
-## Archived pages
+- [Trajectory generation](trajectory.md): configure hold, transition, sine, and
+  chirp pieces. A complete configuration is available in
+  [`examples/so101_motion_pack.yaml`](../examples/so101_motion_pack.yaml).
+- [Actuator system identification](system-identification.md): configure a
+  Newton replay and inspect its fitted parameters and optimization artifacts.
+- [Training actuator models](training.md): reproduce the maintained G1 GPU
+  training and Newton replay workflows.
 
-The following filenames are retained as archive markers because earlier
-revisions linked to them. They do not describe supported interfaces:
+## Data and integrations
 
-- [Artifact layout](artifacts.md)
-- [Legacy command-line interface](cli.md)
-- [Legacy end-to-end tests](end-to-end-test.md)
-- [Legacy G1 actuator recipes](g1-neural-actuator-recipes.md)
-- [Legacy repository layout](repo-structure.md)
-- [Legacy robot plugin system](robot-plugin.md)
-
-Use the supported guides above for executable commands. Historical contents of
-an archived page remain available through Git history.
+- [Dataset loading](datasets.md): long-form Parquet requirements, resampling,
+  and joint-name mapping.
+- [MLOps backends](mlops.md): enable MLflow tracking or inject a custom backend.
+- [Newton model loading](../README.md#python-api): construct a Newton model and
+  initial state from USD.
