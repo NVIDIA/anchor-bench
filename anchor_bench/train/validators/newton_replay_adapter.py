@@ -196,7 +196,8 @@ class _NewtonReplayAdapter:
 
         self._bias_evaluator = MuJoCoBiasEvaluator(
             self._model,
-            self.output_joints,
+            tuple(self._indices),
+            output_entities=self.output_joints,
             solver_type=type(self._solver),
         )
 

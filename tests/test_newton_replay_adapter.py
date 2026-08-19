@@ -217,10 +217,9 @@ def test_adapter_uses_layout_aware_position_target_index() -> None:
 
 
 def test_adapter_uses_shared_single_state_bias_evaluator(
-    fake_newton: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cache one shared-helper evaluation for repeated reads of a replay state."""
+    """Populate all scalar joints and cache selected bias outputs per state."""
 
     calls: list[tuple[dict[str, float], dict[str, float]]] = []
 
@@ -230,9 +229,11 @@ def test_adapter_uses_shared_single_state_bias_evaluator(
             model: object,
             entities: tuple[str, ...],
             *,
+            output_entities: tuple[str, ...],
             solver_type: type[FakeSolver],
         ) -> None:
-            assert entities == ("joint",)
+            assert entities == ("joint", "coupled")
+            assert output_entities == ("joint",)
             assert solver_type is FakeSolver
 
         def evaluate_state(
@@ -241,23 +242,34 @@ def test_adapter_uses_shared_single_state_bias_evaluator(
             velocity: dict[str, float],
         ) -> dict[str, float]:
             calls.append((position, velocity))
-            return {"joint": position["joint"] + 2.0 * velocity["joint"]}
+            return {
+                "joint": position["joint"]
+                + 2.0 * velocity["joint"]
+                + position["coupled"]
+            }
 
     monkeypatch.setattr(newton_replay_adapter, "MuJoCoBiasEvaluator", FakeBiasEvaluator)
-    adapter = _NewtonReplayAdapter(
-        _context(),
-        output_joints=("joint",),
-        residual=True,
-        substeps=1,
-    )
+    adapter = object.__new__(_NewtonReplayAdapter)
+    adapter._model = object()
+    adapter._indices = {"joint": (0, 0, 0), "coupled": (1, 1, 1)}
+    adapter.output_joints = ("joint",)
+    adapter._solver = object.__new__(FakeSolver)
+    adapter._bias_evaluator = None
+    adapter._bias_state = None
+    adapter._bias_values = {}
     state = newton_replay_adapter._ReplayState(
-        position={"joint": 3.0},
-        velocity={"joint": 4.0},
+        position={"joint": 3.0, "coupled": 7.0},
+        velocity={"joint": 4.0, "coupled": 5.0},
     )
 
     first = adapter.dynamic_bias("joint", state)
     second = adapter.dynamic_bias("joint", state)
 
-    assert first == 11.0
-    assert second == 11.0
-    assert calls == [({"joint": 3.0}, {"joint": 4.0})]
+    assert first == 18.0
+    assert second == 18.0
+    assert calls == [
+        (
+            {"joint": 3.0, "coupled": 7.0},
+            {"joint": 4.0, "coupled": 5.0},
+        )
+    ]

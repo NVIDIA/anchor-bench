@@ -13,22 +13,36 @@ import numpy as np
 
 
 class MuJoCoBiasEvaluator:
-    """Evaluate ``qfrc_bias`` for named scalar joints without stepping."""
+    """Evaluate CPU MuJoCo ``qfrc_bias`` from complete named scalar states."""
 
     def __init__(
         self,
         model: Any,
-        entities: Sequence[str],
+        state_entities: Sequence[str],
         *,
+        output_entities: Sequence[str] | None = None,
         solver_type: Any = None,
     ) -> None:
-        """Create an independent CPU MuJoCo solver and resolve joint addresses."""
+        """Create a CPU solver and resolve state and output joint addresses."""
 
-        self.entities = tuple(entities)
-        if not self.entities:
+        self.state_entities = tuple(state_entities)
+        self.output_entities = (
+            self.state_entities if output_entities is None else tuple(output_entities)
+        )
+        if not self.state_entities:
             raise ValueError("qfrc_bias requires at least one entity.")
-        if len(self.entities) != len(set(self.entities)):
-            raise ValueError("qfrc_bias entities must be unique.")
+        if len(self.state_entities) != len(set(self.state_entities)):
+            raise ValueError("qfrc_bias state entities must be unique.")
+        if not self.output_entities:
+            raise ValueError("qfrc_bias requires at least one output entity.")
+        if len(self.output_entities) != len(set(self.output_entities)):
+            raise ValueError("qfrc_bias output entities must be unique.")
+        missing_outputs = sorted(set(self.output_entities) - set(self.state_entities))
+        if missing_outputs:
+            raise ValueError(
+                "qfrc_bias output entities are missing from the state: "
+                + ", ".join(missing_outputs)
+            )
 
         if solver_type is None:
             newton = import_module("newton")
@@ -60,7 +74,12 @@ class MuJoCoBiasEvaluator:
 
         missing_model_access = [
             name
-            for name in ("joint_label", "joint_qd_start", "joint_dof_count")
+            for name in (
+                "joint_label",
+                "joint_q_start",
+                "joint_qd_start",
+                "joint_dof_count",
+            )
             if getattr(model, name, None) is None
         ]
         if missing_model_access:
@@ -71,25 +90,45 @@ class MuJoCoBiasEvaluator:
             )
 
         labels = list(model.joint_label)
-        missing_entities = sorted(set(self.entities) - set(labels))
+        missing_entities = sorted(set(self.state_entities) - set(labels))
         if missing_entities:
             raise ValueError(
                 "qfrc_bias model is missing joints: " + ", ".join(missing_entities)
             )
+        joint_q_start = np.asarray(model.joint_q_start.numpy(), dtype=np.int64)
+        joint_qd_start = np.asarray(model.joint_qd_start.numpy(), dtype=np.int64)
+        if (
+            len(joint_q_start) != len(labels) + 1
+            or len(joint_qd_start) != len(labels) + 1
+        ):
+            raise RuntimeError("qfrc_bias requires complete Newton joint layouts.")
         joint_indices = np.asarray(
-            [labels.index(entity) for entity in self.entities],
+            [labels.index(entity) for entity in self.state_entities],
             dtype=np.int64,
         )
+        non_scalar = [
+            entity
+            for entity, index in zip(
+                self.state_entities,
+                joint_indices,
+                strict=True,
+            )
+            if joint_q_start[index + 1] - joint_q_start[index] != 1
+            or joint_qd_start[index + 1] - joint_qd_start[index] != 1
+        ]
+        if non_scalar:
+            raise ValueError(
+                "qfrc_bias requires scalar joints: " + ", ".join(non_scalar)
+            )
         mj_q_start = np.asarray(self._solver.mj_q_start.numpy(), dtype=np.int64)
         mj_qd_start = np.asarray(self._solver.mj_qd_start.numpy(), dtype=np.int64)
-        joint_qd_start = np.asarray(model.joint_qd_start.numpy(), dtype=np.int64)
         self._q_addresses = mj_q_start[joint_indices]
         self._qd_addresses = mj_qd_start[joint_indices]
         self._dof_addresses = joint_qd_start[joint_indices]
         invalid = [
             entity
             for entity, q_address, qd_address in zip(
-                self.entities,
+                self.state_entities,
                 self._q_addresses,
                 self._qd_addresses,
                 strict=True,
@@ -102,6 +141,11 @@ class MuJoCoBiasEvaluator:
                 + ", ".join(invalid)
                 + "."
             )
+        output_indices = np.asarray(
+            [labels.index(entity) for entity in self.output_entities],
+            dtype=np.int64,
+        )
+        self._output_qd_addresses = mj_qd_start[output_indices]
 
         dof_ref_source = getattr(getattr(model, "mujoco", None), "dof_ref", None)
         self._dof_ref = (
@@ -124,11 +168,11 @@ class MuJoCoBiasEvaluator:
         positions: np.ndarray,
         velocities: np.ndarray,
     ) -> np.ndarray:
-        """Evaluate a samples-by-entities batch of generalized states."""
+        """Evaluate samples serially with MuJoCo's CPU ``mj_forward`` API."""
 
         position_values = np.asarray(positions, dtype=np.float64)
         velocity_values = np.asarray(velocities, dtype=np.float64)
-        expected_width = len(self.entities)
+        expected_width = len(self.state_entities)
         if (
             position_values.ndim != 2
             or velocity_values.shape != position_values.shape
@@ -139,7 +183,10 @@ class MuJoCoBiasEvaluator:
                 f"samples-by-{expected_width} shapes."
             )
 
-        values = np.empty_like(position_values)
+        values = np.empty(
+            (len(position_values), len(self.output_entities)),
+            dtype=np.float64,
+        )
         for row in range(len(position_values)):
             self._solver.mj_data.qpos[:] = self._default_qpos
             self._solver.mj_data.qvel[:] = 0.0
@@ -148,7 +195,7 @@ class MuJoCoBiasEvaluator:
             )
             self._solver.mj_data.qvel[self._qd_addresses] = velocity_values[row]
             self._mujoco.mj_forward(self._solver.mj_model, self._solver.mj_data)
-            values[row] = self._solver.mj_data.qfrc_bias[self._qd_addresses]
+            values[row] = self._solver.mj_data.qfrc_bias[self._output_qd_addresses]
 
         if not np.all(np.isfinite(values)):
             raise ValueError("SolverMuJoCo produced non-finite qfrc_bias values.")
@@ -162,18 +209,18 @@ class MuJoCoBiasEvaluator:
         """Evaluate one named state and return one bias value per entity."""
 
         missing = sorted(
-            (set(self.entities) - position.keys())
-            | (set(self.entities) - velocity.keys())
+            (set(self.state_entities) - position.keys())
+            | (set(self.state_entities) - velocity.keys())
         )
         if missing:
             raise ValueError(
                 "qfrc_bias state is missing entities: " + ", ".join(missing)
             )
         values = self.evaluate(
-            np.asarray([[position[entity] for entity in self.entities]]),
-            np.asarray([[velocity[entity] for entity in self.entities]]),
+            np.asarray([[position[entity] for entity in self.state_entities]]),
+            np.asarray([[velocity[entity] for entity in self.state_entities]]),
         )[0]
         return {
             entity: float(value)
-            for entity, value in zip(self.entities, values, strict=True)
+            for entity, value in zip(self.output_entities, values, strict=True)
         }
