@@ -5,11 +5,8 @@ replaying recorded joint commands across a CMA-ES population of replicated
 Newton worlds. The objective minimizes position mean squared error against the
 recorded state.
 
-This workflow requires the Newton simulation components:
-
-```bash
-uv sync --extra simulation
-```
+Newton's simulation components are included in the default Anchor Bench
+installation.
 
 ## Configuration
 
