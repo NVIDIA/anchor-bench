@@ -35,10 +35,10 @@ class FakeModel:
         self.evaluated = True
 
 
-class FakeStepper(newton_validator._NewtonStepper):
+class FakeReplayAdapter(newton_validator._NewtonReplayAdapter):
     """Provide deterministic stepping without importing Newton."""
 
-    instances: ClassVar[list[FakeStepper]] = []
+    instances: ClassVar[list[FakeReplayAdapter]] = []
 
     def __init__(
         self,
@@ -60,6 +60,7 @@ class FakeStepper(newton_validator._NewtonStepper):
         self.velocity: dict[str, float] = {}
         self.steps: list[tuple[dict[str, float], dict[str, float], float]] = []
         self.reset_count = 0
+        self.captured_dts: list[float] = []
         self.closed = False
         self.instances.append(self)
 
@@ -76,6 +77,11 @@ class FakeStepper(newton_validator._NewtonStepper):
         self.position = dict(position)
         self.velocity = dict(velocity)
         return self._state()
+
+    def capture_step_graph(self, *, dt: float) -> None:
+        """Record explicit graph capture after the replay timestep is known."""
+
+        self.captured_dts.append(dt)
 
     def step(
         self,
@@ -127,12 +133,12 @@ class FakeStepper(newton_validator._NewtonStepper):
 
 @pytest.fixture(autouse=True)
 def replay_dependencies(monkeypatch: pytest.MonkeyPatch) -> object:
-    """Provide the singleton context and fake Newton stepper."""
+    """Provide the singleton context and fake Newton replay adapter."""
 
     context = object()
-    FakeStepper.instances.clear()
+    FakeReplayAdapter.instances.clear()
     monkeypatch.setattr(SimulationContext, "current", lambda: context)
-    monkeypatch.setattr(newton_validator, "_NewtonStepper", FakeStepper)
+    monkeypatch.setattr(newton_validator, "_NewtonReplayAdapter", FakeReplayAdapter)
 
     def predict(
         model: FakeModel,
@@ -244,19 +250,20 @@ def test_replays_live_inputs_and_reports_physical_metrics() -> None:
 
     result = validator.validate(model, _validation_dataset(_sequence()))
 
-    stepper = FakeStepper.instances[0]
+    adapter = FakeReplayAdapter.instances[0]
     assert model.evaluated
     assert model.state_inputs == [None, 1]
-    assert stepper.residual is False
-    assert stepper.substeps == 4
-    assert stepper.disable_contacts is True
-    assert stepper.reset_count == 1
-    assert [step[1] for step in stepper.steps] == [
+    assert adapter.residual is False
+    assert adapter.substeps == 4
+    assert adapter.disable_contacts is True
+    assert adapter.reset_count == 1
+    assert adapter.captured_dts == [1.0]
+    assert [step[1] for step in adapter.steps] == [
         {"joint": 1.0},
         {"joint": 1.0},
     ]
-    assert [step[2] for step in stepper.steps] == [1.0, 1.0]
-    assert stepper.closed
+    assert [step[2] for step in adapter.steps] == [1.0, 1.0]
+    assert adapter.closed
     assert result.metrics["aggregate/position/rmse"] == 0.0
     assert result.metrics["aggregate/velocity/mae"] == 0.0
     assert result.metrics["experiment/wave/position/joint/rmse"] == 0.0
@@ -278,7 +285,7 @@ def test_resets_model_state_between_experiments() -> None:
     )
 
     assert model.state_inputs == [None, 1, None, 1]
-    assert FakeStepper.instances[0].reset_count == 2
+    assert FakeReplayAdapter.instances[0].reset_count == 2
 
 
 def test_residual_target_keeps_newton_baseline_enabled() -> None:
@@ -292,7 +299,7 @@ def test_residual_target_keeps_newton_baseline_enabled() -> None:
 
     validator.validate(FakeModel(), _validation_dataset(_sequence("torque_residual")))
 
-    assert FakeStepper.instances[0].residual is True
+    assert FakeReplayAdapter.instances[0].residual is True
 
 
 @pytest.mark.parametrize(
@@ -354,7 +361,7 @@ def test_rejects_invalid_timestamps(
 def test_rebuilds_dynamic_bias_and_previous_prediction_inputs() -> None:
     """Build full-torque runtime features from live replay state."""
 
-    stepper = FakeStepper(
+    adapter = FakeReplayAdapter(
         object(),
         output_joints=("joint",),
         residual=False,
@@ -369,7 +376,7 @@ def test_rebuilds_dynamic_bias_and_previous_prediction_inputs() -> None:
         ["joint/qfrc_bias", "joint/previous_torque"],
         state,
         {"joint": 4.0},
-        stepper,
+        adapter,
         {"joint": 5.0},
     )
 

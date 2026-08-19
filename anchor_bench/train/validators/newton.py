@@ -18,8 +18,8 @@ from anchor_bench.train.validators.base import (
     ValidationResult,
     ValidatorType,
 )
-from anchor_bench.train.validators.newton_stepper import (
-    _NewtonStepper,
+from anchor_bench.train.validators.newton_replay_adapter import (
+    _NewtonReplayAdapter,
     _ReplayState,
 )
 
@@ -91,7 +91,7 @@ class NewtonReplayValidator(BaseValidator):
 
         sequences = self._prepare_sequences(validation_dataset)
         output_joints = self._output_joints(sequences)
-        stepper = _NewtonStepper(
+        adapter = _NewtonReplayAdapter(
             self.simulation_context,
             output_joints=output_joints,
             residual=self._uses_residual_effort(sequences),
@@ -106,7 +106,7 @@ class NewtonReplayValidator(BaseValidator):
             if callable(getattr(model, "eval", None)):
                 model.eval()
             for sequence in sequences:
-                simulated = self._replay(model, sequence, stepper)
+                simulated = self._replay(model, sequence, adapter)
                 prefix = f"experiment/{sequence.experiment}"
                 recorded = {
                     "position": sequence.position,
@@ -120,7 +120,7 @@ class NewtonReplayValidator(BaseValidator):
                     metrics.update(_metrics(prefix, signal, output_joints, *values))
                     aggregate[signal].append(values)
         finally:
-            stepper.close()
+            adapter.close()
 
         for signal, pairs in aggregate.items():
             actual, simulated = (
@@ -382,16 +382,16 @@ class NewtonReplayValidator(BaseValidator):
         self,
         model: Any,
         sequence: NewtonReplaySequence,
-        stepper: _NewtonStepper,
+        adapter: _NewtonReplayAdapter,
     ) -> dict[str, np.ndarray]:
-        state = stepper.reset(
+        state = adapter.reset(
             position=sequence.position.iloc[0].to_dict(),
             velocity=sequence.velocity.iloc[0].to_dict(),
             command=sequence.command.iloc[0].to_dict(),
         )
-        shape = (len(sequence.position), len(stepper.output_joints))
+        shape = (len(sequence.position), len(adapter.output_joints))
         simulated = {signal: np.empty(shape) for signal in ("position", "velocity")}
-        output_columns = list(stepper.output_joints)
+        output_columns = list(adapter.output_joints)
         for signal, frame in (
             ("position", sequence.position),
             ("velocity", sequence.velocity),
@@ -399,7 +399,7 @@ class NewtonReplayValidator(BaseValidator):
             simulated[signal][0] = frame.loc[frame.index[0], output_columns]
 
         model_state = None
-        previous_effort = {joint: 0.0 for joint in stepper.output_joints}
+        previous_effort = {joint: 0.0 for joint in adapter.output_joints}
         timestamps = sequence.command.index.get_level_values("time_ns").to_numpy(
             dtype=np.int64
         )
@@ -408,6 +408,8 @@ class NewtonReplayValidator(BaseValidator):
             if len(timestamps) > 1
             else 0.0
         )
+        if len(timestamps) > 1:
+            adapter.capture_step_graph(dt=dt)
         command_joints = tuple(sequence.command.columns)
         commands = sequence.command.to_numpy(dtype=float)
         input_columns = tuple(
@@ -420,7 +422,7 @@ class NewtonReplayValidator(BaseValidator):
             }
             features = np.asarray(
                 [
-                    self._live_inputs(columns, state, command, stepper, previous_effort)
+                    self._live_inputs(columns, state, command, adapter, previous_effort)
                     for columns in input_columns
                 ],
                 dtype=np.float32,
@@ -432,13 +434,13 @@ class NewtonReplayValidator(BaseValidator):
             )
             effort = _route_effort(predictions, sequence.mappings)
             previous_effort = effort
-            state = stepper.step(command=command, effort=effort, dt=dt)
+            state = adapter.step(command=command, effort=effort, dt=dt)
             for signal, values in (
                 ("position", state.position),
                 ("velocity", state.velocity),
             ):
                 simulated[signal][row + 1] = [
-                    values[joint] for joint in stepper.output_joints
+                    values[joint] for joint in adapter.output_joints
                 ]
         return simulated
 
@@ -447,7 +449,7 @@ class NewtonReplayValidator(BaseValidator):
         columns: Sequence[object],
         state: _ReplayState,
         command: Mapping[str, float],
-        stepper: _NewtonStepper,
+        adapter: _NewtonReplayAdapter,
         previous_effort: Mapping[str, float],
     ) -> np.ndarray:
         values = []
@@ -468,9 +470,9 @@ class NewtonReplayValidator(BaseValidator):
             elif feature == "position_error":
                 value = position_error(command[joint], state.position[joint])
             elif feature == "solver_pd":
-                value = stepper.solver_pd(joint, command[joint], state)
+                value = adapter.solver_pd(joint, command[joint], state)
             elif feature == "qfrc_bias":
-                value = stepper.dynamic_bias(joint, state)
+                value = adapter.dynamic_bias(joint, state)
             elif feature == "previous_torque":
                 value = previous_effort[joint]
             else:

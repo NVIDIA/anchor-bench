@@ -9,6 +9,7 @@ from typing import Any, Dict, Union
 import newton
 import numpy as np
 
+from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import Trajectory
@@ -78,13 +79,27 @@ class _NewtonTrajectoryRunner:
         )
         self._newton = newton
         self._contacts = self._model.contacts()
-        self._physics_dt = 1.0 / config.simulation.physics_freq
         self._control_dt = 1.0 / config.simulation.control_freq
         self._substeps = (
             config.simulation.physics_freq // config.simulation.control_freq
         )
         self._buffer_steps = round(config.buffer_time / self._control_dt)
         self._joint_indices = _joint_indices(self._model)
+        self._state = self._model.state()
+        self._state_next = self._model.state()
+        self._control = self._model.control()
+        self._step_executor = NewtonStepExecutor(
+            model=self._model,
+            solver=self._solver,
+            state=self._state,
+            state_next=self._state_next,
+            control=self._control,
+            contacts=self._contacts,
+        )
+        self._step_executor.capture_graph(
+            dt=self._control_dt,
+            substeps=self._substeps,
+        )
         self._delay_steps = {
             _joint_key(name): round(
                 (group.controller.delay_duration_ms / 1000.0) / self._control_dt
@@ -99,9 +114,9 @@ class _NewtonTrajectoryRunner:
         selected = [
             self._joint_indices[_joint_key(name)] for name in trajectory.joint_names
         ]
-        state_in = self._model.state()
-        state_out = self._model.state()
-        control = self._model.control()
+        state = self._state
+        state_next = self._state_next
+        control = self._control
         model_joint_q = self._model.joint_q
         model_joint_qd = self._model.joint_qd
         model_joint_target_q = self._model.joint_target_q
@@ -116,10 +131,10 @@ class _NewtonTrajectoryRunner:
             initial_q[q_index] = trajectory.measured_position[0, column]
             initial_qd[qd_index] = 0.0
 
-        self._solver.reset(state_in)
-        for state in (state_in, state_out):
-            state_joint_q = state.joint_q
-            state_joint_qd = state.joint_qd
+        self._solver.reset(state)
+        for state_buffer in (state, state_next):
+            state_joint_q = state_buffer.joint_q
+            state_joint_qd = state_buffer.joint_qd
             if state_joint_q is None or state_joint_qd is None:
                 raise RuntimeError("Newton state does not expose joint state arrays.")
             state_joint_q.assign(initial_q)
@@ -128,7 +143,7 @@ class _NewtonTrajectoryRunner:
                 self._model,
                 state_joint_q,
                 state_joint_qd,
-                state,
+                state_buffer,
             )
 
         target = np.asarray(model_joint_target_q.numpy()).copy()
@@ -136,8 +151,10 @@ class _NewtonTrajectoryRunner:
         _set_targets(target, first_command, selected)
         control_joint_target_q.assign(target)
         for _ in range(self._buffer_steps):
-            for _ in range(self._substeps):
-                state_in, state_out = self._step(state_in, state_out, control)
+            self._step_executor.step(
+                dt=self._control_dt,
+                substeps=self._substeps,
+            )
 
         simulated = np.empty_like(trajectory.measured_position)
         simulated[0] = trajectory.measured_position[0]
@@ -154,9 +171,11 @@ class _NewtonTrajectoryRunner:
             )
             _set_targets(target, command, selected)
             control_joint_target_q.assign(target)
-            for _ in range(self._substeps):
-                state_in, state_out = self._step(state_in, state_out, control)
-            state_joint_q = state_in.joint_q
+            self._step_executor.step(
+                dt=self._control_dt,
+                substeps=self._substeps,
+            )
+            state_joint_q = self._step_executor.state.joint_q
             if state_joint_q is None:
                 raise RuntimeError("Newton state does not expose joint positions.")
             positions = np.asarray(state_joint_q.numpy())
@@ -164,22 +183,6 @@ class _NewtonTrajectoryRunner:
                 positions[q_index] for q_index, _, _ in selected
             ]
         return simulated
-
-    def _step(
-        self,
-        state_in: Any,
-        state_out: Any,
-        control: Any,
-    ) -> tuple[Any, Any]:
-        state_in.clear_forces()
-        self._solver.step(
-            state_in=state_in,
-            state_out=state_out,
-            control=control,
-            contacts=self._contacts,
-            dt=self._physics_dt,
-        )
-        return state_out, state_in
 
 
 def _position_accuracy(measured: np.ndarray, simulated: np.ndarray) -> float:
