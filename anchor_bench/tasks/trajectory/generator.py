@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Generate long-form commanded-position datasets from trajectory configs."""
 
 from __future__ import annotations
@@ -43,7 +46,10 @@ def generate_positions(
     samples: list[np.ndarray] = []
 
     for piece in trajectory.pieces:
-        sample_count = round(float(piece.duration_s) * sample_rate_hz)
+        sample_count = _piece_sample_count(
+            duration_s=float(piece.duration_s),
+            sample_rate_hz=sample_rate_hz,
+        )
 
         if isinstance(piece, HoldPiece):
             if piece.pose is not None:
@@ -110,6 +116,12 @@ def generate_positions(
     if not samples or sum(len(piece_samples) for piece_samples in samples) == 0:
         return np.empty((0, len(config.actuators)), dtype=np.float64)
     return np.concatenate(samples)
+
+
+def _piece_sample_count(*, duration_s: float, sample_rate_hz: int) -> int:
+    """Return the rounded piece length, with one sample for positive durations."""
+
+    return max(1, round(duration_s * sample_rate_hz))
 
 
 def _trajectory_frame(

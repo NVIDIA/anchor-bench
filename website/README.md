@@ -73,7 +73,7 @@ Then open the URL Hugo prints, which includes the project base path:
    first).
 
 Links inside posts that point to other site pages should start with `/`, for
-example `[CLI docs](/documentation/cli/)`.
+example `[Running tasks](/documentation/running-tasks/)`.
 
 ## Add a documentation page
 

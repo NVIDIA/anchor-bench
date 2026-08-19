@@ -1,12 +1,27 @@
-# Outdated documentation
+# Anchor Bench documentation
 
-> **Warning:** The guides in this directory describe an earlier Anchor Bench
-> architecture. Commands, paths, configuration layouts, dependencies, and
-> workflows in these files may not exist in the current package.
+These guides document the interfaces implemented by the current codebase.
 
-Do not use these guides as current instructions. Refer to the
-[project README](../README.md), source code, and tests for the functionality
-that is presently implemented.
+## Start here
 
-The documentation will be rewritten as the corresponding functionality is
-implemented.
+- [Project overview and installation](../README.md)
+- [Running tasks](running-tasks.md): invoke the CLI, select an output directory,
+  and understand completion markers.
+
+## Task guides
+
+- [Trajectory generation](trajectory.md): configure hold, transition, sine, and
+  chirp pieces. A complete configuration is available in
+  [`examples/so101_motion_pack.yaml`](../examples/so101_motion_pack.yaml).
+- [Actuator system identification](system-identification.md): configure a
+  Newton replay and inspect its fitted parameters and optimization artifacts.
+- [Training actuator models](training.md): reproduce the maintained G1 GPU
+  training and Newton replay workflows.
+
+## Data and integrations
+
+- [Dataset loading](datasets.md): long-form Parquet requirements, resampling,
+  and joint-name mapping.
+- [MLOps backends](mlops.md): enable MLflow tracking or inject a custom backend.
+- [Newton model loading](../README.md#python-api): construct a Newton model and
+  initial state from USD.

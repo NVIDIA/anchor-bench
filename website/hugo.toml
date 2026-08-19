@@ -7,7 +7,7 @@ disableKinds = ["taxonomy"]
 [taxonomies]
 
 [params]
-  description = "System identification and sim-to-real benchmark for robot actuator models"
+  description = "Configuration-driven tools for robot actuator trajectories, identification, and training"
 
 [markup]
   [markup.goldmark]

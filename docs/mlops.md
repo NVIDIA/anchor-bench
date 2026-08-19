@@ -145,12 +145,6 @@ configuration does not disclose values they do not want stored by the selected
 backend. The backend context records successful or failed completion and the
 active run is cleared even if the task raises an exception.
 
-`mlops.upload_dataset` defaults to `false`. Set it to `true` to upload dataset
-bytes in addition to recording lineage. The portable
-`MLOpsRun.log_dataset()` implementation always records lineage parameters and
-logs the materialized file as a `dataset` artifact only when upload is enabled.
-Backends can override the method to add native dataset relationships.
-
 The training task reports per-epoch training and validation loss, search and
 validator metrics, interval checkpoints, and the completed `training-output`
 artifact collection. Interval checkpoints remain useful if a later training or
@@ -182,11 +176,6 @@ The task reports `optimization/best_mse`,
 `optimization/population_mean_mse` for every generation. Its completed local
 output directory is logged in the `sysid-output` collection with artifact type
 `actuator-sysid`.
-
-## Bundled backend
-
-The bundled MLflow adapter is included in every task runner and is
-selected by default.
 
 ## Adding another backend
 

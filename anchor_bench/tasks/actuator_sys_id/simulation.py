@@ -1,7 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Native Newton population evaluator for actuator system identification."""
 
 from __future__ import annotations
 
+import logging
 from math import isclose
 from typing import ClassVar, Dict, List, Sequence, Tuple
 
@@ -14,6 +18,42 @@ from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
+
+logger = logging.getLogger(__name__)
+
+
+@wp.kernel
+def _accumulate_position_error(
+    # Warp kernels require array constructors in annotations; these are DSL
+    # declarations rather than Python typing expressions.
+    joint_q: wp.array(dtype=wp.float32),  # pyright: ignore[reportInvalidTypeForm]
+    joint_q_indices: wp.array(  # pyright: ignore[reportInvalidTypeForm]
+        dtype=wp.int32
+    ),
+    measured_positions: wp.array(  # pyright: ignore[reportInvalidTypeForm]
+        dtype=wp.float64
+    ),
+    sample_index: int,
+    joint_count: int,
+    score_sums: wp.array(  # pyright: ignore[reportInvalidTypeForm]
+        dtype=wp.float64
+    ),
+) -> None:
+    """Accumulate one sample's squared position error for each world."""
+
+    world_index = wp.tid()
+    error_sum = wp.float64(0.0)
+    for joint_index in range(joint_count):
+        simulated_index = joint_q_indices[
+            world_index * joint_count  # pyright: ignore[reportOperatorIssue]
+            + joint_index
+        ]
+        measured_index = sample_index * joint_count + joint_index
+        error = wp.float64(joint_q[simulated_index]) - wp.float64(
+            measured_positions[measured_index]
+        )
+        error_sum += error * error
+    score_sums[world_index] += error_sum
 
 
 class NewtonPopulationEvaluator:
@@ -53,7 +93,11 @@ class NewtonPopulationEvaluator:
             dtype=np.int64,
         )
         self._initialize_simulation()
-        self._step_graph = self._capture_step_graph()
+        self._initialize_score_buffers()
+        self._simulation_context.capture_step_graph(
+            dt=self.physics_dt * self.control_substeps,
+            substeps=self.control_substeps,
+        )
 
     def _initialize_simulation(self) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
@@ -103,6 +147,36 @@ class NewtonPopulationEvaluator:
         self._base_targets = np.asarray(
             model_joint_target_q.numpy(),
             dtype=np.float32,
+        )
+        self._base_model_arrays: Dict[str, np.ndarray] = {}
+        for model_array_name in self._MODEL_ARRAYS.values():
+            model_array = getattr(model, model_array_name)
+            if model_array is None:
+                raise RuntimeError(f"Newton model does not expose {model_array_name}")
+            self._base_model_arrays[model_array_name] = np.array(
+                model_array.numpy(),
+                dtype=np.float32,
+                copy=True,
+            )
+
+    def _initialize_score_buffers(self) -> None:
+        device = self._simulation_context.model.device
+        self._device = device
+        self._joint_q_indices_device = wp.array(
+            self._joint_q_indices.reshape(-1),
+            dtype=wp.int32,
+            device=device,
+        )
+        self._score_sums = wp.zeros(
+            self.num_envs,
+            dtype=wp.float64,
+            device=device,
+        )
+        logger.debug(
+            "Initialized device score accumulation device=%s worlds=%d joints=%d",
+            device,
+            self.num_envs,
+            len(self.joint_names),
         )
 
     def _builder_configuration_key(self, initial: Candidate) -> tuple[object, ...]:
@@ -165,15 +239,12 @@ class NewtonPopulationEvaluator:
         if not trajectories:
             raise ValueError("system identification requires trajectories")
         self._apply_population(population)
-        episode_scores = np.stack(
-            [self._evaluate_trajectory(trajectory) for trajectory in trajectories],
-            axis=0,
+        self._score_sums.zero_()
+        transition_count = sum(
+            self._evaluate_trajectory(trajectory) for trajectory in trajectories
         )
-        transition_counts = np.asarray(
-            [trajectory.measured_position.shape[0] - 1 for trajectory in trajectories],
-            dtype=np.float64,
-        )
-        scores = np.average(episode_scores, axis=0, weights=transition_counts)
+        scores = np.asarray(self._score_sums.numpy(), dtype=np.float64)
+        scores /= transition_count * len(self.joint_names)
         if not np.isfinite(scores).all():
             raise RuntimeError("Newton produced non-finite position error")
         return scores
@@ -183,7 +254,7 @@ class NewtonPopulationEvaluator:
             model_array = getattr(self._simulation_context.model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
-            values = np.asarray(model_array.numpy(), dtype=np.float32)
+            values = np.array(self._base_model_arrays[model_array_name], copy=True)
             for world_index, candidate in enumerate(population):
                 for joint_index, joint in enumerate(self.joint_names):
                     values[self._joint_dof_indices[world_index, joint_index]] = (
@@ -197,7 +268,7 @@ class NewtonPopulationEvaluator:
         )
         self._simulation_context.solver.notify_model_changed(flags)
 
-    def _evaluate_trajectory(self, trajectory: Trajectory) -> np.ndarray:
+    def _evaluate_trajectory(self, trajectory: Trajectory) -> int:
         if trajectory.joint_names != self.joint_names:
             raise ValueError("trajectory joints do not match the Newton evaluator")
         if trajectory.measured_position.shape[0] < 2:
@@ -216,19 +287,42 @@ class NewtonPopulationEvaluator:
         )
         delayed_commands = np.take_along_axis(commanded, source_indices, axis=0)
 
-        scores = np.zeros(self.num_envs, dtype=np.float64)
-        measured_positions = trajectory.measured_position[1:]
-        for sample_index, measured in enumerate(measured_positions):
+        measured_positions = np.asarray(
+            trajectory.measured_position[1:],
+            dtype=np.float64,
+        )
+        measured_positions_device = wp.array(
+            measured_positions.reshape(-1),
+            dtype=wp.float64,
+            device=self._device,
+        )
+        for sample_index in range(measured_positions.shape[0]):
             self._set_targets(delayed_commands[sample_index])
             self._step_control_interval()
-            state_joint_q = self._simulation_context.state_in.joint_q
-            if state_joint_q is None:
-                raise RuntimeError("Newton state does not expose joint positions")
-            joint_q = np.asarray(state_joint_q.numpy(), dtype=np.float64)
-            simulated = joint_q[self._joint_q_indices]
-            error = simulated - measured[np.newaxis, :]
-            scores += np.mean(np.square(error), axis=1)
-        return scores / measured_positions.shape[0]
+            self._launch_position_error(measured_positions_device, sample_index)
+        return measured_positions.shape[0]
+
+    def _launch_position_error(
+        self,
+        measured_positions: wp.array,
+        sample_index: int,
+    ) -> None:
+        state_joint_q = self._simulation_context.state.joint_q
+        if state_joint_q is None:
+            raise RuntimeError("Newton state does not expose joint positions")
+        wp.launch(
+            _accumulate_position_error,
+            dim=self.num_envs,
+            inputs=[
+                state_joint_q,
+                self._joint_q_indices_device,
+                measured_positions,
+                sample_index,
+                len(self.joint_names),
+            ],
+            outputs=[self._score_sums],
+            device=self._device,
+        )
 
     def _reset(self, measured_position: np.ndarray) -> None:
         joint_q = np.array(self._base_q, copy=True)
@@ -236,8 +330,8 @@ class NewtonPopulationEvaluator:
         joint_q[self._joint_q_indices] = measured_position[np.newaxis, :]
         joint_qd[self._joint_dof_indices] = 0.0
         context = self._simulation_context
-        context.solver.reset(context.state_in)
-        for state in (context.state_in, context.state_out):
+        context.solver.reset(context.state)
+        for state in (context.state, context.state_next):
             state_joint_q = state.joint_q
             state_joint_qd = state.joint_qd
             if state_joint_q is None or state_joint_qd is None:
@@ -259,39 +353,11 @@ class NewtonPopulationEvaluator:
             raise RuntimeError("Newton control does not expose joint position targets")
         joint_target_q.assign(targets)
 
-    def _capture_step_graph(self) -> wp.Graph:
-        with wp.ScopedCapture(device=self._simulation_context.model.device) as capture:
-            self._simulate_control_interval()
-        graph = capture.graph
-        if graph is None:
-            raise RuntimeError("Warp did not return a captured simulation graph")
-        return graph
-
-    def _simulate_control_interval(self) -> None:
-        """Advance one interval and return its final state to ``context.state_in``."""
-        context = self._simulation_context
-        state_in = context.state_in
-        state_out = context.state_out
-
-        for index in range(self.control_substeps):
-            state_in.clear_forces()
-            context.solver.step(
-                state_in=state_in,
-                state_out=state_out,
-                control=context.control,
-                contacts=context.contacts,
-                dt=self.physics_dt,
-            )
-
-            if self.control_substeps % 2 and index == self.control_substeps - 1:
-                # The final state needs to be in state_in, also for an uneven substep count
-                state_in.assign(state_out)
-            else:
-                # Swap buffers for next iteration
-                state_in, state_out = state_out, state_in
-
     def _step_control_interval(self) -> None:
-        wp.capture_launch(self._step_graph)
+        self._simulation_context.step(
+            dt=self.physics_dt * self.control_substeps,
+            substeps=self.control_substeps,
+        )
 
 
 def _joint_names(config: ActuatorSysIdConfig) -> List[str]:

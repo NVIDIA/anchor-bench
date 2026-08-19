@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -6,12 +9,12 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from anchor_bench.train.validators import newton_stepper
-from anchor_bench.train.validators.newton_stepper import _NewtonStepper
+from anchor_bench.train.validators import newton_replay_adapter
+from anchor_bench.train.validators.newton_replay_adapter import _NewtonReplayAdapter
 
 
 class FakeArray:
-    """Provide the Newton array operations used by the stepper."""
+    """Provide the Newton array operations used by the replay adapter."""
 
     def __init__(self, values: list[float]) -> None:
         """Store a mutable NumPy value array."""
@@ -98,8 +101,8 @@ class FakeSolver:
 
     def step(
         self,
-        state_0: FakeState,
-        state_1: FakeState,
+        state_in: FakeState,
+        state_out: FakeState,
         control: FakeControl,
         contacts: object,
         dt: float,
@@ -107,8 +110,8 @@ class FakeSolver:
         """Integrate the effort over one physical step."""
 
         velocity = control.joint_f.numpy()
-        state_1.joint_q.assign(state_0.joint_q.numpy() + velocity * dt)
-        state_1.joint_qd.assign(velocity)
+        state_out.joint_q.assign(state_in.joint_q.numpy() + velocity * dt)
+        state_out.joint_qd.assign(velocity)
         self.steps.append(dt)
 
 
@@ -121,7 +124,7 @@ def fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
         JointTargetMode=SimpleNamespace(EFFORT=4),
     )
     FakeSolver.instances.clear()
-    monkeypatch.setattr(newton_stepper, "import_module", lambda name: module)
+    monkeypatch.setattr(newton_replay_adapter, "import_module", lambda name: module)
 
 
 def _context() -> SimpleNamespace:
@@ -131,13 +134,13 @@ def _context() -> SimpleNamespace:
     return SimpleNamespace(model=model, state=model.state())
 
 
-def test_stepper_resets_steps_and_restores_direct_effort_mode(
+def test_adapter_resets_steps_and_restores_direct_effort_mode(
     fake_newton: None,
 ) -> None:
     """Own stepping in the validator while leaving the shared model reusable."""
 
     context = _context()
-    stepper = _NewtonStepper(
+    adapter = _NewtonReplayAdapter(
         context,
         output_joints=("joint",),
         residual=False,
@@ -147,20 +150,20 @@ def test_stepper_resets_steps_and_restores_direct_effort_mode(
     assert context.model.joint_target_mode.numpy().tolist() == [4.0]
     assert context.model.joint_target_ke.numpy().tolist() == [0.0]
     assert context.model.joint_target_kd.numpy().tolist() == [0.0]
-    assert stepper.solver_pd(
+    assert adapter.solver_pd(
         "joint",
         3.0,
-        newton_stepper._ReplayState(
+        newton_replay_adapter._ReplayState(
             position={"joint": 1.0},
             velocity={"joint": 2.0},
         ),
     ) == pytest.approx(7.0)
-    initial = stepper.reset(
+    initial = adapter.reset(
         position={"joint": 1.0},
         velocity={"joint": 0.0},
         command={"joint": 3.0},
     )
-    result = stepper.step(
+    result = adapter.step(
         command={"joint": 3.0},
         effort={"joint": 2.0},
         dt=0.2,
@@ -176,20 +179,20 @@ def test_stepper_resets_steps_and_restores_direct_effort_mode(
     assert context.model.last_control.joint_target_q.numpy().tolist() == [3.0]
     assert context.model.last_control.joint_f.numpy().tolist() == [2.0]
 
-    stepper.close()
+    adapter.close()
 
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
     assert context.model.joint_target_ke.numpy().tolist() == [4.0]
     assert context.model.joint_target_kd.numpy().tolist() == [0.5]
 
 
-def test_stepper_retains_usd_actuation_for_residual_effort(
+def test_adapter_retains_usd_actuation_for_residual_effort(
     fake_newton: None,
 ) -> None:
     """Leave the authored PD and friction path enabled for residual output."""
 
     context = _context()
-    stepper = _NewtonStepper(
+    adapter = _NewtonReplayAdapter(
         context,
         output_joints=("joint",),
         residual=True,
@@ -197,17 +200,17 @@ def test_stepper_retains_usd_actuation_for_residual_effort(
     )
 
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
-    stepper.close()
+    adapter.close()
     assert context.model.joint_target_mode.numpy().tolist() == [3.0]
 
 
-def test_stepper_uses_layout_aware_position_target_index() -> None:
+def test_adapter_uses_layout_aware_position_target_index() -> None:
     """Index position targets independently from generalized coordinates."""
 
-    stepper = object.__new__(_NewtonStepper)
-    stepper._indices = {"joint": (1, 0, 0)}
-    stepper._control = FakeControl()
+    adapter = object.__new__(_NewtonReplayAdapter)
+    adapter._indices = {"joint": (1, 0, 0)}
+    adapter._control = FakeControl()
 
-    stepper._write_control({"joint": 3.0}, {})
+    adapter._write_control({"joint": 3.0}, {})
 
-    assert stepper._control.joint_target_q.numpy().tolist() == [3.0]
+    assert adapter._control.joint_target_q.numpy().tolist() == [3.0]

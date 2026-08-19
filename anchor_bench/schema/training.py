@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pydantic models for general network-training configurations."""
 
 from __future__ import annotations
@@ -151,13 +154,37 @@ class FeedbackConfig(StrictBaseModel):
     initial_value: JsonNumber = 0.0
 
 
+class TrainingSplitConfig(StrictBaseModel):
+    """Select disjoint experiments for checkpoint selection and final testing."""
+
+    validation_experiments: Annotated[List[NonEmptyString], Field(min_length=1)]
+    test_experiments: Annotated[List[NonEmptyString], Field(min_length=1)]
+
+    @field_validator("validation_experiments", "test_experiments")
+    @classmethod
+    def experiments_must_be_unique(cls, names: List[str]) -> List[str]:
+        if len(names) != len(set(names)):
+            raise ValueError("experiment names must be unique")
+        return names
+
+    @model_validator(mode="after")
+    def experiment_sets_must_be_disjoint(self) -> TrainingSplitConfig:
+        overlap = set(self.validation_experiments) & set(self.test_experiments)
+        if overlap:
+            raise ValueError(
+                "validation_experiments and test_experiments must be disjoint"
+            )
+        return self
+
+
 class TrainingParametersConfig(StrictBaseModel):
     """Settings shared by all supported network architectures."""
 
     epochs: PositiveInteger
     batch_size: PositiveInteger
     seed: NonNegativeInteger
-    validation_ratio: Annotated[JsonNumber, Field(ge=0.0, lt=1.0)]
+    validation_ratio: Optional[Annotated[JsonNumber, Field(ge=0.0, lt=1.0)]] = None
+    split: Optional[TrainingSplitConfig] = None
     sequence: SequenceConfig
     optimizer: OptimizerConfig
     loss: LossConfig
@@ -169,12 +196,14 @@ class TrainingParametersConfig(StrictBaseModel):
 
     @model_validator(mode="after")
     def reject_explicit_null_fields(self) -> TrainingParametersConfig:
-        for field_name in ("feedback", "checkpoint"):
+        for field_name in ("feedback", "checkpoint", "validation_ratio", "split"):
             if (
                 field_name in self.model_fields_set
                 and getattr(self, field_name) is None
             ):
                 raise ValueError(f"{field_name} cannot be null")
+        if (self.validation_ratio is None) == (self.split is None):
+            raise ValueError("exactly one of validation_ratio or split is required")
         return self
 
 
