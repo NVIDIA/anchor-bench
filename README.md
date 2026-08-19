@@ -43,13 +43,6 @@ rerunning completed tasks, configuration behavior, and logging controls.
 Task lifecycle and rate-limited progress logs are written to standard error.
 Pass `--verbose` (`-v`) for debug output or `--quiet` (`-q`) for errors only.
 
-Install the simulation components for workflows that import or run Newton
-models:
-
-```bash
-uv sync --extra simulation
-```
-
 Install contributor tools with:
 
 ```bash
@@ -77,7 +70,7 @@ from anchor_bench.data import DatasetLoader
 dataset = DatasetLoader.load("recording.parquet", dt=0.02)
 ```
 
-After installing the `simulation` extra, load a USD model and its initial state:
+Load a USD model and its initial state:
 
 ```python
 from anchor_bench.core import NewtonSimulationContext

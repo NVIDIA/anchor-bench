@@ -231,7 +231,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cmaes" },
     { name = "mlflow" },
-    { name = "newton" },
+    { name = "newton", extra = ["importers", "sim"] },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -253,16 +253,12 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
-simulation = [
-    { name = "newton", extra = ["importers", "sim"] },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "cmaes" },
     { name = "mlflow", specifier = ">=3.0,<4" },
-    { name = "newton", specifier = "==1.4.0" },
-    { name = "newton", extras = ["importers", "sim"], marker = "extra == 'simulation'", specifier = "==1.4.0" },
+    { name = "newton", extras = ["importers", "sim"], specifier = "==1.4.0" },
     { name = "numpy", specifier = ">=1.23,<3" },
     { name = "optuna", specifier = ">=4.9,<5" },
     { name = "pandas", specifier = ">=2.1,<3" },
@@ -278,7 +274,7 @@ requires-dist = [
     { name = "usd-core", marker = "python_full_version < '3.14'", specifier = ">=25.5,<26.5" },
     { name = "usd-core", marker = "python_full_version >= '3.14'", specifier = ">=26.8,<27" },
 ]
-provides-extras = ["simulation", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "annotated-doc"

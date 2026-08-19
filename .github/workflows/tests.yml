@@ -34,7 +34,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install test dependencies
-        run: uv sync --locked --extra dev --extra simulation
+        run: uv sync --locked --extra dev
       - name: Unit and integration tests
         run: uv run pytest -o "addopts=" --cov=anchor_bench --cov-report=term-missing --cov-report=json:coverage.json
       - name: Generate badges
