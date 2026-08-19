@@ -15,11 +15,11 @@ from the repository root.
 
 ## Prepare the environment and dataset
 
-Install the simulation and development dependencies, then download and prepare
-the 15 revision-pinned Anchor-Lab recordings:
+Install the development dependencies, then download and prepare the 15
+revision-pinned Anchor-Lab recordings:
 
 ```bash
-uv sync --extra simulation --extra dev
+uv sync --extra dev
 uv run python tests/integration/g1/prepare_dataset.py
 ```
 

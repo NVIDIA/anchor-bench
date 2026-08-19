@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from importlib import import_module
 from typing import Any
 
+import mujoco
+import newton
 import numpy as np
 
 
@@ -45,16 +46,8 @@ class MuJoCoBiasEvaluator:
             )
 
         if solver_type is None:
-            newton = import_module("newton")
-            solver_type = getattr(
-                getattr(newton, "solvers", None),
-                "SolverMuJoCo",
-                None,
-            )
-        if solver_type is None:
-            raise RuntimeError("qfrc_bias requires newton.solvers.SolverMuJoCo.")
+            solver_type = newton.solvers.SolverMuJoCo
 
-        self._mujoco = import_module("mujoco")
         self._solver = solver_type(
             model,
             use_mujoco_cpu=True,
@@ -122,30 +115,38 @@ class MuJoCoBiasEvaluator:
             )
         mj_q_start = np.asarray(self._solver.mj_q_start.numpy(), dtype=np.int64)
         mj_qd_start = np.asarray(self._solver.mj_qd_start.numpy(), dtype=np.int64)
-        self._q_addresses = mj_q_start[joint_indices]
-        self._qd_addresses = mj_qd_start[joint_indices]
-        self._dof_addresses = joint_qd_start[joint_indices]
-        invalid = [
-            entity
-            for entity, q_address, qd_address in zip(
-                self.state_entities,
-                self._q_addresses,
-                self._qd_addresses,
-                strict=True,
-            )
-            if q_address < 0 or qd_address < 0
-        ]
-        if invalid:
-            raise ValueError(
-                "qfrc_bias entities must have MuJoCo coordinates: "
-                + ", ".join(invalid)
-                + "."
-            )
+        q_addresses = mj_q_start[joint_indices]
+        qd_addresses = mj_qd_start[joint_indices]
+        mapped_state = (q_addresses >= 0) & (qd_addresses >= 0)
+        self._state_columns = np.flatnonzero(mapped_state)
+        mapped_joint_indices = joint_indices[mapped_state]
+        self._q_addresses = q_addresses[mapped_state]
+        self._qd_addresses = qd_addresses[mapped_state]
+        self._dof_addresses = joint_qd_start[mapped_joint_indices]
+
         output_indices = np.asarray(
             [labels.index(entity) for entity in self.output_entities],
             dtype=np.int64,
         )
-        self._output_qd_addresses = mj_qd_start[output_indices]
+        output_q_addresses = mj_q_start[output_indices]
+        output_qd_addresses = mj_qd_start[output_indices]
+        invalid_outputs = [
+            entity
+            for entity, q_address, qd_address in zip(
+                self.output_entities,
+                output_q_addresses,
+                output_qd_addresses,
+                strict=True,
+            )
+            if q_address < 0 or qd_address < 0
+        ]
+        if invalid_outputs:
+            raise ValueError(
+                "qfrc_bias output entities must have MuJoCo coordinates: "
+                + ", ".join(invalid_outputs)
+                + "."
+            )
+        self._output_qd_addresses = output_qd_addresses
 
         dof_ref_source = getattr(getattr(model, "mujoco", None), "dof_ref", None)
         self._dof_ref = (
@@ -187,14 +188,23 @@ class MuJoCoBiasEvaluator:
             (len(position_values), len(self.output_entities)),
             dtype=np.float64,
         )
+        # MuJoCo re-exports this pybind function without a discoverable type stub.
+        forward = mujoco.mj_forward  # pyright: ignore[reportAttributeAccessIssue]
         for row in range(len(position_values)):
             self._solver.mj_data.qpos[:] = self._default_qpos
             self._solver.mj_data.qvel[:] = 0.0
             self._solver.mj_data.qpos[self._q_addresses] = (
-                position_values[row] + self._dof_ref[self._dof_addresses]
+                position_values[row, self._state_columns]
+                + self._dof_ref[self._dof_addresses]
             )
-            self._solver.mj_data.qvel[self._qd_addresses] = velocity_values[row]
-            self._mujoco.mj_forward(self._solver.mj_model, self._solver.mj_data)
+            self._solver.mj_data.qvel[self._qd_addresses] = velocity_values[
+                row,
+                self._state_columns,
+            ]
+            forward(
+                self._solver.mj_model,
+                self._solver.mj_data,
+            )
             values[row] = self._solver.mj_data.qfrc_bias[self._output_qd_addresses]
 
         if not np.all(np.isfinite(values)):

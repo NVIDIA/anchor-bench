@@ -9,10 +9,8 @@ from anchor_bench.train.utils.features import (
     solver_pd,
     torque_residual,
 )
-from anchor_bench.train.utils.mujoco_bias import MuJoCoBiasEvaluator
 
 __all__ = [
-    "MuJoCoBiasEvaluator",
     "friction_torque",
     "position_error",
     "solver_pd",

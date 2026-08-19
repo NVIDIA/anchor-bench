@@ -43,13 +43,6 @@ rerunning completed tasks, configuration behavior, and logging controls.
 Task lifecycle and rate-limited progress logs are written to standard error.
 Pass `--verbose` (`-v`) for debug output or `--quiet` (`-q`) for errors only.
 
-Install the simulation components for workflows that import or run Newton
-models:
-
-```bash
-uv sync --extra simulation
-```
-
 Install contributor tools with:
 
 ```bash

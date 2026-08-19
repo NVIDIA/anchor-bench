@@ -117,14 +117,14 @@ class FakeSolver:
 
 @pytest.fixture
 def fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace the delayed Newton import with the fake solver API."""
+    """Replace the directly imported Newton module with the fake solver API."""
 
     module = SimpleNamespace(
         solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
         JointTargetMode=SimpleNamespace(EFFORT=4),
     )
     FakeSolver.instances.clear()
-    monkeypatch.setattr(newton_replay_adapter, "import_module", lambda name: module)
+    monkeypatch.setattr(newton_replay_adapter, "newton", module)
 
 
 def _context() -> SimpleNamespace:
@@ -253,7 +253,7 @@ def test_adapter_uses_shared_single_state_bias_evaluator(
     adapter._model = object()
     adapter._indices = {"joint": (0, 0, 0), "coupled": (1, 1, 1)}
     adapter.output_joints = ("joint",)
-    adapter._solver = object.__new__(FakeSolver)
+    adapter.__dict__["_solver"] = object.__new__(FakeSolver)
     adapter._bias_evaluator = None
     adapter._bias_state = None
     adapter._bias_values = {}

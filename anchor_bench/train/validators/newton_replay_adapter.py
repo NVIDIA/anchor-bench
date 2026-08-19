@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib import import_module
 from typing import Any, Mapping
 
 import newton
@@ -15,12 +14,12 @@ import warp as wp
 
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.train.utils import (
-    MuJoCoBiasEvaluator,
     position_error,
 )
 from anchor_bench.train.utils import (
     solver_pd as calculate_solver_pd,
 )
+from anchor_bench.train.utils.mujoco_bias import MuJoCoBiasEvaluator
 
 
 @dataclass(frozen=True)
@@ -43,7 +42,6 @@ class _NewtonReplayAdapter:
         substeps: int,
         disable_contacts: bool = False,
     ) -> None:
-        newton = import_module("newton")
         model = simulation_context.model
         q_starts = model.joint_q_start.numpy()
         dof_starts = model.joint_qd_start.numpy()
@@ -69,9 +67,7 @@ class _NewtonReplayAdapter:
             raise ValueError(
                 "Newton model is missing scalar joints: " + ", ".join(missing)
             )
-        solver_type = getattr(getattr(newton, "solvers", None), "SolverMuJoCo", None)
-        if solver_type is None:
-            raise RuntimeError("Newton replay requires newton.solvers.SolverMuJoCo.")
+        solver_type = newton.solvers.SolverMuJoCo
         self._model = model
         state = simulation_context.state
         state_next = model.state()

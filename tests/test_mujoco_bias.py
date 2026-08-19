@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -33,8 +32,6 @@ class FakeModel:
 
 
 class FakeSolver:
-    instances: ClassVar[list[FakeSolver]] = []
-
     def __init__(self, model: FakeModel, **options: object) -> None:
         assert options == {"use_mujoco_cpu": True, "disable_contacts": True}
         self.mj_model = object()
@@ -45,26 +42,18 @@ class FakeSolver:
         )
         self.mj_q_start = FakeArray([0.0, 2.0])
         self.mj_qd_start = FakeArray([0.0, 1.0])
-        self.instances.append(self)
 
 
 @pytest.fixture
-def fake_modules(monkeypatch: pytest.MonkeyPatch) -> None:
-    FakeSolver.instances.clear()
-
+def fake_bias_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     def forward(model: object, data: SimpleNamespace) -> None:
         data.qfrc_bias[:] = [
             data.qpos[0] + 2.0 * data.qvel[0],
             data.qpos[2] + 2.0 * data.qvel[1],
         ]
 
-    modules = {
-        "newton": SimpleNamespace(
-            solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
-        ),
-        "mujoco": SimpleNamespace(mj_forward=forward),
-    }
-    monkeypatch.setattr(mujoco_bias, "import_module", modules.__getitem__)
+    monkeypatch.setattr(mujoco_bias.newton.solvers, "SolverMuJoCo", FakeSolver)
+    monkeypatch.setattr(mujoco_bias.mujoco, "mj_forward", forward)
 
 
 @pytest.mark.parametrize(
@@ -74,8 +63,8 @@ def fake_modules(monkeypatch: pytest.MonkeyPatch) -> None:
         (None, [[7.0, 10.0], [3.0, 4.0]]),
     ],
 )
-def test_evaluator_generates_batch_bias_with_dof_reference_fallback(
-    fake_modules: None,
+def test_evaluator_generates_bias_rows_with_dof_reference_fallback(
+    fake_bias_runtime: None,
     dof_ref: list[float] | None,
     expected: list[list[float]],
 ) -> None:
@@ -92,7 +81,9 @@ def test_evaluator_generates_batch_bias_with_dof_reference_fallback(
     np.testing.assert_allclose(values, expected)
 
 
-def test_evaluator_generates_named_single_state_bias(fake_modules: None) -> None:
+def test_evaluator_generates_named_single_state_bias(
+    fake_bias_runtime: None,
+) -> None:
     evaluator = MuJoCoBiasEvaluator(
         FakeModel([0.5, -0.25]),
         ("joint_b", "joint_a"),
@@ -107,7 +98,7 @@ def test_evaluator_generates_named_single_state_bias(fake_modules: None) -> None
 
 
 def test_evaluator_uses_complete_state_for_selected_coupled_output(
-    fake_modules: None,
+    fake_bias_runtime: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evaluator = MuJoCoBiasEvaluator(
@@ -119,7 +110,7 @@ def test_evaluator_uses_complete_state_for_selected_coupled_output(
     def forward(model: object, data: SimpleNamespace) -> None:
         data.qfrc_bias[0] = data.qpos[0] + data.qpos[2] + data.qvel[1]
 
-    monkeypatch.setattr(evaluator._mujoco, "mj_forward", forward)
+    monkeypatch.setattr(mujoco_bias.mujoco, "mj_forward", forward)
 
     values = evaluator.evaluate_state(
         {"joint_a": 2.0, "joint_b": 3.0},
@@ -129,7 +120,9 @@ def test_evaluator_uses_complete_state_for_selected_coupled_output(
     assert values == {"joint_a": pytest.approx(10.0)}
 
 
-def test_evaluator_rejects_non_scalar_state_joint(fake_modules: None) -> None:
+def test_evaluator_rejects_non_scalar_state_joint(
+    fake_bias_runtime: None,
+) -> None:
     model = FakeModel(None)
     model.joint_q_start = FakeArray([0.0, 2.0, 3.0])
 
@@ -137,7 +130,9 @@ def test_evaluator_rejects_non_scalar_state_joint(fake_modules: None) -> None:
         MuJoCoBiasEvaluator(model, ("joint_a",))
 
 
-def test_evaluator_rejects_missing_mujoco_coordinates(fake_modules: None) -> None:
+def test_evaluator_rejects_missing_mujoco_coordinates(
+    fake_bias_runtime: None,
+) -> None:
     class MissingCoordinateSolver(FakeSolver):
         def __init__(self, model: FakeModel, **options: object) -> None:
             super().__init__(model, **options)
@@ -149,3 +144,27 @@ def test_evaluator_rejects_missing_mujoco_coordinates(fake_modules: None) -> Non
             ("joint_b",),
             solver_type=MissingCoordinateSolver,
         )
+
+
+def test_evaluator_ignores_unmapped_non_output_state_joint(
+    fake_bias_runtime: None,
+) -> None:
+    class PartiallyMappedSolver(FakeSolver):
+        def __init__(self, model: FakeModel, **options: object) -> None:
+            super().__init__(model, **options)
+            self.mj_q_start = FakeArray([0.0, -1.0])
+            self.mj_qd_start = FakeArray([0.0, -1.0])
+
+    evaluator = MuJoCoBiasEvaluator(
+        FakeModel(None),
+        ("joint_a", "joint_b"),
+        output_entities=("joint_a",),
+        solver_type=PartiallyMappedSolver,
+    )
+
+    values = evaluator.evaluate_state(
+        {"joint_a": 2.0, "joint_b": 100.0},
+        {"joint_a": 4.0, "joint_b": 100.0},
+    )
+
+    assert values == {"joint_a": pytest.approx(10.0)}

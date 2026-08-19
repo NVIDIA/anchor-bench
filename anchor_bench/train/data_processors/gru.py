@@ -12,12 +12,12 @@ import pandas as pd
 
 from anchor_bench.train.data_processors.base import BaseDataProcessor
 from anchor_bench.train.utils import (
-    MuJoCoBiasEvaluator,
     friction_torque,
     position_error,
     solver_pd,
     torque_residual,
 )
+from anchor_bench.train.utils.mujoco_bias import MuJoCoBiasEvaluator
 
 
 def _require_columns(dataset: pd.DataFrame, columns: List[str]) -> None:
