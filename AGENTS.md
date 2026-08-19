@@ -1,5 +1,21 @@
 # Repository agent instructions
 
+## Licensing header
+
+Every newly created code file must begin with the repository's licensing
+header, using the current calendar year and the comment syntax appropriate for
+the file's language:
+
+```text
+SPDX-FileCopyrightText: Copyright (c) <current year> NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+```
+
+For every existing code file touched by a change, verify that its licensing
+header uses the current calendar year and update the year when necessary.
+Adding or updating the header is a mandatory step before committing or handing
+off the change.
+
 ## Pre-commit gate
 
 Run this gate only when a change modifies Python files or project libraries and
