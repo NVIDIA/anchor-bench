@@ -241,6 +241,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "torch" },
+    { name = "typing-extensions" },
     { name = "usd-core", version = "26.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
     { name = "usd-core", version = "26.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
 ]
@@ -273,6 +274,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8,<1" },
     { name = "torch", specifier = ">=2.3,<3" },
+    { name = "typing-extensions", specifier = ">=4.0" },
     { name = "usd-core", marker = "python_full_version < '3.14'", specifier = ">=25.5,<26.5" },
     { name = "usd-core", marker = "python_full_version >= '3.14'", specifier = ">=26.8,<27" },
 ]

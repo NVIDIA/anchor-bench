@@ -1,11 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+# PEP 639 license metadata (`license` as an SPDX expression plus `license-files`)
+# is only understood by setuptools 77 and newer; older versions reject it.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "anchor-bench"
 version = "0.1.0"
 description = "Configuration-driven task runner for Anchor Bench."
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
   "cmaes",
@@ -18,6 +22,7 @@ dependencies = [
   "pydantic>=2.7,<3",
   "PyYAML>=6.0,<7",
   "torch>=2.3,<3",
+  "typing-extensions>=4.0",
   "usd-core>=25.5,<26.5; python_full_version < '3.14'",
   "usd-core>=26.8,<27; python_full_version >= '3.14'",
 ]
@@ -35,6 +40,12 @@ dev = [
 
 [project.scripts]
 anchor-bench = "anchor_bench.cli:main"
+
+[tool.uv]
+# Required, not redundant: the Black Duck OSS scanner only activates its uv
+# detector when pyproject.toml declares a [tool.uv] section. Removing this
+# makes the nSpect dependency scan fail with FAILURE_DETECTOR.
+managed = true
 
 [tool.setuptools.packages.find]
 include = ["anchor_bench*"]

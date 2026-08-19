@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 
 import torch
@@ -9,6 +12,7 @@ from anchor_bench.tasks.train import (
     GruModel,
     SearchResult,
     SearchTrial,
+    TrainingDataSplit,
     TrainingResult,
     fit_normalization,
     save_training_artifacts,
@@ -149,7 +153,7 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
     search_result = SearchResult(
         training_result=training_result,
         best_config=config,
-        validation_sequences=tuple(sequences),
+        split=TrainingDataSplit((), tuple(sequences), ()),
         objective_metric="validation_loss",
         objective_direction="minimize",
         best_trial=1,
@@ -195,4 +199,54 @@ def test_save_training_artifacts_writes_search_summary(tmp_path: Path) -> None:
         "run_name": "baseline",
         "upload_dataset": True,
         "options": {"mode": "offline"},
+    }
+
+
+def test_save_training_artifacts_separates_final_test_results(
+    tmp_path: Path,
+) -> None:
+    """Persist named split membership and final metrics outside validation."""
+
+    config = TrainingConfig.model_validate(_config_data())
+    training = _sequence("training", [0.0, 1.0])
+    validation = _sequence("validation", [2.0, 3.0])
+    test = _sequence("test", [4.0, 5.0])
+    sequences = [training, validation, test]
+    result = TrainingResult(
+        model=GruModel(config.model, input_size=1, output_size=1),
+        history=[EpochLoss(epoch=1, training=2.0, validation=1.0)],
+        normalization=fit_normalization(sequences, inputs="none", outputs="none"),
+    )
+    split = TrainingDataSplit((training,), (validation,), (test,))
+    output_folder = tmp_path / "artifacts"
+    output_folder.mkdir()
+
+    save_training_artifacts(
+        result,
+        sequences,
+        [
+            ValidationResult(
+                name="final loss",
+                type="offline",
+                metrics={"loss": 0.5},
+            )
+        ],
+        config,
+        output_folder,
+        data_split=split,
+        evaluation_split="test",
+    )
+
+    assert not (output_folder / "validation.yaml").exists()
+    assert yaml.safe_load((output_folder / "test.yaml").read_text()) == [
+        {
+            "name": "final loss",
+            "type": "offline",
+            "metrics": {"loss": 0.5},
+        }
+    ]
+    assert yaml.safe_load((output_folder / "splits.yaml").read_text()) == {
+        "training": ["training"],
+        "validation": ["validation"],
+        "test": ["test"],
     }

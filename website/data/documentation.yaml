@@ -1,18 +1,18 @@
-- title: CLI commands (outdated)
-  path: documentation/cli/
-  description: Legacy command reference and container workflow.
-- title: Repo structure (outdated)
-  path: documentation/repo-structure/
-  description: Legacy repository layout and directory conventions.
-- title: Artifacts (outdated)
-  path: documentation/artifacts/
-  description: Legacy artifact locations and handling guidance.
-- title: Host-safe end-to-end test (outdated)
-  path: documentation/end-to-end-test/
-  description: Legacy pipeline and runtime test design.
-- title: Robot plugins (outdated)
-  path: documentation/robot-plugin/
-  description: Legacy robot integration design.
-- title: G1 neural actuator recipes (outdated)
-  path: documentation/g1-neural-actuator-recipes/
-  description: Legacy G1 training recipes.
+- title: Running tasks
+  path: documentation/running-tasks/
+  description: Run YAML tasks, select output directories, and manage completed runs.
+- title: Trajectory generation
+  path: documentation/trajectory/
+  description: Generate deterministic hold, transition, sine, and chirp trajectories.
+- title: Actuator system identification
+  path: documentation/system-identification/
+  description: Fit actuator and controller parameters with CMA-ES and Newton replay.
+- title: Training actuator models
+  path: documentation/training/
+  description: Train and validate recurrent actuator models with the maintained G1 workflow.
+- title: Dataset loading
+  path: documentation/datasets/
+  description: Load, map, and uniformly resample long-form Parquet signals.
+- title: MLOps backends
+  path: documentation/mlops/
+  description: Track task parameters, metrics, datasets, and artifacts with MLflow.

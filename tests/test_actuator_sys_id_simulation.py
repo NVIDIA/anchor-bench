@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import logging
@@ -167,6 +170,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
         def __init__(self):
             self.created_world_count = None
             self.solver_options = None
+            self.captured_step = None
             self.template = SimpleNamespace(
                 joint_target_mode=[0],
                 joint_target_ke=[0.0],
@@ -204,6 +208,10 @@ def test_newton_evaluator_uses_shared_simulation_context(
             self.solver_options = solver_options
             configure_builder(self.template)
 
+        def capture_step_graph(self, *, dt, substeps):
+            self.captured_step = (dt, substeps)
+            return True
+
     context = FakeContext()
     config = _config(tmp_path)
     monkeypatch.setattr(simulation_module, "NewtonSimulationContext", FakeContext)
@@ -226,10 +234,6 @@ def test_newton_evaluator_uses_shared_simulation_context(
             np.asarray([[0], [1]]),
         ),
     )
-    graph = object()
-    monkeypatch.setattr(
-        NewtonPopulationEvaluator, "_capture_step_graph", lambda self: graph
-    )
 
     with caplog.at_level(logging.DEBUG, logger=simulation_module.__name__):
         evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
@@ -239,7 +243,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
-    assert evaluator._step_graph is graph
+    assert context.captured_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
         "solver": "newton",
         "integrator": "implicitfast",
@@ -327,55 +331,6 @@ def test_position_error_kernel_accumulates_all_worlds_and_samples():
     np.testing.assert_allclose(score_sums.numpy(), [0.0, 4.0])
 
 
-def test_odd_substeps_copy_output_back_to_graph_input_state():
-    class FakeState:
-        def __init__(self, value):
-            self.value = value
-            self.clear_count = 0
-            self.assign_count = 0
-
-        def clear_forces(self):
-            self.clear_count += 1
-
-        def assign(self, other):
-            self.value = other.value
-            self.assign_count += 1
-
-    class FakeSolver:
-        def __init__(self):
-            self.steps = []
-
-        def step(self, **values):
-            state_in = values["state_in"]
-            state_out = values["state_out"]
-            state_out.value = state_in.value + 1
-            self.steps.append((state_in, state_out))
-
-    state_0 = FakeState(0)
-    state_1 = FakeState(0)
-    solver = FakeSolver()
-    context = SimpleNamespace(
-        state_in=state_0,
-        state_out=state_1,
-        solver=solver,
-        control=object(),
-        contacts=object(),
-    )
-    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
-    evaluator.control_substeps = 3
-    evaluator.physics_dt = 0.001
-    evaluator._simulation_context = cast(NewtonSimulationContext, context)
-
-    evaluator._simulate_control_interval()
-    evaluator._simulate_control_interval()
-
-    assert context.state_in is state_0
-    assert context.state_out is state_1
-    assert state_0.value == 6
-    assert state_0.assign_count == 2
-    assert len(solver.steps) == 6
-
-
 def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch):
     class FakeArray:
         def __init__(self, values):
@@ -393,11 +348,11 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
             state.joint_q.assign([-1.0, -1.0])
             state.joint_qd.assign([1.0, 1.0])
 
-    state_in = SimpleNamespace(
+    state = SimpleNamespace(
         joint_q=FakeArray([0.0, 0.0]),
         joint_qd=FakeArray([0.0, 0.0]),
     )
-    state_out = SimpleNamespace(
+    state_next = SimpleNamespace(
         joint_q=FakeArray([0.0, 0.0]),
         joint_qd=FakeArray([0.0, 0.0]),
     )
@@ -405,8 +360,8 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
     context = SimpleNamespace(
         model=object(),
         solver=solver,
-        state_in=state_in,
-        state_out=state_out,
+        state=state,
+        state_next=state_next,
     )
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
     evaluator._simulation_context = cast(NewtonSimulationContext, context)
@@ -423,15 +378,15 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
 
     evaluator._reset(np.asarray([0.75], dtype=np.float32))
 
-    assert solver.reset_states == [state_in]
+    assert solver.reset_states == [state]
     assert fk_calls == [
-        (context.model, state_in.joint_q, state_in.joint_qd, state_in),
-        (context.model, state_out.joint_q, state_out.joint_qd, state_out),
+        (context.model, state.joint_q, state.joint_qd, state),
+        (context.model, state_next.joint_q, state_next.joint_qd, state_next),
     ]
-    np.testing.assert_allclose(state_in.joint_q.values, [0.75, 0.75])
-    np.testing.assert_allclose(state_out.joint_q.values, [0.75, 0.75])
-    np.testing.assert_allclose(state_in.joint_qd.values, [0.0, 0.0])
-    np.testing.assert_allclose(state_out.joint_qd.values, [0.0, 0.0])
+    np.testing.assert_allclose(state.joint_q.values, [0.75, 0.75])
+    np.testing.assert_allclose(state_next.joint_q.values, [0.75, 0.75])
+    np.testing.assert_allclose(state.joint_qd.values, [0.0, 0.0])
+    np.testing.assert_allclose(state_next.joint_qd.values, [0.0, 0.0])
 
 
 def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
@@ -476,11 +431,11 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 joint_friction=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_damping=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
-            self.state_in = SimpleNamespace(
+            self.state = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
-            self.state_out = SimpleNamespace(
+            self.state_next = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
@@ -497,13 +452,15 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 )
             )
 
-        def step(self, *, dt):
-            self.step_dts.append(dt)
-            self.target_history.append(
-                np.array(self.control.joint_target_q.numpy(), copy=True)
-            )
-            if len(self.step_dts) % 2 == 0:
-                self.state_in.joint_q.assign(next(self._simulated_positions))
+        def step(self, *, dt, substeps=1):
+            physics_dt = dt / substeps
+            for _ in range(substeps):
+                self.step_dts.append(physics_dt)
+                self.target_history.append(
+                    np.array(self.control.joint_target_q.numpy(), copy=True)
+                )
+                if len(self.step_dts) % 2 == 0:
+                    self.state.joint_q.assign(next(self._simulated_positions))
 
     context = FakeContext()
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
@@ -528,16 +485,6 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     evaluator._joint_q_indices_device = cast(Any, object())
     score_sums = FakeScoreArray([0.0, 0.0])
     evaluator._score_sums = cast(Any, score_sums)
-    evaluator._step_graph = cast("wp.Graph", object())
-    monkeypatch.setattr(
-        simulation_module.wp,
-        "capture_launch",
-        lambda graph: [
-            context.step(dt=evaluator.physics_dt)
-            for _ in range(evaluator.control_substeps)
-        ],
-    )
-
     monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
     monkeypatch.setattr(
         simulation_module.wp,
@@ -546,7 +493,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     )
 
     def launch_position_error(measured_positions, sample_index):
-        simulated = context.state_in.joint_q.values[evaluator._joint_q_indices]
+        simulated = context.state.joint_q.values[evaluator._joint_q_indices]
         measured = measured_positions.values.reshape(-1, 2)[sample_index]
         error = simulated - measured[np.newaxis, :]
         score_sums.values += np.sum(np.square(error), axis=1)
@@ -611,7 +558,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     np.testing.assert_allclose(context.target_history[::2], expected_targets)
     np.testing.assert_allclose(context.target_history[1::2], expected_targets)
     np.testing.assert_allclose(context.step_dts, [0.001] * 4)
-    assert context.state_in.joint_q.numpy_calls == 0
+    assert context.state.joint_q.numpy_calls == 0
     assert score_sums.numpy_calls == 1
-    assert context.solver.reset_states == [context.state_in]
+    assert context.solver.reset_states == [context.state]
     assert len(context.solver.changed_flags) == 1

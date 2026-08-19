@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """PyTorch datasets and data loaders for mapped training sequences."""
 
 from __future__ import annotations
@@ -94,13 +97,34 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
 
 
 @dataclass(frozen=True)
+class TrainingDataSplit:
+    """Keep complete mapped sequences in one disjoint experiment split."""
+
+    training: tuple[MappedTrainingSequence, ...]
+    validation: tuple[MappedTrainingSequence, ...]
+    test: tuple[MappedTrainingSequence, ...]
+
+
+@dataclass(frozen=True)
 class TrainingDataLoaders:
-    """Hold training and validation data loaders."""
+    """Hold training loaders and their complete experiment split."""
 
     train: DataLoader[tuple[Tensor, Tensor]]
     validation: DataLoader[tuple[Tensor, Tensor]]
-    validation_sequences: tuple[MappedTrainingSequence, ...]
+    split: TrainingDataSplit
     normalization: NormalizationStatistics
+
+    @property
+    def validation_sequences(self) -> tuple[MappedTrainingSequence, ...]:
+        """Return complete checkpoint-selection sequences."""
+
+        return self.split.validation
+
+    @property
+    def test_sequences(self) -> tuple[MappedTrainingSequence, ...]:
+        """Return complete final-held-out sequences."""
+
+        return self.split.test
 
 
 @dataclass(frozen=True)
@@ -146,13 +170,9 @@ def create_data_loaders(
     """Split mapped timesteps, window them, and build configured data loaders."""
 
     training = config.training
-    train_sequences, validation_sequences = _split_sequences(
-        sequences,
-        validation_ratio=float(training.validation_ratio),
-        seed=training.seed,
-    )
+    split = _split_sequences(sequences, config)
     normalization = fit_normalization(
-        train_sequences,
+        split.training,
         inputs=training.normalization.inputs,
         outputs=training.normalization.outputs,
     )
@@ -162,8 +182,8 @@ def create_data_loaders(
         "input_normalization": normalization.inputs,
         "target_normalization": normalization.outputs,
     }
-    train_dataset = SequenceDataset(train_sequences, **dataset_arguments)
-    validation_dataset = SequenceDataset(validation_sequences, **dataset_arguments)
+    train_dataset = SequenceDataset(split.training, **dataset_arguments)
+    validation_dataset = SequenceDataset(split.validation, **dataset_arguments)
 
     return TrainingDataLoaders(
         train=DataLoader(
@@ -176,29 +196,36 @@ def create_data_loaders(
             batch_size=training.batch_size,
             shuffle=False,
         ),
-        validation_sequences=tuple(validation_sequences),
+        split=split,
         normalization=normalization,
     )
 
 
 def _split_sequences(
     sequences: Sequence[MappedTrainingSequence],
-    *,
-    validation_ratio: float,
-    seed: int,
-) -> tuple[list[MappedTrainingSequence], list[MappedTrainingSequence]]:
+    config: TrainingConfig,
+) -> TrainingDataSplit:
     """Hold out complete experiments so recurrent trajectories never leak."""
 
+    training = config.training
+    if training.split is not None:
+        return _split_explicit_experiments(
+            sequences,
+            validation_experiments=training.split.validation_experiments,
+            test_experiments=training.split.test_experiments,
+        )
+
+    validation_ratio = float(training.validation_ratio or 0.0)
     experiments = list(dict.fromkeys(sequence.experiment for sequence in sequences))
     if validation_ratio == 0.0:
-        return list(sequences), []
+        return TrainingDataSplit(tuple(sequences), (), ())
     if len(experiments) < 2:
-        return list(sequences), []
-    random.Random(seed).shuffle(experiments)
+        return TrainingDataSplit(tuple(sequences), (), ())
+    random.Random(training.seed).shuffle(experiments)
     validation_count = max(1, round(len(experiments) * validation_ratio))
     validation_count = min(validation_count, len(experiments) - 1)
     validation_experiments = set(experiments[:validation_count])
-    training = [
+    training_sequences = [
         sequence
         for sequence in sequences
         if sequence.experiment not in validation_experiments
@@ -208,4 +235,46 @@ def _split_sequences(
         for sequence in sequences
         if sequence.experiment in validation_experiments
     ]
-    return training, validation
+    return TrainingDataSplit(
+        tuple(training_sequences),
+        tuple(validation),
+        (),
+    )
+
+
+def _split_explicit_experiments(
+    sequences: Sequence[MappedTrainingSequence],
+    *,
+    validation_experiments: Sequence[str],
+    test_experiments: Sequence[str],
+) -> TrainingDataSplit:
+    """Apply configured experiment names and reject missing or empty splits."""
+
+    available = {sequence.experiment for sequence in sequences}
+    validation_names = set(validation_experiments)
+    test_names = set(test_experiments)
+    missing_validation = validation_names - available
+    missing_test = test_names - available
+    if missing_validation or missing_test:
+        raise ValueError(
+            "Configured split experiments are missing from mapped sequences: "
+            f"validation={sorted(missing_validation)}, test={sorted(missing_test)}."
+        )
+
+    held_out = validation_names | test_names
+    training = tuple(
+        sequence for sequence in sequences if sequence.experiment not in held_out
+    )
+    if not training:
+        raise ValueError("Explicit split must leave at least one training experiment.")
+    return TrainingDataSplit(
+        training=training,
+        validation=tuple(
+            sequence
+            for sequence in sequences
+            if sequence.experiment in validation_names
+        ),
+        test=tuple(
+            sequence for sequence in sequences if sequence.experiment in test_names
+        ),
+    )

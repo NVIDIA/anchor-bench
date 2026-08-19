@@ -1,10 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Persistence for completed training runs."""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
 import torch
 
@@ -12,6 +15,7 @@ from anchor_bench.core.artifacts import write_yaml
 
 if TYPE_CHECKING:
     from anchor_bench.schema.training import TrainingConfig
+    from anchor_bench.tasks.train.data import TrainingDataSplit
     from anchor_bench.tasks.train.task import MappedTrainingSequence, SearchResult
     from anchor_bench.tasks.train.trainer import TrainingResult
     from anchor_bench.train.validators import ValidationResult
@@ -25,6 +29,8 @@ def save_training_artifacts(
     output_folder: Path,
     *,
     search_result: SearchResult | None = None,
+    data_split: TrainingDataSplit | None = None,
+    evaluation_split: Literal["validation", "test"] = "validation",
 ) -> Path:
     """Write one portable, config-addressed training artifact folder."""
 
@@ -42,9 +48,18 @@ def save_training_artifacts(
         asdict(result.normalization),
     )
     write_yaml(
-        output_folder / "validation.yaml",
+        output_folder / f"{evaluation_split}.yaml",
         [asdict(validation_result) for validation_result in validation_results],
     )
+    if data_split is not None:
+        write_yaml(
+            output_folder / "splits.yaml",
+            {
+                "training": _experiment_names(data_split.training),
+                "validation": _experiment_names(data_split.validation),
+                "test": _experiment_names(data_split.test),
+            },
+        )
     write_yaml(
         output_folder / "metadata.yaml",
         {
@@ -104,3 +119,11 @@ def _feature_layouts(
             },
         )
     return layouts
+
+
+def _experiment_names(
+    sequences: Sequence[MappedTrainingSequence],
+) -> list[str]:
+    """Return experiment names once in their deterministic sequence order."""
+
+    return list(dict.fromkeys(str(sequence.experiment) for sequence in sequences))

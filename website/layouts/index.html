@@ -2,17 +2,17 @@
 <section class="hero">
   <div class="hero__glow" aria-hidden="true"></div>
   <div class="hero__inner">
-    <span class="eyebrow">Sim-to-real actuator benchmarking</span>
+    <span class="eyebrow">Robot actuator workflows</span>
     <h1 class="hero__title">Anchor&nbsp;Bench</h1>
     <p class="hero__tagline">{{ .Site.Params.description }}</p>
     <div class="hero__actions">
       <a class="button button--primary" href="{{ (.Site.GetPage "/documentation").RelPermalink }}">Explore documentation</a>
       <a class="button button--ghost" href="{{ (.Site.GetPage "/blog").RelPermalink }}">Read the blog</a>
     </div>
-    <div class="hero__stack" aria-label="Supported platforms">
-      <span class="chip">Isaac Sim</span>
+    <div class="hero__stack" aria-label="Supported workflows">
+      <span class="chip">Trajectories</span>
       <span class="chip">Newton</span>
-      <span class="chip">Isaac Lab</span>
+      <span class="chip">MLflow</span>
     </div>
   </div>
 </section>
@@ -39,8 +39,8 @@
   <div class="cta-card">
     <div class="cta-card__text">
       <span class="eyebrow eyebrow--light">Documentation</span>
-      <h2>Everything you need to run the benchmark</h2>
-      <p>Guides for the CLI, repo layout, artifacts, robot plugins, and end-to-end workflows.</p>
+      <h2>Run an actuator workflow</h2>
+      <p>Guides for task execution, trajectories, system identification, training, datasets, and tracking.</p>
     </div>
     <a class="button button--light" href="{{ (.Site.GetPage "/documentation").RelPermalink }}">Browse documentation →</a>
   </div>

@@ -1,9 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Training task interfaces."""
 
 from anchor_bench.tasks.train.artifacts import save_training_artifacts
 from anchor_bench.tasks.train.data import (
     SequenceDataset,
     TrainingDataLoaders,
+    TrainingDataSplit,
     ValidationDataset,
     create_data_loaders,
     create_validation_dataset,
@@ -46,6 +50,7 @@ __all__ = [
     "SequenceDataset",
     "Trainer",
     "TrainingDataLoaders",
+    "TrainingDataSplit",
     "TrainingResult",
     "TrainingTask",
     "ValidationDataset",

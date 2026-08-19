@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Pydantic configuration models and parser."""
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
