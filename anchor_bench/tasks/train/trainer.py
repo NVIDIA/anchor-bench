@@ -46,6 +46,16 @@ class TrainingResult:
     normalization: NormalizationStatistics
 
 
+@dataclass(frozen=True)
+class _FeedbackLayout:
+    """Describe feedback columns and their tensor positions."""
+
+    input_columns: tuple[str, ...]
+    target_columns: tuple[str, ...]
+    input_indices: tuple[int, ...]
+    target_indices: tuple[int, ...]
+
+
 class Trainer:
     """Train a configured model on prepared sequence data."""
 
@@ -348,37 +358,19 @@ def _feedback_indices(
         input_feature=input_feature,
         output_feature=output_feature,
     )
-    reference_inputs, reference_outputs, input_indices, output_indices = (
-        reference_layout
-    )
     for sequence in dataset[1:]:
-        inputs, outputs, sequence_input_indices, sequence_output_indices = (
-            _feedback_layout(
-                sequence,
-                input_feature=input_feature,
-                output_feature=output_feature,
-            )
+        layout = _feedback_layout(
+            sequence,
+            input_feature=input_feature,
+            output_feature=output_feature,
         )
-        if (inputs, outputs) != (reference_inputs, reference_outputs):
+        if layout != reference_layout:
             raise ValueError(
-                f"Sequence {sequence.name!r} feedback column layout differs from "
-                f"reference sequence {reference.name!r}; expected inputs "
-                f"{reference_inputs!r} and targets {reference_outputs!r}, got "
-                f"inputs {inputs!r} and targets {outputs!r}."
+                f"Sequence {sequence.name!r} feedback layout differs from "
+                f"reference sequence {reference.name!r}; expected "
+                f"{reference_layout!r}, got {layout!r}."
             )
-        if (sequence_input_indices, sequence_output_indices) != (
-            input_indices,
-            output_indices,
-        ):
-            raise ValueError(
-                f"Sequence {sequence.name!r} feedback tensor positions differ "
-                f"from reference sequence {reference.name!r}; expected input "
-                f"indices {input_indices!r} and paired target indices "
-                f"{output_indices!r}, got input indices "
-                f"{sequence_input_indices!r} and paired target indices "
-                f"{sequence_output_indices!r}."
-            )
-    return input_indices, output_indices
+    return reference_layout.input_indices, reference_layout.target_indices
 
 
 def _feedback_layout(
@@ -386,7 +378,7 @@ def _feedback_layout(
     *,
     input_feature: str,
     output_feature: str,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[int, ...]]:
+) -> _FeedbackLayout:
     """Return ordered feedback columns and entity-paired tensor indices."""
 
     input_columns, inputs_by_entity = _feedback_columns(
@@ -395,7 +387,7 @@ def _feedback_layout(
         role="input",
         sequence_name=sequence.name,
     )
-    output_columns, outputs_by_entity = _feedback_columns(
+    target_columns, targets_by_entity = _feedback_columns(
         sequence.targets.columns,
         feature=output_feature,
         role="target",
@@ -408,10 +400,10 @@ def _feedback_layout(
         )
 
     input_entities = set(inputs_by_entity)
-    output_entities = set(outputs_by_entity)
-    if input_entities != output_entities:
-        missing_targets = sorted(input_entities - output_entities)
-        missing_inputs = sorted(output_entities - input_entities)
+    target_entities = set(targets_by_entity)
+    if input_entities != target_entities:
+        missing_targets = sorted(input_entities - target_entities)
+        missing_inputs = sorted(target_entities - input_entities)
         raise ValueError(
             f"Sequence {sequence.name!r} feedback entities differ between inputs "
             f"and targets; missing targets for {missing_targets!r}, missing inputs "
@@ -419,8 +411,13 @@ def _feedback_layout(
         )
 
     input_indices = tuple(inputs_by_entity.values())
-    output_indices = tuple(outputs_by_entity[entity] for entity in inputs_by_entity)
-    return input_columns, output_columns, input_indices, output_indices
+    target_indices = tuple(targets_by_entity[entity] for entity in inputs_by_entity)
+    return _FeedbackLayout(
+        input_columns=input_columns,
+        target_columns=target_columns,
+        input_indices=input_indices,
+        target_indices=target_indices,
+    )
 
 
 def _feedback_columns(

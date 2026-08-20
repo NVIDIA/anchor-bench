@@ -479,7 +479,7 @@ def test_trainer_rejects_mismatched_feedback_entities(
 def test_trainer_rejects_reordered_feedback_layouts(
     later: MappedTrainingSequence,
 ) -> None:
-    with pytest.raises(ValueError, match="feedback column layout differs"):
+    with pytest.raises(ValueError, match="feedback layout differs"):
         Trainer(
             _feedback_config(),
             [_feedback_sequence("reference"), later],
@@ -532,7 +532,7 @@ def test_trainer_rejects_shifted_feedback_tensor_positions(
     reference: MappedTrainingSequence,
     later: MappedTrainingSequence,
 ) -> None:
-    with pytest.raises(ValueError, match="feedback tensor positions differ"):
+    with pytest.raises(ValueError, match="feedback layout differs"):
         Trainer(
             _feedback_config(),
             [reference, later],
