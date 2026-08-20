@@ -4,8 +4,8 @@ Anchor Bench is licensed under Apache-2.0 (see `LICENSE`). It does not vendor or
 redistribute third-party source code; the packages below are resolved from PyPI at
 install time and are listed here to attribute each dependency and its license.
 
-- **182** packages are installed alongside the project at runtime
-  (including the optional `simulation` extra) and are marked *Distributed*.
+- **182** packages are installed alongside the project at runtime and are
+  marked *Distributed*.
 - **8** are build, lint, or test tools only, marked
   *Development only*, and are never shipped to users.
 
