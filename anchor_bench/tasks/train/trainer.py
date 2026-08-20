@@ -352,10 +352,12 @@ def _feedback_indices(
         reference_layout
     )
     for sequence in dataset[1:]:
-        inputs, outputs, _, _ = _feedback_layout(
-            sequence,
-            input_feature=input_feature,
-            output_feature=output_feature,
+        inputs, outputs, sequence_input_indices, sequence_output_indices = (
+            _feedback_layout(
+                sequence,
+                input_feature=input_feature,
+                output_feature=output_feature,
+            )
         )
         if (inputs, outputs) != (reference_inputs, reference_outputs):
             raise ValueError(
@@ -363,6 +365,18 @@ def _feedback_indices(
                 f"reference sequence {reference.name!r}; expected inputs "
                 f"{reference_inputs!r} and targets {reference_outputs!r}, got "
                 f"inputs {inputs!r} and targets {outputs!r}."
+            )
+        if (sequence_input_indices, sequence_output_indices) != (
+            input_indices,
+            output_indices,
+        ):
+            raise ValueError(
+                f"Sequence {sequence.name!r} feedback tensor positions differ "
+                f"from reference sequence {reference.name!r}; expected input "
+                f"indices {input_indices!r} and paired target indices "
+                f"{output_indices!r}, got input indices "
+                f"{sequence_input_indices!r} and paired target indices "
+                f"{sequence_output_indices!r}."
             )
     return input_indices, output_indices
 

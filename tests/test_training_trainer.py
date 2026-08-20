@@ -485,3 +485,56 @@ def test_trainer_rejects_reordered_feedback_layouts(
             [_feedback_sequence("reference"), later],
             device="cpu",
         )
+
+
+@pytest.mark.parametrize(
+    ("reference", "later"),
+    [
+        (
+            _feedback_sequence(
+                "reference",
+                input_columns=(
+                    "joint_a/feedback",
+                    "context",
+                    "joint_b/feedback",
+                ),
+            ),
+            _feedback_sequence(
+                "shifted-inputs",
+                input_columns=(
+                    "context",
+                    "joint_a/feedback",
+                    "joint_b/feedback",
+                ),
+            ),
+        ),
+        (
+            _feedback_sequence(
+                "reference",
+                target_columns=(
+                    "joint_b/target",
+                    "context",
+                    "joint_a/target",
+                ),
+            ),
+            _feedback_sequence(
+                "shifted-targets",
+                target_columns=(
+                    "context",
+                    "joint_b/target",
+                    "joint_a/target",
+                ),
+            ),
+        ),
+    ],
+)
+def test_trainer_rejects_shifted_feedback_tensor_positions(
+    reference: MappedTrainingSequence,
+    later: MappedTrainingSequence,
+) -> None:
+    with pytest.raises(ValueError, match="feedback tensor positions differ"):
+        Trainer(
+            _feedback_config(),
+            [reference, later],
+            device="cpu",
+        )
