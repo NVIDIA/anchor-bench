@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 (
-    defaultPrim = "g1_29dof_with_hand_rev_1_0"
+    defaultPrim = "g1_29dof_rev_1_0_tri_hand"
     subLayers = [
         @g1.usd@
     ]
 )
 
-over "g1_29dof_with_hand_rev_1_0"
+over "g1_29dof_rev_1_0_tri_hand"
 {
     over "joints"
     {

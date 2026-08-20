@@ -1,18 +1,55 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# pyright: reportAttributeAccessIssue=false
+
+import hashlib
 from pathlib import Path
+
+import pytest
+from pxr import Usd, UsdGeom, UsdPhysics
 
 from anchor_bench.schema.parse import parse
 from anchor_bench.schema.training import TrainingConfig
 
 CONFIG_DIRECTORY = Path(__file__).parent
+ROBOT_ROOT = "/g1_29dof_rev_1_0_tri_hand"
 JOINTS = [
-    "/g1_29dof_with_hand_rev_1_0/joints/right_shoulder_pitch_joint",
-    "/g1_29dof_with_hand_rev_1_0/joints/right_shoulder_roll_joint",
-    "/g1_29dof_with_hand_rev_1_0/joints/right_shoulder_yaw_joint",
-    "/g1_29dof_with_hand_rev_1_0/joints/right_elbow_joint",
+    f"{ROBOT_ROOT}/joints/right_shoulder_pitch_joint",
+    f"{ROBOT_ROOT}/joints/right_shoulder_roll_joint",
+    f"{ROBOT_ROOT}/joints/right_shoulder_yaw_joint",
+    f"{ROBOT_ROOT}/joints/right_elbow_joint",
 ]
+ASSET_SHA256 = "9e61f39e3ace1cd60b3cf9eb7dc5422a02584ad5b23b049d2d792bbbec2b9ddc"
+
+
+def test_g1_asset_is_pinned_and_upright() -> None:
+    """Keep the corrected TriHand asset identity, pose, and gravity stable."""
+
+    asset = CONFIG_DIRECTORY / "usd" / "g1_29dof_tri_hand_closed.usd"
+    with asset.open("rb") as stream:
+        assert hashlib.file_digest(stream, "sha256").hexdigest() == ASSET_SHA256
+
+    stage = Usd.Stage.Open(str(CONFIG_DIRECTORY / "usd" / "g1.usd"))
+    assert stage.GetDefaultPrim().GetPath().pathString == ROBOT_ROOT
+
+    transforms = UsdGeom.XformCache()
+    pelvis = transforms.GetLocalToWorldTransform(
+        stage.GetPrimAtPath(f"{ROBOT_ROOT}/pelvis")
+    )
+    torso = transforms.GetLocalToWorldTransform(
+        stage.GetPrimAtPath(f"{ROBOT_ROOT}/torso_link")
+    )
+    orientation = pelvis.ExtractRotationQuat()
+    assert orientation.GetReal() == pytest.approx(1.0)
+    assert tuple(orientation.GetImaginary()) == pytest.approx((0.0, 0.0, 0.0))
+    assert torso.ExtractTranslation()[2] > pelvis.ExtractTranslation()[2]
+
+    scene = UsdPhysics.Scene.Get(stage, "/physicsScene")
+    assert tuple(scene.GetGravityDirectionAttr().Get()) == pytest.approx(
+        (0.0, 0.0, -1.0)
+    )
+    assert scene.GetGravityMagnitudeAttr().Get() == pytest.approx(9.81)
 
 
 def test_g1_residual_training_config() -> None:

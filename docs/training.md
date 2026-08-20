@@ -10,6 +10,10 @@ workflow provides two complete configurations:
 Their supporting physics layers, dataset preparation script, configurations,
 and integration tests live under [`tests/integration/g1/`](../tests/integration/g1/).
 
+The example pins the corrected Anchor-Lab `g1_29dof_tri_hand_closed.usd`
+asset at revision `50881f268b6600251df6f2011cfaa5a392fb96eb` and verifies its checksum
+before replay.
+
 A CUDA-capable GPU is required for training and Newton replay. Run all commands
 from the repository root.
 

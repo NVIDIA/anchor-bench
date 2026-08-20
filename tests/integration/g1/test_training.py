@@ -40,7 +40,7 @@ def test_prepares_complete_g1_dataset(g1_dataset: Path) -> None:
         columns=["experiment", "field"],
     )
     assert fields["experiment"].nunique() == len(FILENAMES)
-    assert fields["field"].str.startswith("/g1_29dof_with_hand_rev_1_0/joints/").all()
+    assert fields["field"].str.startswith("/g1_29dof_rev_1_0_tri_hand/joints/").all()
     assert fields["field"].str.endswith("/actual_dq").any()
     assert fields["field"].str.endswith("/actual_effort").any()
 
