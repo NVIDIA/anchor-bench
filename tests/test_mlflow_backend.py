@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 from types import SimpleNamespace
 
@@ -36,7 +37,10 @@ class FakeMLflowData:
 
     def from_pandas(self, dataset, **options):
         self.arguments = (dataset, options)
-        return SimpleNamespace(source="resolved-dataset-source")
+        return SimpleNamespace(
+            source="resolved-dataset-source",
+            schema="resolved-dataset-schema",
+        )
 
 
 class FakeMLflow:
@@ -286,6 +290,7 @@ def test_mlflow_logs_native_dataset_input_without_upload(monkeypatch, tmp_path):
     assert native_dataset.source == "resolved-dataset-source"
     assert native_dataset.name == "training-dataset"
     assert native_dataset.digest == full_digest[:36]
+    assert native_dataset.schema == "resolved-dataset-schema"
     assert log_input_call[2] == {
         "context": "training",
         "tags": {
@@ -395,6 +400,10 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
     assert len(dataset_inputs) == 1
     assert dataset_inputs[0].dataset.name == "training-dataset"
     assert dataset_inputs[0].dataset.digest == full_digest[:36]
+    inferred_schema = mlflow.data.from_pandas(dataset.iloc[:0]).schema
+    assert json.loads(dataset_inputs[0].dataset.schema) == {
+        "mlflow_colspec": json.loads(inferred_schema.to_json())
+    }
     assert tracked_run.data.params["datasets/training-dataset/digest"] == full_digest
     input_tags = {tag.key: tag.value for tag in dataset_inputs[0].tags}
     assert input_tags["mlflow.data.context"] == "training"

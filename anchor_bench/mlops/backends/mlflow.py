@@ -91,6 +91,7 @@ class MLflowRun(MLOpsRun):
             source=source_reference.source,
             name=name,
             digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
+            schema=source_reference.schema,
         )
         input_tags = (
             {key: str(value) for key, value in metadata.items()}
