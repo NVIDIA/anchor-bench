@@ -60,7 +60,7 @@ class DatasetLoader:
             http_timeout_seconds=http_timeout_seconds,
         ) as dataset_files:
             datasets = []
-            for index, dataset_file in enumerate(dataset_files):
+            for dataset_file in dataset_files:
                 logger.debug("Reading dataset file path=%s", dataset_file)
                 dataset = DatasetLoader._read_file(dataset_file, source)
                 datasets.append(dataset)
@@ -68,7 +68,7 @@ class DatasetLoader:
                     tracked_name = (
                         dataset_name
                         if len(dataset_files) == 1
-                        else f"{dataset_name}-{index}"
+                        else f"{dataset_name}-{dataset_file.stem}"
                     )
                     # Fingerprint the materialized file rather than the DataFrame so
                     # the digest identifies exactly the bytes a later run can reuse.

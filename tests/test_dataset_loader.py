@@ -76,6 +76,10 @@ def test_loads_multiple_local_parquet_files_from_glob(tmp_path: Path) -> None:
         str(tmp_path / "a.parquet"),
         str(tmp_path / "b.parquet"),
     ]
+    assert [call.kwargs["name"] for call in tracker.log_dataset.call_args_list] == [
+        "dataset-a",
+        "dataset-b",
+    ]
     assert [
         call.kwargs["metadata"]["source_pattern"]
         for call in tracker.log_dataset.call_args_list
