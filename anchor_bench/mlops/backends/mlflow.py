@@ -13,6 +13,7 @@ from typing import Generator, Mapping, Optional, Union
 
 import mlflow
 import pandas as pd
+from mlflow.data.meta_dataset import MetaDataset
 
 from anchor_bench.errors import MLOpsTrackingError
 from anchor_bench.mlops.base import MLOpsBackend, MLOpsRun, ParameterValue
@@ -76,9 +77,18 @@ class MLflowRun(MLOpsRun):
             metadata=metadata,
             upload=upload,
         )
-        mlflow_dataset = self._mlflow.data.from_pandas(
-            dataset,
+        # Native lineage needs the resolved source, name, and digest, but not a
+        # second inspection of every value. PandasDataset infers its schema when
+        # MLflow serializes it, which is particularly expensive for large string
+        # columns and is redundant with the portable metadata recorded above.
+        source_reference = self._mlflow.data.from_pandas(
+            dataset.iloc[:0],
             source=source,
+            name=name,
+            digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
+        )
+        mlflow_dataset = MetaDataset(
+            source=source_reference.source,
             name=name,
             digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
         )

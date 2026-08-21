@@ -53,6 +53,8 @@ class DatasetLoader:
         until the backend has finished consuming it.
         """
 
+        source_text = str(source)
+        is_remote_source = urlparse(source_text).scheme in ("http", "https")
         with DatasetLoader._get_files(
             source,
             http_timeout_seconds=http_timeout_seconds,
@@ -70,18 +72,21 @@ class DatasetLoader:
                     )
                     # Fingerprint the materialized file rather than the DataFrame so
                     # the digest identifies exactly the bytes a later run can reuse.
+                    metadata: dict[str, Union[str, int]] = {
+                        "digest_algorithm": "sha256",
+                        "format": "parquet",
+                        "size_bytes": dataset_file.stat().st_size,
+                    }
+                    if has_magic(source_text):
+                        metadata["source_pattern"] = source_text
                     dataset_tracker.log_dataset(
                         dataset,
-                        source=str(source),
+                        source=(source_text if is_remote_source else str(dataset_file)),
                         digest=DatasetLoader._sha256(dataset_file, source),
                         name=tracked_name,
                         context=dataset_context,
                         path=dataset_file,
-                        metadata={
-                            "digest_algorithm": "sha256",
-                            "format": "parquet",
-                            "size_bytes": dataset_file.stat().st_size,
-                        },
+                        metadata=metadata,
                         upload=upload_dataset,
                     )
         dataset = pd.concat(datasets, ignore_index=True)

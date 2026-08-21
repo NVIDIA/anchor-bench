@@ -36,7 +36,7 @@ class FakeMLflowData:
 
     def from_pandas(self, dataset, **options):
         self.arguments = (dataset, options)
-        return "native-dataset"
+        return SimpleNamespace(source="resolved-dataset-source")
 
 
 class FakeMLflow:
@@ -273,23 +273,26 @@ def test_mlflow_logs_native_dataset_input_without_upload(monkeypatch, tmp_path):
 
     assert fake_mlflow.data.arguments is not None
     reported_dataset, options = fake_mlflow.data.arguments
-    assert reported_dataset is dataset
+    assert reported_dataset.empty
+    assert reported_dataset.columns.tolist() == dataset.columns.tolist()
+    assert reported_dataset.dtypes.equals(dataset.dtypes)
     assert options == {
         "source": "datasets/actuator.parquet",
         "name": "training-dataset",
         "digest": full_digest[:36],
     }
-    assert (
-        "log_input",
-        "native-dataset",
-        {
-            "context": "training",
-            "tags": {
-                "format": "parquet",
-                "anchor_bench.dataset_digest": full_digest,
-            },
+    log_input_call = next(call for call in fake_mlflow.calls if call[0] == "log_input")
+    native_dataset = log_input_call[1]
+    assert native_dataset.source == "resolved-dataset-source"
+    assert native_dataset.name == "training-dataset"
+    assert native_dataset.digest == full_digest[:36]
+    assert log_input_call[2] == {
+        "context": "training",
+        "tags": {
+            "format": "parquet",
+            "anchor_bench.dataset_digest": full_digest,
         },
-    ) in fake_mlflow.calls
+    }
     assert (
         "log_params",
         {
