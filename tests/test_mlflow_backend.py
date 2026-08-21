@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import mlflow
 import pandas as pd
 import pytest
+from mlflow.data.pandas_dataset import from_pandas
 
 from anchor_bench.errors import MLOpsTrackingError
 from anchor_bench.mlops.backends import mlflow as mlflow_backend
@@ -400,7 +401,8 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
     assert len(dataset_inputs) == 1
     assert dataset_inputs[0].dataset.name == "training-dataset"
     assert dataset_inputs[0].dataset.digest == full_digest[:36]
-    inferred_schema = mlflow.data.from_pandas(dataset.iloc[:0]).schema
+    inferred_schema = from_pandas(dataset.iloc[:0]).schema
+    assert inferred_schema is not None
     assert json.loads(dataset_inputs[0].dataset.schema) == {
         "mlflow_colspec": json.loads(inferred_schema.to_json())
     }
