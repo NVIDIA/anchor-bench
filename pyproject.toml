@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anchor-bench"
-version = "0.1.0"
+version = "1.0.0"
 description = "Configuration-driven task runner for Anchor Bench."
 license = "Apache-2.0"
 license-files = ["LICENSE"]
