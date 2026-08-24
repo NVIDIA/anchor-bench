@@ -39,6 +39,7 @@ def load_trajectories(
         dataset_context="system-identification",
         upload_dataset=upload_dataset,
         joint_name_mapping=dataset_config.joint_name_mapping,
+        feature_name_mapping=dataset_config.feature_name_mapping,
     )
     _validate_index(dataset)
 

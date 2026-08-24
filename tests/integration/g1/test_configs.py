@@ -21,6 +21,12 @@ JOINTS = [
     f"{ROBOT_ROOT}/joints/right_elbow_joint",
 ]
 ASSET_SHA256 = "9e61f39e3ace1cd60b3cf9eb7dc5422a02584ad5b23b049d2d792bbbec2b9ddc"
+RAW_JOINTS = [
+    "right_shoulder_pitch",
+    "right_shoulder_roll",
+    "right_shoulder_yaw",
+    "right_elbow",
+]
 
 
 def test_g1_asset_is_pinned_and_upright() -> None:
@@ -58,6 +64,13 @@ def test_g1_residual_training_config() -> None:
     config = parse(CONFIG_DIRECTORY / "g1_arm_residual.yaml")
 
     assert isinstance(config, TrainingConfig)
+    assert config.dataset.source.endswith("g1-arm-multijoint-*.parquet")
+    assert list(config.dataset.joint_name_mapping) == RAW_JOINTS
+    assert list(config.dataset.joint_name_mapping.values()) == JOINTS
+    assert config.dataset.feature_name_mapping == {
+        "dq": "actual_dq",
+        "tau_est": "actual_effort",
+    }
     assert list(config.input_features) == [
         "actual_q",
         "position_error",
@@ -78,6 +91,13 @@ def test_g1_full_torque_training_config() -> None:
     config = parse(CONFIG_DIRECTORY / "g1_arm_full_torque.yaml")
 
     assert isinstance(config, TrainingConfig)
+    assert config.dataset.source.endswith("g1-arm-multijoint-*.parquet")
+    assert list(config.dataset.joint_name_mapping) == RAW_JOINTS
+    assert list(config.dataset.joint_name_mapping.values()) == JOINTS
+    assert config.dataset.feature_name_mapping == {
+        "dq": "actual_dq",
+        "tau_est": "actual_effort",
+    }
     assert list(config.input_features) == [
         "actual_q",
         "position_error",
