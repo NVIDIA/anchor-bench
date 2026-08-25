@@ -43,7 +43,12 @@ def _create_source_usd(path):
         Sdf.ValueTypeNames.Float,
         custom=True,
     ).Set(2.0)
-    UsdPhysics.RevoluteJoint.Define(stage, "/World/hip")
+    hip = UsdPhysics.RevoluteJoint.Define(stage, "/World/hip")
+    hip.GetPrim().CreateAttribute(
+        "mjc:damping",
+        Sdf.ValueTypeNames.Double,
+        custom=False,
+    ).Set(0.6)
     UsdPhysics.PrismaticJoint.Define(stage, "/World/slider")
 
     d6_joint = UsdPhysics.Joint.Define(stage, "/World/wrist")
@@ -99,6 +104,7 @@ def test_writes_sparse_opinions_over_the_source_asset(tmp_path):
     assert hip.GetAttribute("newton:armature").Get() == pytest.approx(0.05)
     assert hip.GetAttribute("newton:friction").Get() == pytest.approx(0.5)
     assert hip.GetAttribute("newton:damping").Get() == pytest.approx(radians_per_degree)
+    assert hip.GetAttribute("mjc:damping").Get() == pytest.approx(1.0)
 
     slider = stage.GetPrimAtPath("/World/slider")
     slider_drive = UsdPhysics.DriveAPI.Get(slider, "linear")

@@ -119,6 +119,13 @@ def write_identified_usd_layer(
             "newton:damping",
             float(parameters["viscous_friction"]) * damping_scale,
         )
+        source_mujoco_damping = source_joint.GetAttribute("mjc:damping")
+        if source_mujoco_damping and source_mujoco_damping.HasAuthoredValueOpinion():
+            joint_override.CreateAttribute(
+                "mjc:damping",
+                Sdf.ValueTypeNames.Double,
+                custom=False,
+            ).Set(float(parameters["viscous_friction"]))
 
     if not output_layer.Save():
         raise RuntimeError(f"could not save identified USD layer: {destination}")

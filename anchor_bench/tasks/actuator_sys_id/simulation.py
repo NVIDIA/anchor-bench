@@ -218,6 +218,19 @@ class NewtonPopulationEvaluator:
             template.joint_armature[dof_index] = values["armature"]
             template.joint_friction[dof_index] = values["dry_friction"]
             template.joint_damping[dof_index] = values["viscous_friction"]
+            damping_alias = getattr(template, "custom_attributes", {}).get(
+                "mujoco:dof_passive_damping"
+            )
+            if damping_alias is not None:
+                alias_values = damping_alias.values
+                alias_has_dof = (
+                    isinstance(alias_values, dict)
+                    and dof_index in alias_values
+                    or isinstance(alias_values, list)
+                    and dof_index < len(alias_values)
+                )
+                if alias_has_dof:
+                    alias_values[dof_index] = values["viscous_friction"]
             template.joint_effort_limit[dof_index] = float(
                 group.controller.clamps.effort_limit
             )

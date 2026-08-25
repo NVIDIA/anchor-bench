@@ -178,6 +178,9 @@ def test_newton_evaluator_uses_shared_simulation_context(
                 joint_armature=[0.0],
                 joint_friction=[0.0],
                 joint_damping=[0.0],
+                custom_attributes={
+                    "mujoco:dof_passive_damping": SimpleNamespace(values={0: 0.6})
+                },
                 joint_effort_limit=[0.0],
                 joint_velocity_limit=[0.0],
             )
@@ -243,6 +246,10 @@ def test_newton_evaluator_uses_shared_simulation_context(
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
+    assert (
+        context.template.custom_attributes["mujoco:dof_passive_damping"].values[0]
+        == context.template.joint_damping[0]
+    )
     assert context.captured_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
         "solver": "newton",

@@ -1,6 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 type: actuator_sys_id
 joint_parameters:
-  - names: [Rotation, Pitch, Elbow, Wrist_Pitch, Wrist_Roll, Jaw]
+  - names: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
     controller:
       type: pd
       delay_duration_ms: 0
@@ -16,11 +19,12 @@ joint_parameters:
 optimizer:
   type: python-cmaes
   sigma: 0.25
-  max_iterations: 2
+  max_iterations: 10
   epsilon: 0.001
 simulation:
   type: newton
-  usd_path: tests/integration/so101_actuator_sysid/so101.usd
+  # test_cli.py resolves this newton-assets path into Newton's local cache.
+  usd_path: robotstudio_so101/usd_structured/so101.usda
   physics_freq: 250
   control_freq: 50
   render_freq: 25
@@ -36,6 +40,13 @@ output_dir: outputs/integration/so101_actuator_sysid
 dataset:
   type: parquet
   source: tests/integration/so101_actuator_sysid/trajectories/train-*.parquet
+  joint_name_mapping:
+    Rotation: shoulder_pan
+    Pitch: shoulder_lift
+    Elbow: elbow_flex
+    Wrist_Pitch: wrist_flex
+    Wrist_Roll: wrist_roll
+    Jaw: gripper
   resampling:
     type: uniform
     dt: 0.02
