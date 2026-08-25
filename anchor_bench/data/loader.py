@@ -45,6 +45,7 @@ class DatasetLoader:
         dataset_context: str = "input",
         upload_dataset: bool = False,
         joint_name_mapping: Optional[Mapping[str, str]] = None,
+        feature_name_mapping: Optional[Mapping[str, str]] = None,
     ) -> pd.DataFrame:
         """Acquire, optionally track, and resample one or more Parquet files.
 
@@ -53,12 +54,14 @@ class DatasetLoader:
         until the backend has finished consuming it.
         """
 
+        source_text = str(source)
+        is_remote_source = urlparse(source_text).scheme in ("http", "https")
         with DatasetLoader._get_files(
             source,
             http_timeout_seconds=http_timeout_seconds,
         ) as dataset_files:
             datasets = []
-            for index, dataset_file in enumerate(dataset_files):
+            for dataset_file in dataset_files:
                 logger.debug("Reading dataset file path=%s", dataset_file)
                 dataset = DatasetLoader._read_file(dataset_file, source)
                 datasets.append(dataset)
@@ -66,22 +69,25 @@ class DatasetLoader:
                     tracked_name = (
                         dataset_name
                         if len(dataset_files) == 1
-                        else f"{dataset_name}-{index}"
+                        else f"{dataset_name}-{dataset_file.stem}"
                     )
                     # Fingerprint the materialized file rather than the DataFrame so
                     # the digest identifies exactly the bytes a later run can reuse.
+                    metadata: dict[str, Union[str, int]] = {
+                        "digest_algorithm": "sha256",
+                        "format": "parquet",
+                        "size_bytes": dataset_file.stat().st_size,
+                    }
+                    if has_magic(source_text):
+                        metadata["source_pattern"] = source_text
                     dataset_tracker.log_dataset(
                         dataset,
-                        source=str(source),
+                        source=(source_text if is_remote_source else str(dataset_file)),
                         digest=DatasetLoader._sha256(dataset_file, source),
                         name=tracked_name,
                         context=dataset_context,
                         path=dataset_file,
-                        metadata={
-                            "digest_algorithm": "sha256",
-                            "format": "parquet",
-                            "size_bytes": dataset_file.stat().st_size,
-                        },
+                        metadata=metadata,
                         upload=upload_dataset,
                     )
         dataset = pd.concat(datasets, ignore_index=True)
@@ -89,6 +95,7 @@ class DatasetLoader:
             dataset,
             dt,
             joint_name_mapping=joint_name_mapping,
+            feature_name_mapping=feature_name_mapping,
         )
         logger.info(
             "Loaded dataset source=%s files=%d rows=%d resampled_rows=%d dt=%s",
@@ -191,12 +198,17 @@ class DatasetLoader:
         dt: float,
         *,
         joint_name_mapping: Optional[Mapping[str, str]] = None,
+        feature_name_mapping: Optional[Mapping[str, str]] = None,
     ) -> pd.DataFrame:
         """Resample every experiment onto its own uniform time grid."""
 
         dt_ns = DatasetLoader._validate_resampling(dataset, dt)
-        if joint_name_mapping:
-            dataset = DatasetLoader._map_joint_names(dataset, joint_name_mapping)
+        if joint_name_mapping or feature_name_mapping:
+            dataset = DatasetLoader._map_field_names(
+                dataset,
+                joint_name_mapping or {},
+                feature_name_mapping or {},
+            )
         resampled_experiments: list[pd.DataFrame] = []
 
         for experiment, episode in dataset.groupby("experiment", sort=False):
@@ -214,20 +226,22 @@ class DatasetLoader:
         return pd.concat(resampled_experiments)
 
     @staticmethod
-    def _map_joint_names(
+    def _map_field_names(
         dataset: pd.DataFrame,
         joint_name_mapping: Mapping[str, str],
+        feature_name_mapping: Mapping[str, str],
     ) -> pd.DataFrame:
-        """Translate joint prefixes while preserving each field's feature name."""
+        """Translate configured joint prefixes and feature suffixes."""
 
         def mapped_field(field: object) -> object:
             if not isinstance(field, str):
                 return field
             joint_name, separator, feature = field.rpartition("/")
-            mapped_name = joint_name_mapping.get(joint_name)
-            if not separator or mapped_name is None:
-                return field
-            return f"{mapped_name}/{feature}"
+            mapped_feature = feature_name_mapping.get(feature, feature)
+            if not separator:
+                return mapped_feature
+            mapped_joint = joint_name_mapping.get(joint_name, joint_name)
+            return f"{mapped_joint}/{mapped_feature}"
 
         source_fields = dataset["field"]
         mapped_fields = source_fields.map(mapped_field)
@@ -247,7 +261,9 @@ class DatasetLoader:
                 sorted(map(str, field_pairs.loc[collisions, "mapped"].unique()))
             )
             raise DatasetAlignmentError(
-                "Joint name mapping produces conflicting fields: " + names + "."
+                "Joint or feature name mapping produces conflicting fields: "
+                + names
+                + "."
             )
         if mapped_fields.equals(source_fields):
             return dataset

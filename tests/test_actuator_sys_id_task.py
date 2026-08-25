@@ -103,6 +103,7 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         dataset_context,
         upload_dataset,
         joint_name_mapping,
+        feature_name_mapping,
     ):
         assert path == "actuator.parquet"
         assert dt == 0.005
@@ -111,6 +112,7 @@ def test_load_trajectories_aligns_commanded_and_measured_data(
         assert dataset_context == "system-identification"
         assert upload_dataset is False
         assert joint_name_mapping == {}
+        assert feature_name_mapping == {}
         return dataset
 
     monkeypatch.setattr(
