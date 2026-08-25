@@ -50,7 +50,7 @@ text, which its distribution includes.
 | cuda-toolkit | 13.0.3.0 | UNRESOLVED | Distributed |
 | cycler | 0.12.1 | BSD License | Distributed |
 | dash | 4.4.1 | MIT License | Distributed |
-| databricks-sdk | 0.125.0 | Apache Software License | Distributed |
+| databricks-sdk | 0.67.0 | Apache Software License | Distributed |
 | docker | 7.2.0 | Apache-2.0 | Distributed |
 | etils | 1.13.0 | Apache Software License | Distributed |
 | etils | 1.14.0 | Apache Software License | Distributed |
@@ -141,7 +141,7 @@ text, which its distribution includes.
 | pluggy | 1.6.0 | MIT License | Development only |
 | prettytable | 3.18.0 | BSD-3-Clause | Distributed |
 | propcache | 0.5.2 | Apache Software License | Distributed |
-| protobuf | 6.33.6 | 3-Clause BSD License | Distributed |
+| protobuf | 7.36.0 | 3-Clause BSD License | Distributed |
 | pyarrow | 25.0.0 | Apache-2.0 | Distributed |
 | pyasn1 | 0.6.4 | BSD-2-Clause | Distributed |
 | pyasn1-modules | 0.4.2 | BSD License | Distributed |
@@ -154,7 +154,7 @@ text, which its distribution includes.
 | pyparsing | 3.3.2 | MIT | Distributed |
 | pyquaternion | 0.9.9 | MIT License | Distributed |
 | pyright | 1.1.411 | MIT | Development only |
-| pytest | 8.4.2 | MIT License | Development only |
+| pytest | 9.1.1 | MIT | Development only |
 | pytest-cov | 7.1.0 | MIT | Development only |
 | python-dateutil | 2.9.0.post0 | Apache Software License OR BSD License | Distributed |
 | python-dotenv | 1.2.2 | BSD-3-Clause | Distributed |
