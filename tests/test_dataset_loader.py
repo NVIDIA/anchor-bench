@@ -58,13 +58,32 @@ def test_loads_multiple_local_parquet_files_from_glob(tmp_path: Path) -> None:
         dataset["experiment"] = experiment
         dataset.to_parquet(tmp_path / name, index=False)
 
-    result = DatasetLoader.load(str(tmp_path / "*.parquet"), dt=0.02)
+    source_pattern = str(tmp_path / "*.parquet")
+    tracker = Mock(spec=MLOpsRun)
+
+    result = DatasetLoader.load(
+        source_pattern,
+        dt=0.02,
+        dataset_tracker=tracker,
+    )
 
     assert result.index.get_level_values("experiment").unique().tolist() == [
         "episode-a",
         "episode-b",
     ]
     assert result["actual_q"].tolist() == [1.0, 2.0]
+    assert [call.kwargs["source"] for call in tracker.log_dataset.call_args_list] == [
+        str(tmp_path / "a.parquet"),
+        str(tmp_path / "b.parquet"),
+    ]
+    assert [call.kwargs["name"] for call in tracker.log_dataset.call_args_list] == [
+        "dataset-a",
+        "dataset-b",
+    ]
+    assert [
+        call.kwargs["metadata"]["source_pattern"]
+        for call in tracker.log_dataset.call_args_list
+    ] == [source_pattern, source_pattern]
 
 
 def test_rejects_local_glob_without_file_matches(tmp_path: Path) -> None:
@@ -111,6 +130,7 @@ def test_logs_dataset_lineage_and_opt_in_upload(tmp_path: Path) -> None:
 def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
     dataset = pd.DataFrame(_rows("actual_q", [0], [1.0]))
     seen = []
+    tracker = Mock(spec=MLOpsRun)
 
     def download(source, output_folder, *, http_timeout_seconds):
         """Write remote Parquet data and record the downloader arguments."""
@@ -123,10 +143,12 @@ def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
 
     monkeypatch.setattr(loader_module, "download_from_huggingface", download)
 
+    source = "https://huggingface.co/datasets/example/resolve/main/dataset.parquet"
     result = DatasetLoader.load(
-        "https://huggingface.co/datasets/example/resolve/main/dataset.parquet",
+        source,
         dt=0.02,
         http_timeout_seconds=2.5,
+        dataset_tracker=tracker,
     )
 
     assert result["actual_q"].tolist() == [1.0]
@@ -135,6 +157,7 @@ def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
     )
     assert seen[0][2] == 2.5
     assert not seen[0][1].exists()
+    assert tracker.log_dataset.call_args.kwargs["source"] == source
 
 
 def test_rejects_globbing_huggingface_urls() -> None:
