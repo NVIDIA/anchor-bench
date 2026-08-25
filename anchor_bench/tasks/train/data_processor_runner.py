@@ -23,7 +23,7 @@ class DataProcessorRunner:
     ) -> pd.DataFrame:
         """Return a shallow dataset copy with generated features appended."""
 
-        import anchor_bench.train.data_processors as data_processor_registry
+        import anchor_bench.tasks.train.data_processors as data_processor_registry
 
         result = dataset.copy(deep=False)
         for feature, data_processor_name in data_processors.items():

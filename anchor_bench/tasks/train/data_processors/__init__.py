@@ -5,7 +5,7 @@
 
 from importlib import import_module
 
-from anchor_bench.train.data_processors.base import BaseDataProcessor
+from anchor_bench.tasks.train.data_processors.base import BaseDataProcessor
 
 DATA_PROCESSORS = {
     "position_error": (".gru", "PositionErrorDataProcessor"),

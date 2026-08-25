@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
-from anchor_bench.train.validators import BaseValidator, ValidationResult
+from anchor_bench.tasks.train.validators import BaseValidator, ValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class ValidatorRunner:
     ) -> list[BaseValidator]:
         """Construct validators in declaration order without executing them."""
 
-        import anchor_bench.train.validators as validator_registry
+        import anchor_bench.tasks.train.validators as validator_registry
 
         instances = []
         for validator in validators:
