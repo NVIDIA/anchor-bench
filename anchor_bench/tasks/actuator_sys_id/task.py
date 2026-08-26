@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from anchor_bench.assets import resolve_usd_path
 from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -41,7 +42,12 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
-        evaluator = NewtonPopulationEvaluator(self.config, parameter_space)
+        source_usd_path = resolve_usd_path(self.config.simulation.usd)
+        evaluator = NewtonPopulationEvaluator(
+            self.config,
+            parameter_space,
+            source_usd_path,
+        )
         objective = ActuatorSysIdObjective(
             parameter_space,
             evaluator,
@@ -83,7 +89,7 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             best_parameters=best_parameters,
             best_mse=optimizer.best_score,
             history=history,
-            source_usd_path=self.config.simulation.usd_path,
+            source_usd_path=source_usd_path,
             config=self.config,
         )
         # Upload only after every SysID output file is finalized. TaskRunner

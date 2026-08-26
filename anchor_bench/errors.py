@@ -20,6 +20,10 @@ class TaskNotFoundError(AnchorBenchError):
     """Raised when no task implementation is registered for a config type."""
 
 
+class AssetResolutionError(AnchorBenchError):
+    """Raised when a configured external asset cannot be resolved locally."""
+
+
 class DatasetLoadError(AnchorBenchError):
     """Raised when a dataset source cannot be loaded."""
 

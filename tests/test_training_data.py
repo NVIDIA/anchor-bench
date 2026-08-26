@@ -47,7 +47,10 @@ def _config_data() -> dict[str, Any]:
             "source": "dataset.parquet",
             "resampling": {"type": "uniform", "dt": 0.002},
         },
-        "simulation": {"backend": "newton", "usd_path": "robot.usda"},
+        "simulation": {
+            "backend": "newton",
+            "usd": {"type": "local", "path": "robot.usda"},
+        },
         "input_features": {"input": None},
         "output_features": {"target": None},
         "mapping": {"joint": {"inputs": ["joint"], "outputs": ["joint"]}},

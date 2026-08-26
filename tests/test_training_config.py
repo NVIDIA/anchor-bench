@@ -36,7 +36,10 @@ def valid_config_data():
         },
         "simulation": {
             "backend": "newton",
-            "usd_path": "assets/robots/so101.usd",
+            "usd": {
+                "type": "local",
+                "path": "assets/robots/so101.usd",
+            },
         },
         "input_features": {
             "position": "joint_position",
@@ -141,7 +144,8 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.dataset.resampling.interpolation == "linear"
     assert config.output_features == {"joint_effort": None}
     assert config.simulation.backend == "newton"
-    assert config.simulation.usd_path == "assets/robots/so101.usd"
+    assert config.simulation.usd.type == "local"
+    assert config.simulation.usd.path == "assets/robots/so101.usd"
     assert isinstance(config.model, GruModelConfig)
     assert isinstance(config.training.loss, HuberLossConfig)
     assert config.mlops is None
@@ -152,6 +156,23 @@ def test_model_matches_general_training_schema(valid_config_data):
         config.search.search_space["model.hidden_size"],
         IntegerSearchParameter,
     )
+
+
+def test_model_accepts_revision_pinned_newton_asset(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["simulation"] = {
+        "backend": "newton",
+        "usd": {
+            "type": "newton-assets",
+            "folder": "robotstudio_so101",
+            "path": "usd_structured/so101.usda",
+            "ref": "a96f0973b6ae69c90609f9fafef9d2c1db2d6431",
+        },
+    }
+
+    config = TrainingConfig.model_validate(data)
+
+    assert config.simulation.usd.type == "newton-assets"
 
 
 def test_parser_selects_training_model(valid_config_data, tmp_path: Path):

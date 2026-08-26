@@ -20,8 +20,11 @@ optimizer:
   epsilon: 0.001
 simulation:
   type: newton
-  # test_cli.py resolves this newton-assets path into Newton's local cache.
-  usd_path: robotstudio_so101/usd_structured/so101.usda
+  usd:
+    type: newton-assets
+    folder: robotstudio_so101
+    path: usd_structured/so101.usda
+    ref: a96f0973b6ae69c90609f9fafef9d2c1db2d6431
   physics_freq: 250
   control_freq: 50
   render_freq: 25

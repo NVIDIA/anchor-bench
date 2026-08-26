@@ -37,7 +37,9 @@ optimizer:
 
 simulation:
   type: newton
-  usd_path: path/to/robot.usda
+  usd:
+    type: local
+    path: path/to/robot.usda
   physics_freq: 1000
   control_freq: 200
   render_freq: 60

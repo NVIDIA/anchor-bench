@@ -14,6 +14,7 @@ from typing_extensions import TypeAlias
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
 from anchor_bench.schema.dataset import ParquetDatasetConfig
 from anchor_bench.schema.mlops import MLOpsConfig
+from anchor_bench.schema.usd import UsdSource
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
@@ -102,7 +103,7 @@ class WarpMujocoSolverConfig(StrictBaseModel):
 
 class NewtonSimulationConfig(StrictBaseModel):
     type: Literal["newton"]
-    usd_path: NonEmptyString
+    usd: UsdSource
     physics_freq: PositiveInteger
     control_freq: PositiveInteger
     render_freq: PositiveInteger

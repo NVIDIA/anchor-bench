@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import optuna
 import pandas as pd
 
+from anchor_bench.assets import resolve_usd_path
 from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.data import DatasetLoader
 from anchor_bench.logging_utils import should_log_progress
@@ -122,7 +123,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
         simulation = self.config.simulation
         create_simulation_context(
             simulation.backend,
-            simulation.usd_path,
+            str(resolve_usd_path(simulation.usd)),
             fixed_base=simulation.fixed_base,
         )
 

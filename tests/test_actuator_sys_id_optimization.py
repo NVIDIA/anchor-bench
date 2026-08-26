@@ -53,7 +53,10 @@ def _config(tmp_path, **overrides):
         },
         "simulation": {
             "type": "newton",
-            "usd_path": str(tmp_path / "robot.usd"),
+            "usd": {
+                "type": "local",
+                "path": str(tmp_path / "robot.usd"),
+            },
             "physics_freq": 1000,
             "control_freq": 200,
             "render_freq": 60,

@@ -12,8 +12,10 @@ from typing import Any, Dict, Union
 import newton
 import numpy as np
 
+from anchor_bench.assets import resolve_usd_path
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.usd import LocalUsdSource
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import Trajectory
 
@@ -38,7 +40,7 @@ def usd_trajectory_accuracy(
     evaluation_config = config.model_copy(
         update={
             "simulation": config.simulation.model_copy(
-                update={"usd_path": str(usd_path)}
+                update={"usd": LocalUsdSource(type="local", path=str(usd_path))}
             ),
             "dataset": config.dataset.model_copy(
                 update={"source": str(trajectory_path)}
@@ -71,7 +73,7 @@ class _NewtonTrajectoryRunner:
         newton.use_coord_layout_targets = True
         builder = newton.ModelBuilder()
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
-        builder.add_usd(source=str(Path(config.simulation.usd_path).resolve()))
+        builder.add_usd(source=str(resolve_usd_path(config.simulation.usd)))
         self._model = builder.finalize()
         self._solver = newton.solvers.SolverMuJoCo(
             self._model,

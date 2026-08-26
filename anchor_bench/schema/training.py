@@ -21,6 +21,7 @@ from typing_extensions import TypeAlias
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
 from anchor_bench.schema.dataset import ParquetDatasetConfig
 from anchor_bench.schema.mlops import MLOpsConfig
+from anchor_bench.schema.usd import UsdSource
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 CategoricalValue: TypeAlias = Union[
@@ -62,7 +63,7 @@ def _duplicate_values(values: List[CategoricalValue]) -> bool:
 class SimulationConfig(StrictBaseModel):
     fixed_base: StrictBool = False
     backend: Literal["newton"] = "newton"
-    usd_path: NonEmptyString
+    usd: UsdSource
 
 
 class NetworkMappingConfig(StrictBaseModel):

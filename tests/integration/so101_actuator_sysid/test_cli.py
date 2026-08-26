@@ -7,10 +7,9 @@ import csv
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-import newton.utils
 import pytest
-import yaml
 
+from anchor_bench.assets import resolve_usd_path
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
@@ -20,10 +19,7 @@ from tests.integration.usd_trajectory import usd_trajectory_accuracy
 pytestmark = pytest.mark.integration
 
 TEST_DIRECTORY = Path(__file__).parent
-CONFIG_TEMPLATE_PATH = TEST_DIRECTORY / "config.yaml"
-NEWTON_ASSETS_REF = "a96f0973b6ae69c90609f9fafef9d2c1db2d6431"
-SO101_ASSET_FOLDER = "robotstudio_so101"
-SO101_USD_RELATIVE_PATH = Path("usd_structured/so101.usda")
+CONFIG_PATH = TEST_DIRECTORY / "config.yaml"
 EVALUATION_TRAJECTORY_PATH = (
     TEST_DIRECTORY / "trajectories" / "heldout-square-pattern.parquet"
 )
@@ -36,45 +32,13 @@ EXPECTED_ARTIFACTS = (
 )
 
 
-@pytest.fixture(scope="session")
-def source_usd_path() -> Path:
-    """Download the revision-pinned SO-101 asset through Newton's cache."""
-
-    asset_root = newton.utils.download_asset(
-        SO101_ASSET_FOLDER,
-        ref=NEWTON_ASSETS_REF,
-    )
-    source = asset_root / SO101_USD_RELATIVE_PATH
-    assert source.is_file()
-    return source
-
-
-@pytest.fixture
-def config_path(tmp_path: Path, source_usd_path: Path) -> Path:
-    """Materialize the integration config with the downloaded USD path."""
-
-    document = yaml.safe_load(CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8"))
-    assert document["simulation"]["usd_path"] == str(
-        Path(SO101_ASSET_FOLDER) / SO101_USD_RELATIVE_PATH
-    )
-    document["simulation"]["usd_path"] = str(source_usd_path)
-
-    resolved_config = tmp_path / "config.yaml"
-    resolved_config.write_text(
-        yaml.safe_dump(document, sort_keys=False),
-        encoding="utf-8",
-    )
-    return resolved_config
-
-
 def test_runs_actuator_sysid_config(
     run_cli: Callable[[Sequence[str]], CliResult],
-    config_path: Path,
-    source_usd_path: Path,
     tmp_path: Path,
 ) -> None:
-    config = parse(config_path)
+    config = parse(CONFIG_PATH)
     assert isinstance(config, ActuatorSysIdConfig)
+    source_usd_path = resolve_usd_path(config.simulation.usd)
     joint_names = [joint for group in config.joint_parameters for joint in group.names]
     trajectories = load_trajectories(config.dataset, joint_names=joint_names)
     assert [trajectory.experiment for trajectory in trajectories] == [
@@ -87,7 +51,7 @@ def test_runs_actuator_sysid_config(
     result = run_cli(
         [
             "--config",
-            str(config_path),
+            str(CONFIG_PATH),
             "--force",
             "--output",
             str(output_directory),
@@ -98,6 +62,9 @@ def test_runs_actuator_sysid_config(
     assert all(
         (output_directory / artifact).is_file() for artifact in EXPECTED_ARTIFACTS
     )
+    persisted_config = parse(output_directory / "config.yaml")
+    assert isinstance(persisted_config, ActuatorSysIdConfig)
+    assert persisted_config.simulation.usd == config.simulation.usd
     with (output_directory / "optimization_log.csv").open(
         newline="",
         encoding="utf-8",

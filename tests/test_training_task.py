@@ -36,7 +36,7 @@ def _config_data(source: str) -> dict[str, Any]:
         },
         "simulation": {
             "backend": "newton",
-            "usd_path": "robot.usda",
+            "usd": {"type": "local", "path": "robot.usda"},
         },
         "input_features": {
             "actual_q": None,
@@ -127,7 +127,7 @@ def test_training_task_runs_loader_data_processor_then_mapping(
     config_data = _config_data("dataset.parquet")
     config_data["simulation"] = {
         "backend": "newton",
-        "usd_path": str(usd_path),
+        "usd": {"type": "local", "path": str(usd_path)},
     }
     config_data["output_features"] = {"torque_residual": "torque_residual"}
     config_data["training"]["epochs"] = 4
@@ -446,7 +446,7 @@ def test_training_task_initializes_simulation_for_validators(
     trajectories = pd.read_parquet(result / "trajectories.parquet")
 
     assert result == output_directory
-    assert simulation_calls == [("newton", "robot.usda")]
+    assert simulation_calls == [("newton", str(Path("robot.usda").resolve()))]
     assert trajectories["sequence"].nunique() == 2
 
 

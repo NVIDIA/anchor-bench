@@ -103,7 +103,7 @@ def test_save_training_artifacts_writes_portable_run(
         ],
         "simulation": {
             "backend": "newton",
-            "usd_path": "robot.usda",
+            "usd": {"type": "local", "path": "robot.usda"},
             "fixed_base": False,
         },
         "mappings": {

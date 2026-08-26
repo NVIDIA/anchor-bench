@@ -6,7 +6,8 @@ These guides document the interfaces implemented by the current codebase.
 
 - [Project overview and installation](../README.md)
 - [Running tasks](running-tasks.md): invoke the CLI, select an output directory,
-  and understand completion markers.
+  configure local or revision-pinned Newton assets, and understand completion
+  markers.
 
 ## Task guides
 

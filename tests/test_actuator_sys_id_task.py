@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import numpy as np
@@ -56,7 +57,10 @@ def _config(tmp_path, **overrides):
         },
         "simulation": {
             "type": "newton",
-            "usd_path": str(tmp_path / "robot.usd"),
+            "usd": {
+                "type": "local",
+                "path": str(tmp_path / "robot.usd"),
+            },
             "physics_freq": 1000,
             "control_freq": 200,
             "render_freq": 60,
@@ -301,7 +305,7 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
-    assert written["source_usd_path"] == config.simulation.usd_path
+    assert written["source_usd_path"] == Path(config.simulation.usd.path).resolve()
     assert written["config"] is config
     assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
     assert written["history"] == [

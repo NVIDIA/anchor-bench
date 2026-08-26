@@ -13,7 +13,9 @@ dataset:
 
 simulation:
   backend: newton
-  usd_path: tests/integration/g1/usd/g1_arm_residual.usda
+  usd:
+    type: local
+    path: tests/integration/g1/usd/g1_arm_residual.usda
   fixed_base: true
 
 input_features:

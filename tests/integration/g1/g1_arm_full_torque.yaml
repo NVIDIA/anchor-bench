@@ -13,7 +13,9 @@ dataset:
 
 simulation:
   backend: newton
-  usd_path: tests/integration/g1/usd/g1_arm_full_torque.usda
+  usd:
+    type: local
+    path: tests/integration/g1/usd/g1_arm_full_torque.usda
   fixed_base: true
 
 input_features:

@@ -13,6 +13,45 @@ type values are rejected before the task starts.
 
 Use `uv run anchor-bench --help` to inspect the CLI options.
 
+## USD assets
+
+Training and actuator system-identification configurations declare a composed
+USD source. For a local file:
+
+```yaml
+simulation:
+  usd:
+    type: local
+    path: assets/robots/robot.usda
+```
+
+To acquire a file from
+[`newton-assets`](https://github.com/newton-physics/newton-assets), configure the
+folder downloaded by Newton, the file within it, and an exact commit SHA:
+
+```yaml
+simulation:
+  usd:
+    type: newton-assets
+    folder: robotstudio_so101
+    path: usd_structured/so101.usda
+    ref: a96f0973b6ae69c90609f9fafef9d2c1db2d6431
+```
+
+Anchor Bench resolves this reference through Newton's persistent asset cache
+when the task starts. Set `NEWTON_CACHE_PATH` to override the cache location.
+Remote references require a commit SHA so a saved configuration continues to
+identify the same asset. Generated `config.yaml` files retain the declarative
+reference rather than recording a machine-specific cache path.
+
+For example, the SO-101 integration configuration can run directly:
+
+```bash
+uv run anchor-bench \
+  --config tests/integration/so101_actuator_sysid/config.yaml \
+  -v
+```
+
 ## Logging
 
 Task lifecycle and rate-limited progress logs are written to standard error at

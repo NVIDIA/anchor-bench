@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import logging
 from math import isclose
+from pathlib import Path
 from typing import ClassVar, Dict, List, Sequence, Tuple
 
 import newton
 import numpy as np
 import warp as wp
 
+from anchor_bench.assets import resolve_usd_path
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -71,9 +73,13 @@ class NewtonPopulationEvaluator:
         self,
         config: ActuatorSysIdConfig,
         parameter_space: ParameterSpace,
+        source_usd_path: Path | None = None,
     ) -> None:
         self.config = config
         self.parameter_space = parameter_space
+        self.source_usd_path = source_usd_path or resolve_usd_path(
+            config.simulation.usd
+        )
         self.joint_names = _joint_names(config)
         self.num_envs = config.num_envs
         self.physics_dt = 1.0 / config.simulation.physics_freq
@@ -103,7 +109,7 @@ class NewtonPopulationEvaluator:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
         context = create_simulation_context(
             self.config.simulation.type,
-            self.config.simulation.usd_path,
+            str(self.source_usd_path),
         )
         if not isinstance(context, NewtonSimulationContext):
             raise TypeError("actuator_sys_id requires a Newton simulation context")
