@@ -117,6 +117,7 @@ class TrainingTask(BaseTask[TrainingConfig]):
                 self.config.mlops.upload_dataset if self.config.mlops else False
             ),
             joint_name_mapping=self.config.dataset.joint_name_mapping,
+            feature_name_mapping=self.config.dataset.feature_name_mapping,
         )
 
         simulation = self.config.simulation
