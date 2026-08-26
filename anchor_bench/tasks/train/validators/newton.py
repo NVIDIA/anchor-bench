@@ -15,13 +15,13 @@ import pandas as pd
 from anchor_bench.tasks.train.data import ValidationDataset
 from anchor_bench.tasks.train.models import ModelOutput
 from anchor_bench.tasks.train.task import MappedTrainingSequence
-from anchor_bench.train.utils import position_error
-from anchor_bench.train.validators.base import (
+from anchor_bench.tasks.train.utils import position_error
+from anchor_bench.tasks.train.validators.base import (
     BaseValidator,
     ValidationResult,
     ValidatorType,
 )
-from anchor_bench.train.validators.newton_replay_adapter import (
+from anchor_bench.tasks.train.validators.newton_replay_adapter import (
     _NewtonReplayAdapter,
     _ReplayState,
 )

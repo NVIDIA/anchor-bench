@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -26,6 +27,13 @@ _DEFAULT_HTTP_REQUEST_TIMEOUT = 30
 _DEFAULT_HTTP_REQUEST_MAX_RETRIES = 2
 _HTTP_REQUEST_TIMEOUT_ENV = "MLFLOW_HTTP_REQUEST_TIMEOUT"
 _HTTP_REQUEST_MAX_RETRIES_ENV = "MLFLOW_HTTP_REQUEST_MAX_RETRIES"
+_AMBIGUOUS_LOCAL_DATASET_SOURCE_WARNING = (
+    r"The specified dataset source can be interpreted in multiple ways: "
+    r"LocalArtifactDatasetSource, LocalArtifactDatasetSource\."
+)
+_INTEGER_DATASET_SCHEMA_WARNING = (
+    r"Hint: Inferred schema contains integer column\(s\)\."
+)
 
 
 class MLflowRun(MLOpsRun):
@@ -77,33 +85,35 @@ class MLflowRun(MLOpsRun):
             metadata=metadata,
             upload=upload,
         )
-        # Native lineage needs the resolved source, name, and digest, but not a
-        # second inspection of every value. PandasDataset infers its schema when
-        # MLflow serializes it, which is particularly expensive for large string
-        # columns and is redundant with the portable metadata recorded above.
-        source_reference = self._mlflow.data.from_pandas(
-            dataset.iloc[:0],
-            source=source,
-            name=name,
-            digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
-        )
-        mlflow_dataset = MetaDataset(
-            source=source_reference.source,
-            name=name,
-            digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
-            schema=source_reference.schema,
-        )
         input_tags = (
             {key: str(value) for key, value in metadata.items()}
             if metadata is not None
             else {}
         )
         input_tags[_FULL_DATASET_DIGEST_TAG] = digest
-        self._mlflow.log_input(
-            mlflow_dataset,
-            context=context,
-            tags=input_tags,
-        )
+        with _suppress_mlflow_dataset_warnings():
+            # Native lineage needs the resolved source, name, and digest, but
+            # not a second inspection of every value. PandasDataset infers its
+            # schema when MLflow serializes it, which is particularly expensive
+            # for large string columns and is redundant with the portable
+            # metadata recorded above.
+            source_reference = self._mlflow.data.from_pandas(
+                dataset.iloc[:0],
+                source=source,
+                name=name,
+                digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
+            )
+            mlflow_dataset = MetaDataset(
+                source=source_reference.source,
+                name=name,
+                digest=digest[:_MLFLOW_DATASET_DIGEST_MAX_LENGTH],
+                schema=source_reference.schema,
+            )
+            self._mlflow.log_input(
+                mlflow_dataset,
+                context=context,
+                tags=input_tags,
+            )
 
     def log_artifact(
         self,
@@ -254,6 +264,31 @@ class MLflowBackend(MLOpsBackend):
             finally:
                 if previous_tracking_uri is not None:
                     self._mlflow.set_tracking_uri(previous_tracking_uri)
+
+
+@contextmanager
+def _suppress_mlflow_dataset_warnings() -> Generator[None, None, None]:
+    """Hide known MLflow warnings that do not apply to lineage-only inputs."""
+
+    with warnings.catch_warnings():
+        # MLflow 3.15 can register its local artifact source twice. Both
+        # candidates are identical, so its ambiguity warning is not actionable.
+        warnings.filterwarnings(
+            "ignore",
+            message=_AMBIGUOUS_LOCAL_DATASET_SOURCE_WARNING,
+            category=UserWarning,
+            module=r"mlflow\.data\.dataset_source_registry",
+        )
+        # Dataset inputs are recorded for lineage, not as model signatures. An
+        # integer column therefore cannot cause the schema-enforcement problem
+        # described by this generic MLflow warning.
+        warnings.filterwarnings(
+            "ignore",
+            message=_INTEGER_DATASET_SCHEMA_WARNING,
+            category=UserWarning,
+            module=r"mlflow\.types\.utils",
+        )
+        yield
 
 
 @contextmanager

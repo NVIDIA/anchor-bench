@@ -14,10 +14,10 @@ import numpy as np
 import warp as wp
 
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
-from anchor_bench.train.utils import (
+from anchor_bench.tasks.train.utils import (
     position_error,
 )
-from anchor_bench.train.utils import (
+from anchor_bench.tasks.train.utils import (
     solver_pd as calculate_solver_pd,
 )
 
