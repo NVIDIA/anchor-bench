@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
+from pxr import Usd, UsdPhysics
 
 from anchor_bench.assets import resolve_usd_path
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -65,6 +66,21 @@ def test_runs_actuator_sysid_config(
     persisted_config = parse(output_directory / "config.yaml")
     assert isinstance(persisted_config, ActuatorSysIdConfig)
     assert persisted_config.simulation.usd == config.simulation.usd
+    identified_stage = Usd.Stage.Open(str(output_directory / "identified.usda"))
+    assert identified_stage is not None
+    identified_joints = {
+        prim.GetName(): prim
+        for prim in identified_stage.Traverse()
+        if prim.IsA(UsdPhysics.Joint)
+    }
+    for joint_name in joint_names:
+        joint = identified_joints[joint_name]
+        assert joint.GetAttribute("mjc:armature").Get() is None
+        assert joint.GetAttribute("mjc:damping").Get() is None
+        assert joint.GetAttribute("mjc:frictionloss").Get() is None
+        assert not identified_stage.GetPrimAtPath(
+            f"/so101/Physics/{joint_name}"
+        ).IsActive()
     with (output_directory / "optimization_log.csv").open(
         newline="",
         encoding="utf-8",

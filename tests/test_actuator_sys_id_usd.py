@@ -44,17 +44,27 @@ def _create_source_usd(path):
         custom=True,
     ).Set(2.0)
     hip = UsdPhysics.RevoluteJoint.Define(stage, "/World/hip")
-    hip.GetPrim().CreateAttribute(
-        "mjc:damping",
-        Sdf.ValueTypeNames.Double,
-        custom=False,
-    ).Set(0.6)
+    for name, value in (
+        ("mjc:armature", 0.028),
+        ("mjc:damping", 0.6),
+        ("mjc:frictionloss", 0.052),
+    ):
+        hip.GetPrim().CreateAttribute(
+            name,
+            Sdf.ValueTypeNames.Double,
+            custom=False,
+        ).Set(value)
     UsdPhysics.PrismaticJoint.Define(stage, "/World/slider")
 
     d6_joint = UsdPhysics.Joint.Define(stage, "/World/wrist")
     limit = UsdPhysics.LimitAPI.Apply(d6_joint.GetPrim(), "rotX")
     limit.CreateLowAttr(-45.0)
     limit.CreateHighAttr(45.0)
+
+    hip_actuator = stage.DefinePrim("/World/hip_actuator", "MjcActuator")
+    hip_actuator.CreateRelationship("mjc:target").SetTargets([hip.GetPath()])
+    wrist_actuator = stage.DefinePrim("/World/wrist_actuator", "MjcActuator")
+    wrist_actuator.CreateRelationship("mjc:target").SetTargets([d6_joint.GetPath()])
     stage.GetRootLayer().Save()
 
 
@@ -104,7 +114,11 @@ def test_writes_sparse_opinions_over_the_source_asset(tmp_path):
     assert hip.GetAttribute("newton:armature").Get() == pytest.approx(0.05)
     assert hip.GetAttribute("newton:friction").Get() == pytest.approx(0.5)
     assert hip.GetAttribute("newton:damping").Get() == pytest.approx(radians_per_degree)
-    assert hip.GetAttribute("mjc:damping").Get() == pytest.approx(1.0)
+    assert hip.GetAttribute("mjc:armature").Get() is None
+    assert hip.GetAttribute("mjc:damping").Get() is None
+    assert hip.GetAttribute("mjc:frictionloss").Get() is None
+    assert not stage.GetPrimAtPath("/World/hip_actuator").IsActive()
+    assert stage.GetPrimAtPath("/World/wrist_actuator").IsActive()
 
     slider = stage.GetPrimAtPath("/World/slider")
     slider_drive = UsdPhysics.DriveAPI.Get(slider, "linear")

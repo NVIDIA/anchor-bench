@@ -20,6 +20,11 @@ from anchor_bench.tasks.actuator_sys_id.model import Candidate
 
 _ANGULAR_DRIVES = frozenset({"angular", "rotX", "rotY", "rotZ"})
 _LINEAR_DRIVES = frozenset({"linear", "transX", "transY", "transZ"})
+_MUJOCO_JOINT_ATTRIBUTES = (
+    "mjc:armature",
+    "mjc:damping",
+    "mjc:frictionloss",
+)
 _PARAMETER_NAMES = frozenset(
     {
         "stiffness",
@@ -119,13 +124,18 @@ def write_identified_usd_layer(
             "newton:damping",
             float(parameters["viscous_friction"]) * damping_scale,
         )
-        source_mujoco_damping = source_joint.GetAttribute("mjc:damping")
-        if source_mujoco_damping and source_mujoco_damping.HasAuthoredValueOpinion():
-            joint_override.CreateAttribute(
-                "mjc:damping",
-                Sdf.ValueTypeNames.Double,
-                custom=False,
-            ).Set(float(parameters["viscous_friction"]))
+        # The source may carry parallel MuJoCo opinions for these canonical
+        # Newton properties. In particular, Newton still parses ``mjc:damping``
+        # as an alias and rejects a stale value that conflicts with the fitted
+        # ``newton:damping``. Block the weaker MuJoCo opinions so this identified
+        # layer has one authoritative representation instead of mirroring both.
+        _block_mujoco_joint_attributes(source_joint, joint_override)
+
+    _deactivate_mujoco_actuators(
+        source_stage,
+        output_stage,
+        {joint.GetPath() for joint in joints.values()},
+    )
 
     if not output_layer.Save():
         raise RuntimeError(f"could not save identified USD layer: {destination}")
@@ -239,3 +249,34 @@ def _validate_parameters(joint_name: str, parameters: Dict[str, float]) -> None:
 
 def _set_float(prim: Any, name: str, value: float) -> None:
     prim.CreateAttribute(name, Sdf.ValueTypeNames.Float, custom=False).Set(float(value))
+
+
+def _block_mujoco_joint_attributes(source_joint: Any, joint_override: Any) -> None:
+    """Mask MuJoCo aliases superseded by fitted canonical Newton properties."""
+
+    for name in _MUJOCO_JOINT_ATTRIBUTES:
+        source_attribute = source_joint.GetAttribute(name)
+        if not source_attribute or not source_attribute.HasAuthoredValueOpinion():
+            continue
+        joint_override.CreateAttribute(
+            name,
+            source_attribute.GetTypeName(),
+            custom=source_attribute.IsCustom(),
+            variability=source_attribute.GetVariability(),
+        ).Block()
+
+
+def _deactivate_mujoco_actuators(
+    source_stage: Any,
+    output_stage: Any,
+    identified_joint_paths: set[Any],
+) -> None:
+    """Disable inherited MuJoCo actuators replaced by fitted Physics drives."""
+
+    for prim in source_stage.Traverse():
+        if str(prim.GetTypeName()) != "MjcActuator":
+            continue
+        target = prim.GetRelationship("mjc:target")
+        if not target or not identified_joint_paths.intersection(target.GetTargets()):
+            continue
+        output_stage.OverridePrim(prim.GetPath()).SetActive(False)
