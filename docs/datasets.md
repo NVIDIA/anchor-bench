@@ -68,6 +68,25 @@ experiments. Within one experiment, two source aliases may not produce the same
 canonical field. The loader reports that conflict rather than merging samples
 silently.
 
+## Feature-name mapping
+
+Feature suffixes can be normalized without rewriting the source files:
+
+```yaml
+dataset:
+  type: parquet
+  source: recordings/*.parquet
+  feature_name_mapping:
+    dq: actual_dq
+    tau_est: actual_effort
+  resampling:
+    type: uniform
+    dt: 0.005
+```
+
+Feature mapping is partial and can be combined with joint-name mapping. The
+loader rejects mappings that make two fields in the same experiment collide.
+
 ## Generated datasets
 
 The [`trajectory_v1` task](trajectory.md) writes command positions in the same

@@ -4,7 +4,15 @@ tags: [g1, right-arm, gru, residual-torque]
 
 dataset:
   type: parquet
-  source: tests/integration/g1/data/g1_arm_multijoint.parquet
+  source: tests/integration/g1/data/g1-arm-multijoint-*.parquet
+  joint_name_mapping:
+    right_shoulder_pitch: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
+    right_shoulder_roll: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
+    right_shoulder_yaw: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_yaw_joint
+    right_elbow: /g1_29dof_rev_1_0_tri_hand/joints/right_elbow_joint
+  feature_name_mapping:
+    dq: actual_dq
+    tau_est: actual_effort
   resampling:
     type: uniform
     dt: 0.002

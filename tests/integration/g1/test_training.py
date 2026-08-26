@@ -14,7 +14,11 @@ import yaml
 
 from anchor_bench.schema.parse import parse
 from anchor_bench.schema.training import TrainingConfig
-from tests.integration.g1.prepare_dataset import FILENAMES, prepare_dataset
+from tests.integration.g1.prepare_dataset import (
+    DATASET_GLOB,
+    FILENAMES,
+    prepare_dataset,
+)
 
 DIRECTORY = Path(__file__).parent
 REPOSITORY = DIRECTORY.parents[2]
@@ -24,25 +28,25 @@ CONFIGS = ("g1_arm_residual.yaml", "g1_arm_full_torque.yaml")
 
 @pytest.fixture(scope="session")
 def g1_dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Download and combine the pinned G1 recordings once per test session."""
+    """Download the pinned G1 recordings once per test session."""
 
-    return prepare_dataset(
-        tmp_path_factory.mktemp("g1-data") / "g1_arm_multijoint.parquet"
-    )
+    return prepare_dataset(tmp_path_factory.mktemp("g1-data"))
 
 
 @pytest.mark.integration
 def test_prepares_complete_g1_dataset(g1_dataset: Path) -> None:
-    """Preserve all pinned experiments and normalize their field names."""
+    """Preserve all pinned experiments and their original field names."""
 
-    fields = pd.read_parquet(
-        g1_dataset,
-        columns=["experiment", "field"],
+    paths = sorted(g1_dataset.glob(DATASET_GLOB))
+    fields = pd.concat(
+        (pd.read_parquet(path, columns=["experiment", "field"]) for path in paths),
+        ignore_index=True,
     )
+    assert [path.name for path in paths] == sorted(FILENAMES)
     assert fields["experiment"].nunique() == len(FILENAMES)
-    assert fields["field"].str.startswith("/g1_29dof_rev_1_0_tri_hand/joints/").all()
-    assert fields["field"].str.endswith("/actual_dq").any()
-    assert fields["field"].str.endswith("/actual_effort").any()
+    assert fields["field"].str.startswith("right_").all()
+    assert fields["field"].str.endswith("/dq").any()
+    assert fields["field"].str.endswith("/tau_est").any()
 
 
 @pytest.mark.integration
@@ -60,7 +64,7 @@ def test_trains_and_validates_g1_example(
     config = parse(DIRECTORY / config_name)
     assert isinstance(config, TrainingConfig)
     data = config.model_dump(mode="json", exclude_none=True)
-    data["dataset"]["source"] = str(g1_dataset)
+    data["dataset"]["source"] = str(g1_dataset / DATASET_GLOB)
     config_path = tmp_path / config_name
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     output = tmp_path / Path(config_name).stem

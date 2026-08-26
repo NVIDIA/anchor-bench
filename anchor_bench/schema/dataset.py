@@ -38,4 +38,11 @@ class ParquetDatasetConfig(StrictBaseModel):
             "USD joint names. Unmapped joint names are left unchanged."
         ),
     )
+    feature_name_mapping: Dict[NonEmptyString, NonEmptyString] = Field(
+        default_factory=dict,
+        description=(
+            "Optional mapping from Parquet feature suffixes to canonical feature "
+            "names. Unmapped feature names are left unchanged."
+        ),
+    )
     resampling: ResamplingConfig
