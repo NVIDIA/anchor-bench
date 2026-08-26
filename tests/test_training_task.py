@@ -20,8 +20,8 @@ from anchor_bench.tasks.train import (
     TrainingDataSplit,
     TrainingTask,
     ValidationDataset,
+    ValidationResult,
 )
-from anchor_bench.train import ValidationResult
 
 
 def _config_data(source: str) -> dict[str, Any]:

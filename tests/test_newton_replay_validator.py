@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import anchor_bench.train.validators as validator_registry
-import anchor_bench.train.validators.newton as newton_validator
+import anchor_bench.tasks.train.validators as validator_registry
+import anchor_bench.tasks.train.validators.newton as newton_validator
 from anchor_bench.core import SimulationContext
 from anchor_bench.schema.training import TrainingValidatorConfig
 from anchor_bench.tasks.train import (
@@ -18,7 +18,7 @@ from anchor_bench.tasks.train import (
     ValidationDataset,
     ValidatorRunner,
 )
-from anchor_bench.train.validators.newton import (
+from anchor_bench.tasks.train.validators.newton import (
     NewtonReplayValidator,
 )
 

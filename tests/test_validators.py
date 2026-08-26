@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import anchor_bench.train.validators as validator_registry
+import anchor_bench.tasks.train.validators as validator_registry
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BaseValidator, ValidationResult
+from anchor_bench.tasks.train import BaseValidator, ValidationResult
 
 
 class RecordingValidator(BaseValidator):

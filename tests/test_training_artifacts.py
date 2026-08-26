@@ -17,7 +17,7 @@ from anchor_bench.tasks.train import (
     fit_normalization,
     save_training_artifacts,
 )
-from anchor_bench.train.validators import ValidationResult
+from anchor_bench.tasks.train.validators import ValidationResult
 from tests.test_training_data import _config_data, _sequence
 
 

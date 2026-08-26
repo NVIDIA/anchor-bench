@@ -11,9 +11,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import anchor_bench.train.data_processors as data_processor_registry
+import anchor_bench.tasks.train.data_processors as data_processor_registry
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BaseDataProcessor, DataProcessorRunner
+from anchor_bench.tasks.train import BaseDataProcessor, DataProcessorRunner
 
 
 class GeneratedFeatureDataProcessor(BaseDataProcessor):

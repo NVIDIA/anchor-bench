@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from anchor_bench.tasks.train.data import TrainingDataSplit
     from anchor_bench.tasks.train.task import MappedTrainingSequence, SearchResult
     from anchor_bench.tasks.train.trainer import TrainingResult
-    from anchor_bench.train.validators import ValidationResult
+    from anchor_bench.tasks.train.validators import ValidationResult
 
 
 def save_training_artifacts(

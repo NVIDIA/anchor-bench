@@ -6,7 +6,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from anchor_bench.train import (
+from anchor_bench.tasks.train import (
     friction_torque,
     position_error,
     solver_pd,
