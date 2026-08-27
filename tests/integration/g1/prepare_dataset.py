@@ -1,31 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Download and normalize the pinned Anchor-Lab G1 arm recordings."""
+"""Download the pinned Anchor-Lab G1 arm recordings."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-import pandas as pd
-
 from anchor_bench.data import download_from_huggingface
 
 ANCHOR_LAB_REVISION = "be6010113e7b769e68f2779fbdf321908725f929"
 DATASET_DIRECTORY = Path(__file__).parent / "data"
-DATASET_PATH = DATASET_DIRECTORY / "g1_arm_multijoint.parquet"
-ROBOT_PATH = "/g1_29dof_rev_1_0_tri_hand/joints"
-ENTITY_NAMES = {
-    "right_elbow": f"{ROBOT_PATH}/right_elbow_joint",
-    "right_shoulder_pitch": f"{ROBOT_PATH}/right_shoulder_pitch_joint",
-    "right_shoulder_roll": f"{ROBOT_PATH}/right_shoulder_roll_joint",
-    "right_shoulder_yaw": f"{ROBOT_PATH}/right_shoulder_yaw_joint",
-}
-FEATURE_NAMES = {
-    "dq": "actual_dq",
-    "tau_est": "actual_effort",
-}
+DATASET_GLOB = "g1-arm-multijoint-*.parquet"
 FILENAMES = (
     "g1-arm-multijoint-antiphase-trial-004-20260407-120501.parquet",
     "g1-arm-multijoint-broadband-pose-b-trial-007-20260407-121437.parquet",
@@ -54,43 +41,18 @@ def _url(filename: str) -> str:
     )
 
 
-def _normalize_fields(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Map raw log entity and feature names to the training contract."""
-
-    parts = dataframe["field"].str.rsplit("/", n=1, expand=True)
-    entities = parts[0].map(ENTITY_NAMES)
-    if entities.isnull().any():
-        unknown = sorted(parts.loc[entities.isnull(), 0].unique())
-        raise ValueError(f"Unknown G1 dataset entities: {unknown}.")
-    features = parts[1].replace(FEATURE_NAMES)
-    result = dataframe.copy()
-    result["field"] = entities + "/" + features
-    return result
-
-
 def prepare_dataset(
-    output_path: Path = DATASET_PATH,
+    output_directory: Path = DATASET_DIRECTORY,
     *,
     force: bool = False,
 ) -> Path:
-    """Download, normalize, and combine all G1 motions deterministically."""
+    """Download every raw G1 motion into one glob-compatible directory."""
 
-    output_path = output_path.resolve()
-    if output_path.is_file() and not force:
-        return output_path
-
-    download_directory = output_path.parent / "downloads"
-    paths = [
-        download_from_huggingface(_url(filename), download_directory)
-        for filename in FILENAMES
-    ]
-    dataframe = pd.concat(
-        (_normalize_fields(pd.read_parquet(path)) for path in paths),
-        ignore_index=True,
-    )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    dataframe.to_parquet(output_path, index=False)
-    return output_path
+    output_directory = output_directory.resolve()
+    for filename in FILENAMES:
+        if force or not (output_directory / filename).is_file():
+            download_from_huggingface(_url(filename), output_directory)
+    return output_directory
 
 
 def main() -> None:
@@ -99,7 +61,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true")
     arguments = parser.parse_args()
-    print(prepare_dataset(force=arguments.force))
+    print(prepare_dataset(force=arguments.force) / DATASET_GLOB)
 
 
 if __name__ == "__main__":

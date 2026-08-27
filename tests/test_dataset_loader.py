@@ -291,6 +291,26 @@ def test_maps_parquet_joint_names_before_resampling(tmp_path: Path) -> None:
     ]
 
 
+def test_maps_parquet_feature_names_before_resampling(tmp_path: Path) -> None:
+    dataset = pd.DataFrame(
+        _rows("recorded_hip/dq", [0, 10_000_000], [1.0, 1.5])
+        + _rows("recorded_hip/tau_est", [0, 10_000_000], [2.0, 2.5])
+    )
+    source = _write_dataset(tmp_path, dataset)
+
+    result = DatasetLoader.load(
+        source,
+        dt=0.01,
+        joint_name_mapping={"recorded_hip": "/robot/joints/hip"},
+        feature_name_mapping={"dq": "actual_dq", "tau_est": "actual_effort"},
+    )
+
+    assert result.columns.tolist() == [
+        "/robot/joints/hip/actual_dq",
+        "/robot/joints/hip/actual_effort",
+    ]
+
+
 def test_rejects_joint_name_mapping_field_collisions(tmp_path: Path) -> None:
     dataset = pd.DataFrame(
         _rows("recorded_hip/actual_q", [0, 10_000_000], [1.0, 1.5])
@@ -306,6 +326,24 @@ def test_rejects_joint_name_mapping_field_collisions(tmp_path: Path) -> None:
             source,
             dt=0.01,
             joint_name_mapping={"recorded_hip": "hip"},
+        )
+
+
+def test_rejects_feature_name_mapping_field_collisions(tmp_path: Path) -> None:
+    dataset = pd.DataFrame(
+        _rows("hip/dq", [0, 10_000_000], [1.0, 1.5])
+        + _rows("hip/actual_dq", [0, 10_000_000], [2.0, 2.5])
+    )
+    source = _write_dataset(tmp_path, dataset)
+
+    with pytest.raises(
+        DatasetAlignmentError,
+        match="mapping produces conflicting fields: hip/actual_dq",
+    ):
+        DatasetLoader.load(
+            source,
+            dt=0.01,
+            feature_name_mapping={"dq": "actual_dq"},
         )
 
 

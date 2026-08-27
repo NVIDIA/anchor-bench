@@ -27,6 +27,8 @@ def valid_config_data():
         "dataset": {
             "type": "parquet",
             "source": "datasets/actuator.parquet",
+            "joint_name_mapping": {"recorded_joint": "robot/joint"},
+            "feature_name_mapping": {"dq": "actual_dq"},
             "resampling": {
                 "type": "uniform",
                 "dt": 0.02,
@@ -138,6 +140,10 @@ def test_model_matches_general_training_schema(valid_config_data):
     assert config.type == "training"
     assert isinstance(config.dataset, ParquetDatasetConfig)
     assert config.dataset.source == "datasets/actuator.parquet"
+    assert config.dataset.joint_name_mapping == {
+        "recorded_joint": "robot/joint",
+    }
+    assert config.dataset.feature_name_mapping == {"dq": "actual_dq"}
     assert config.dataset.resampling.type == "uniform"
     assert config.dataset.resampling.dt == 0.02
     assert config.dataset.resampling.time_range == "intersection"

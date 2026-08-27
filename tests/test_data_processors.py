@@ -12,8 +12,8 @@ import pandas as pd
 import pytest
 
 from anchor_bench.core import SimulationContext
-from anchor_bench.train import BaseDataProcessor
-from anchor_bench.train.data_processors.gru import (
+from anchor_bench.tasks.train import BaseDataProcessor
+from anchor_bench.tasks.train.data_processors.gru import (
     PositionErrorDataProcessor,
     PreviousTorqueDataProcessor,
     ResidualTorqueDataProcessor,

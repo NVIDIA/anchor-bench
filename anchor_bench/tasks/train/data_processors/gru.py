@@ -11,8 +11,8 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 
-from anchor_bench.train.data_processors.base import BaseDataProcessor
-from anchor_bench.train.utils import (
+from anchor_bench.tasks.train.data_processors.base import BaseDataProcessor
+from anchor_bench.tasks.train.utils import (
     friction_torque,
     position_error,
     solver_pd,

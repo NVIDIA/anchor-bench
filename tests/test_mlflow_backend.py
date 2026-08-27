@@ -3,6 +3,7 @@
 
 import json
 import os
+import warnings
 from types import SimpleNamespace
 
 import mlflow
@@ -340,7 +341,7 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
         "format_version: 1\n",
         encoding="utf-8",
     )
-    dataset = pd.DataFrame({"field": ["actual_q"], "value": [1.0]})
+    dataset = pd.DataFrame({"time_ns": [0], "field": ["actual_q"], "value": [1.0]})
     full_digest = "a" * 64
     dataset_path = tmp_path / "dataset.parquet"
     dataset.to_parquet(dataset_path, index=False)
@@ -360,16 +361,18 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
             collection="training-output",
             artifact_type="model",
         )
-        run.log_dataset(
-            dataset,
-            source="datasets/actuator.parquet",
-            digest=full_digest,
-            name="training-dataset",
-            context="training",
-            path=dataset_path,
-            metadata={"format": "parquet"},
-            upload=True,
-        )
+        with warnings.catch_warnings(record=True) as captured_warnings:
+            warnings.simplefilter("always")
+            run.log_dataset(
+                dataset,
+                source="datasets/actuator.parquet",
+                digest=full_digest,
+                name="training-dataset",
+                context="training",
+                path=dataset_path,
+                metadata={"format": "parquet"},
+                upload=True,
+            )
 
     assert mlflow.get_tracking_uri() == previous_tracking_uri
     client = mlflow.MlflowClient(tracking_uri=tracking_uri)
@@ -410,3 +413,12 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
     input_tags = {tag.key: tag.value for tag in dataset_inputs[0].tags}
     assert input_tags["mlflow.data.context"] == "training"
     assert input_tags["anchor_bench.dataset_digest"] == full_digest
+    warning_messages = [str(warning.message) for warning in captured_warnings]
+    assert not any(
+        "dataset source can be interpreted in multiple ways" in message
+        for message in warning_messages
+    )
+    assert not any(
+        "Inferred schema contains integer column(s)" in message
+        for message in warning_messages
+    )

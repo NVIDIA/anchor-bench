@@ -28,9 +28,10 @@ uv sync --extra dev
 uv run python tests/integration/g1/prepare_dataset.py
 ```
 
-The preparation script writes
-`tests/integration/g1/data/g1_arm_multijoint.parquet`. The dataset and
-intermediate downloads are ignored by Git.
+The preparation script downloads the 15 original Parquet files under
+`tests/integration/g1/data/`. The configs load them through one local glob and
+map their raw joint and feature names without rewriting the source files. The
+downloads are ignored by Git.
 
 ## Train the models
 

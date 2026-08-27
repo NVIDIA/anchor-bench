@@ -5,7 +5,7 @@
 
 from importlib import import_module
 
-from anchor_bench.train.validators.base import (
+from anchor_bench.tasks.train.validators.base import (
     BaseValidator,
     ValidationResult,
     ValidatorType,

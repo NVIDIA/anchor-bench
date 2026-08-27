@@ -9,8 +9,10 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from anchor_bench.train.validators import newton_replay_adapter
-from anchor_bench.train.validators.newton_replay_adapter import _NewtonReplayAdapter
+from anchor_bench.tasks.train.validators import newton_replay_adapter
+from anchor_bench.tasks.train.validators.newton_replay_adapter import (
+    _NewtonReplayAdapter,
+)
 
 
 class FakeArray:
