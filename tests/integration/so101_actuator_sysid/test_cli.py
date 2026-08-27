@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# pyright: reportAttributeAccessIssue=false
+
 """End-to-end CLI coverage for SO-101 actuator system identification."""
 
 import csv
