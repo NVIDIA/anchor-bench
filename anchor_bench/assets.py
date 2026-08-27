@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from newton.utils import download_asset
+
 from anchor_bench.errors import AssetResolutionError
 from anchor_bench.schema.usd import LocalUsdSource, UsdSource
 
@@ -27,8 +29,6 @@ def resolve_usd_path(source: UsdSource) -> Path:
         source.ref,
     )
     try:
-        from newton.utils import download_asset
-
         asset_root = download_asset(source.folder, ref=source.ref)
     except (ImportError, OSError, RuntimeError) as error:
         raise AssetResolutionError(

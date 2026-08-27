@@ -3,10 +3,10 @@
 
 from pathlib import Path
 
-import newton.utils
 import pytest
 from pydantic import ValidationError
 
+import anchor_bench.assets as assets_module
 from anchor_bench.assets import resolve_usd_path
 from anchor_bench.errors import AssetResolutionError
 from anchor_bench.schema.training import SimulationConfig
@@ -37,7 +37,7 @@ def test_downloads_revision_pinned_newton_asset(
         calls.append((folder, ref))
         return asset_root
 
-    monkeypatch.setattr(newton.utils, "download_asset", download_asset)
+    monkeypatch.setattr(assets_module, "download_asset", download_asset)
     config = SimulationConfig.model_validate(
         {
             "usd": {
@@ -84,7 +84,7 @@ def test_reports_missing_downloaded_asset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        newton.utils,
+        assets_module,
         "download_asset",
         lambda folder, *, ref: tmp_path,
     )
