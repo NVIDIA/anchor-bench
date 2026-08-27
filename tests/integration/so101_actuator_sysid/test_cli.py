@@ -4,6 +4,7 @@
 """End-to-end CLI coverage for SO-101 actuator system identification."""
 
 import csv
+import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -73,8 +74,20 @@ def test_runs_actuator_sysid_config(
         for prim in identified_stage.Traverse()
         if prim.IsA(UsdPhysics.Joint)
     }
+    clamps_by_joint = {
+        joint_name: group.controller.clamps
+        for group in config.joint_parameters
+        for joint_name in group.names
+    }
     for joint_name in joint_names:
         joint = identified_joints[joint_name]
+        drive = UsdPhysics.DriveAPI.Get(joint, "angular")
+        assert drive.GetMaxForceAttr().Get() == pytest.approx(
+            float(clamps_by_joint[joint_name].effort_limit)
+        )
+        assert joint.GetAttribute("newton:velocityLimit").Get() == pytest.approx(
+            float(clamps_by_joint[joint_name].velocity_limit) / (math.pi / 180.0)
+        )
         assert joint.GetAttribute("mjc:armature").Get() is None
         assert joint.GetAttribute("mjc:damping").Get() is None
         assert joint.GetAttribute("mjc:frictionloss").Get() is None

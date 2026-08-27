@@ -75,6 +75,11 @@ def write_artifacts(
         source_usd_path,
         identified_usd_path,
         best_parameters,
+        {
+            joint_name: group.controller.clamps
+            for group in config.joint_parameters
+            for joint_name in group.names
+        },
         config.model_dump_json(),
     )
     return SysIdResult(
