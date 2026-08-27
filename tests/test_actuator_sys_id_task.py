@@ -340,9 +340,12 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
     source_usd_path = tmp_path / "robot.usd"
     config = _config(tmp_path)
 
-    def write_usd(source, output, parameters, config_metadata):
+    def write_usd(source, output, parameters, controller_clamps, config_metadata):
         assert source == source_usd_path
         assert parameters == candidate
+        assert controller_clamps == {
+            "hip": config.joint_parameters[0].controller.clamps
+        }
         assert config_metadata == config.model_dump_json()
         output.write_text("#usda 1.0\n", encoding="utf-8")
         return output

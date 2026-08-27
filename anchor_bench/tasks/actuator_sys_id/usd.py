@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Tuple, Union
 
 from pxr import Sdf, Usd, UsdPhysics
 
+from anchor_bench.schema.actuator_sys_id import ControllerClamps
 from anchor_bench.tasks.actuator_sys_id.model import Candidate
 
 # The OpenUSD extension modules do not publish complete Python type information.
@@ -36,9 +38,10 @@ def write_identified_usd_layer(
     source_usd: Union[str, Path],
     output_path: Union[str, Path],
     best_parameters: Candidate,
+    controller_clamps: Mapping[str, ControllerClamps],
     config_metadata: str,
 ) -> Path:
-    """Write a sparse USD layer containing the identified actuator parameters.
+    """Write a sparse USD layer containing fitted parameters and controller clamps.
 
     The resulting layer records the resolved configuration metadata, sublayers
     ``source_usd``, and authors only stronger joint opinions. It therefore remains
@@ -54,6 +57,10 @@ def write_identified_usd_layer(
         raise ValueError("identified USD output must differ from the source USD")
     if not best_parameters:
         raise ValueError("identified USD export requires fitted joint parameters")
+    if set(controller_clamps) != set(best_parameters):
+        raise ValueError(
+            "controller clamps must exactly match the identified joint parameters"
+        )
 
     source_stage = Usd.Stage.Open(str(source_path))
     if source_stage is None:
@@ -86,6 +93,7 @@ def write_identified_usd_layer(
 
     for joint_name, parameters in best_parameters.items():
         _validate_parameters(joint_name, parameters)
+        clamps = controller_clamps[joint_name]
         source_joint = joints[joint_name]
         drive_name, is_angular = _drive(source_joint)
         joint_override = output_stage.OverridePrim(source_joint.GetPath())
@@ -103,6 +111,7 @@ def write_identified_usd_layer(
         )
         drive.CreateStiffnessAttr(float(parameters["stiffness"]) * drive_scale)
         drive.CreateDampingAttr(float(parameters["damping"]) * drive_scale)
+        drive.CreateMaxForceAttr(float(clamps.effort_limit))
         _set_float(
             joint_override,
             "newton:armature",
@@ -118,6 +127,12 @@ def write_identified_usd_layer(
             joint_override,
             "newton:damping",
             float(parameters["viscous_friction"]) * damping_scale,
+        )
+        velocity_scale = 1.0 / _RADIANS_PER_DEGREE if is_angular else 1.0
+        _set_float(
+            joint_override,
+            "newton:velocityLimit",
+            float(clamps.velocity_limit) * velocity_scale,
         )
 
     if not output_layer.Save():

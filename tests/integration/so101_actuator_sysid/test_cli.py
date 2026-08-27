@@ -3,11 +3,13 @@
 
 """End-to-end CLI coverage for SO-101 actuator system identification."""
 
+import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 import yaml
+from pxr import Usd, UsdPhysics
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.parse import parse
@@ -71,6 +73,27 @@ def test_runs_actuator_sysid_config(
     assert all(
         (output_directory / artifact).is_file() for artifact in EXPECTED_ARTIFACTS
     )
+    identified_stage = Usd.Stage.Open(str(output_directory / "identified.usda"))
+    assert identified_stage is not None
+    identified_joints = {
+        prim.GetName(): prim
+        for prim in identified_stage.Traverse()
+        if prim.IsA(UsdPhysics.Joint)
+    }
+    clamps_by_joint = {
+        joint_name: group.controller.clamps
+        for group in config.joint_parameters
+        for joint_name in group.names
+    }
+    for joint_name in joint_names:
+        joint = identified_joints[joint_name]
+        drive = UsdPhysics.DriveAPI.Get(joint, "angular")
+        assert drive.GetMaxForceAttr().Get() == pytest.approx(
+            float(clamps_by_joint[joint_name].effort_limit)
+        )
+        assert joint.GetAttribute("newton:velocityLimit").Get() == pytest.approx(
+            float(clamps_by_joint[joint_name].velocity_limit) / (math.pi / 180.0)
+        )
 
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,
