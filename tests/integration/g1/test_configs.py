@@ -12,7 +12,9 @@ from pxr import Usd, UsdGeom, UsdPhysics
 from anchor_bench.schema.parse import parse
 from anchor_bench.schema.training import TrainingConfig
 
-CONFIG_DIRECTORY = Path(__file__).parent
+REPOSITORY = Path(__file__).parents[3]
+CONFIG_DIRECTORY = REPOSITORY / "examples" / "training"
+ASSET_DIRECTORY = REPOSITORY / "assets" / "robots" / "g1" / "files"
 ROBOT_ROOT = "/g1_29dof_rev_1_0_tri_hand"
 JOINTS = [
     f"{ROBOT_ROOT}/joints/right_shoulder_pitch_joint",
@@ -32,11 +34,11 @@ RAW_JOINTS = [
 def test_g1_asset_is_pinned_and_upright() -> None:
     """Keep the corrected TriHand asset identity, pose, and gravity stable."""
 
-    asset = CONFIG_DIRECTORY / "usd" / "g1_29dof_tri_hand_closed.usd"
+    asset = ASSET_DIRECTORY / "g1_29dof_tri_hand_closed.usd"
     with asset.open("rb") as stream:
         assert hashlib.file_digest(stream, "sha256").hexdigest() == ASSET_SHA256
 
-    stage = Usd.Stage.Open(str(CONFIG_DIRECTORY / "usd" / "g1.usd"))
+    stage = Usd.Stage.Open(str(ASSET_DIRECTORY / "g1.usd"))
     assert stage.GetDefaultPrim().GetPath().pathString == ROBOT_ROOT
 
     transforms = UsdGeom.XformCache()
@@ -82,6 +84,9 @@ def test_g1_residual_training_config() -> None:
     assert config.model.num_layers == 2
     assert config.model.output.activation == "tanh"
     assert config.model.output.scale == 5.0
+    assert config.training.epochs == 50
+    assert config.training.checkpoint is not None
+    assert config.training.checkpoint.every_n_epochs == 10
     assert config.validation.validators[0].config["disable_contacts"] is True
 
 
@@ -111,6 +116,9 @@ def test_g1_full_torque_training_config() -> None:
     assert config.model.num_layers == 2
     assert config.model.output.activation == "tanh"
     assert config.model.output.scale == 15.0
+    assert config.training.epochs == 50
+    assert config.training.checkpoint is not None
+    assert config.training.checkpoint.every_n_epochs == 10
     assert config.training.feedback is not None
     assert config.training.feedback.input == "previous_torque"
     assert config.training.feedback.output == "actual_effort"

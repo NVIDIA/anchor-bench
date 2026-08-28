@@ -1,10 +1,10 @@
 type: training
-description: Train the enriched four-joint G1 right-arm full-torque GRU.
-tags: [g1, right-arm, gru, full-torque, autoregressive]
+description: Train the four-joint G1 right-arm residual-torque GRU.
+tags: [g1, right-arm, gru, residual-torque]
 
 dataset:
   type: parquet
-  source: tests/integration/g1/data/g1-arm-multijoint-*.parquet
+  source: examples/training/data/g1-arm-multijoint-*.parquet
   joint_name_mapping:
     right_shoulder_pitch: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
     right_shoulder_roll: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
@@ -21,19 +21,16 @@ dataset:
 
 simulation:
   backend: newton
-  usd_path: tests/integration/g1/usd/g1_arm_full_torque.usda
+  usd_path: assets/robots/g1/files/g1_arm_residual.usda
   fixed_base: true
 
 input_features:
   actual_q: null
   position_error: null
   actual_dq: null
-  solver_pd: solver_pd
-  qfrc_bias: qfrc_bias
-  previous_torque: previous_torque
 
 output_features:
-  actual_effort: null
+  torque_residual: torque_residual
 
 mapping:
   right_arm:
@@ -50,27 +47,27 @@ mapping:
 
 model:
   type: gru
-  hidden_size: 192
+  hidden_size: 128
   num_layers: 2
-  dropout: 0.225
+  dropout: 0.0
   output:
     activation: tanh
-    scale: 15.0
+    scale: 5.0
 
 training:
-  epochs: 2
+  epochs: 50
   batch_size: 4
-  seed: 48
+  seed: 42
   validation_ratio: 0.2
   sequence:
     length: 100
   optimizer:
     type: adamw
-    learning_rate: 0.0004949926657319083
-    weight_decay: 0.0000003376044479094932
+    learning_rate: 0.001
+    weight_decay: 0.0
   loss:
     type: huber
-    delta: 0.3149430512234676
+    delta: 1.0
   gradient:
     clip_norm: 1.0
   augmentation:
@@ -78,12 +75,8 @@ training:
   normalization:
     inputs: standard
     outputs: none
-  feedback:
-    input: previous_torque
-    output: actual_effort
-    initial_value: 0.0
   checkpoint:
-    every_n_epochs: 2
+    every_n_epochs: 10
 
 validation:
   validators:

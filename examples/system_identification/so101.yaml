@@ -16,11 +16,11 @@ joint_parameters:
 optimizer:
   type: python-cmaes
   sigma: 0.25
-  max_iterations: 2
+  max_iterations: 100
   epsilon: 0.001
 simulation:
   type: newton
-  usd_path: tests/integration/so101_actuator_sysid/so101.usd
+  usd_path: assets/robots/so101/files/so101.usd
   physics_freq: 250
   control_freq: 50
   render_freq: 25
@@ -29,13 +29,12 @@ simulation:
     integrator: implicitfast
     solver_iterations: 5
     line_search_iterations: 2
-num_envs: 6
+num_envs: 64
 buffer_time: 0.2
 seed: 42
-output_dir: outputs/integration/so101_actuator_sysid
 dataset:
   type: parquet
-  source: tests/integration/so101_actuator_sysid/trajectories/train-*.parquet
+  source: examples/system_identification/data/train-*.parquet
   resampling:
     type: uniform
     dt: 0.02

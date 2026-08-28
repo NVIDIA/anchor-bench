@@ -23,6 +23,7 @@ output/
 mlruns/
 /data/
 inputs/datasets/
+examples/training/data/
 *.pt
 *.pth
 *.onnx
@@ -35,6 +36,13 @@ inputs/datasets/
 *.usd
 *.usda
 *.usdc
-assets/robots/*/files/
+assets/robots/*/files/*
+!assets/robots/g1/files/
+!assets/robots/g1/files/g1.usd
+!assets/robots/g1/files/g1_29dof_tri_hand_closed.usd
+!assets/robots/g1/files/g1_arm_full_torque.usda
+!assets/robots/g1/files/g1_arm_residual.usda
 !assets/robots/so101/files/
 !assets/robots/so101/files/so101.usd
+!examples/system_identification/data/
+!examples/system_identification/data/train-*.parquet

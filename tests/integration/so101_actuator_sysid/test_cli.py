@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
+import yaml
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.parse import parse
@@ -17,9 +18,9 @@ from tests.integration.usd_trajectory import usd_trajectory_accuracy
 pytestmark = pytest.mark.integration
 
 TEST_DIRECTORY = Path(__file__).parent
-CONFIG_PATH = TEST_DIRECTORY / "config.yaml"
-SOURCE_USD_PATH = TEST_DIRECTORY / "so101.usd"
-IDENTIFIED_USD_PATH = TEST_DIRECTORY / "identified.usda"
+REPOSITORY = TEST_DIRECTORY.parents[2]
+CONFIG_PATH = REPOSITORY / "examples" / "system_identification" / "so101.yaml"
+SOURCE_USD_PATH = REPOSITORY / "assets" / "robots" / "so101" / "files" / "so101.usd"
 EVALUATION_TRAJECTORY_PATH = (
     TEST_DIRECTORY / "trajectories" / "heldout-square-pattern.parquet"
 )
@@ -34,9 +35,20 @@ EXPECTED_ARTIFACTS = (
 
 def test_runs_actuator_sysid_config(
     run_cli: Callable[[Sequence[str]], CliResult],
+    tmp_path: Path,
 ) -> None:
-    config = parse(CONFIG_PATH)
+    raw_config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw_config["optimizer"]["max_iterations"] = 2
+    raw_config["num_envs"] = 6
+    smoke_config_path = tmp_path / "so101.yaml"
+    smoke_config_path.write_text(
+        yaml.safe_dump(raw_config, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    config = parse(smoke_config_path)
     assert isinstance(config, ActuatorSysIdConfig)
+    output_directory = tmp_path / "output"
     joint_names = [joint for group in config.joint_parameters for joint in group.names]
     trajectories = load_trajectories(config.dataset, joint_names=joint_names)
     assert [trajectory.experiment for trajectory in trajectories] == [
@@ -48,15 +60,17 @@ def test_runs_actuator_sysid_config(
     result = run_cli(
         [
             "--config",
-            str(CONFIG_PATH),
+            str(smoke_config_path),
             "--force",
             "--output",
-            str(TEST_DIRECTORY),
+            str(output_directory),
         ]
     )
 
     assert result.exit_code == 0, result.stderr or result.stdout
-    assert all((TEST_DIRECTORY / artifact).is_file() for artifact in EXPECTED_ARTIFACTS)
+    assert all(
+        (output_directory / artifact).is_file() for artifact in EXPECTED_ARTIFACTS
+    )
 
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,
@@ -64,7 +78,7 @@ def test_runs_actuator_sysid_config(
         config,
     )
     identified_accuracy = usd_trajectory_accuracy(
-        IDENTIFIED_USD_PATH,
+        output_directory / "identified.usda",
         EVALUATION_TRAJECTORY_PATH,
         config,
     )
