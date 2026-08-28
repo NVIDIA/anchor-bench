@@ -1,6 +1,3 @@
-website/public/
-.hugo_build.lock
-
 .venv/
 __pycache__/
 *.py[cod]
