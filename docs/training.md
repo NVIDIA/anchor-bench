@@ -7,8 +7,10 @@ workflow provides two complete configurations:
 - residual-torque training with identified actuator parameters;
 - autoregressive full-torque training.
 
-Their supporting physics layers, dataset preparation script, configurations,
-and integration tests live under [`tests/integration/g1/`](../tests/integration/g1/).
+The configurations and dataset preparation script live under
+[`examples/training/`](../examples/training/). Their reusable physics assets
+live under [`assets/robots/g1/`](../assets/robots/g1/), and the integration tests
+consume the same examples rather than maintaining separate copies.
 
 The example pins the corrected Anchor-Lab `g1_29dof_tri_hand_closed.usd`
 asset at revision `50881f268b6600251df6f2011cfaa5a392fb96eb` and verifies its checksum
@@ -25,11 +27,11 @@ included in the default installation:
 
 ```bash
 uv sync --extra dev
-uv run python tests/integration/g1/prepare_dataset.py
+uv run python examples/training/prepare_dataset.py
 ```
 
 The preparation script downloads the 15 original Parquet files under
-`tests/integration/g1/data/`. The configs load them through one local glob and
+`examples/training/data/`. The configs load them through one local glob and
 map their raw joint and feature names without rewriting the source files. The
 downloads are ignored by Git.
 
@@ -42,7 +44,7 @@ Residual-torque model:
 ```bash
 CUDA_VISIBLE_DEVICES=0 uv run anchor-bench \
   --force \
-  --config tests/integration/g1/g1_arm_residual.yaml \
+  --config examples/training/g1_arm_residual.yaml \
   --output outputs/g1_arm_residual
 ```
 
@@ -51,14 +53,14 @@ Autoregressive full-torque model:
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run anchor-bench \
   --force \
-  --config tests/integration/g1/g1_arm_full_torque.yaml \
+  --config examples/training/g1_arm_full_torque.yaml \
   --output outputs/g1_arm_full_torque
 ```
 
-Both configurations train for two epochs, write a checkpoint at the final
-epoch, and run Newton replay on the three experiments selected by the
-deterministic held-out split. Contact generation is disabled because these are
-fixed-base arm replays without environmental contact.
+Both configurations train for 50 epochs, write checkpoints every 10 epochs,
+and run Newton replay on the three experiments selected by the deterministic
+held-out split. Contact generation is disabled because these are fixed-base arm
+replays without environmental contact.
 
 The full-torque model is autoregressive and therefore takes substantially
 longer than the residual model.
@@ -70,3 +72,7 @@ To execute dataset preparation, training, and Newton replay through pytest:
 ```bash
 uv run pytest -m integration tests/integration/g1 -v
 ```
+
+The integration tests load the distributed configurations and override only
+the dataset location, epoch count, and checkpoint interval to keep the test run
+bounded.

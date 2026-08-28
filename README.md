@@ -1,7 +1,8 @@
 # Anchor Bench
 
-[![Tests](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml/badge.svg?branch=refactor-main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
-[![Coverage](/../badges/badges/coverage.svg)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
+[![Quality](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
+[![Tests](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/tests.yml)
+[![Coverage](/../badges/badges/coverage.svg)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/tests.yml)
 
 Anchor Bench is an early-stage, configuration-driven toolkit for robot actuator
 workflows. It validates a YAML task, runs the corresponding implementation, and
@@ -31,7 +32,7 @@ Run the included trajectory example:
 
 ```bash
 uv run anchor-bench \
-  --config examples/so101_motion_pack.yaml \
+  --config examples/trajectory/so101_motion_pack.yaml \
   --output outputs/so101_motion_pack
 ```
 
@@ -51,14 +52,17 @@ uv sync --extra dev
 
 ## Documentation
 
-The [documentation index](docs/README.md) organizes the supported guides by
-workflow. Good starting points are:
+The [documentation index](docs/README.md) links to the supported workflows and
+reference guides:
 
-- [Trajectory generation](docs/trajectory.md)
-- [Actuator system identification](docs/system-identification.md)
-- [Training actuator models](docs/training.md)
-- [Dataset loading](docs/datasets.md)
-- [MLOps backends](docs/mlops.md)
+| Guide | Covers |
+| --- | --- |
+| [Running tasks](docs/running-tasks.md) | CLI usage, output directories, completion markers, and logging. |
+| [Trajectory generation](docs/trajectory.md) | Hold, transition, sine, and chirp command trajectories. |
+| [Actuator system identification](docs/system-identification.md) | Newton replay and actuator parameter fitting. |
+| [Training actuator models](docs/training.md) | Recurrent model training and validation. |
+| [Dataset loading](docs/datasets.md) | Parquet input, resampling, and name mapping. |
+| [MLOps backends](docs/mlops.md) | MLflow tracking and custom tracking backends. |
 
 ## Python API
 
