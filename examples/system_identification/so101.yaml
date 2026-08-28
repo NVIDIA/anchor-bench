@@ -35,6 +35,15 @@ seed: 42
 dataset:
   type: parquet
   source: examples/system_identification/data/train-*.parquet
+  # Map source Parquet joint prefixes to canonical USD joint names.
+  # These identity entries demonstrate the syntax and may be omitted.
+  joint_name_mapping:
+    Rotation: Rotation
+    Pitch: Pitch
+    Elbow: Elbow
+    Wrist_Pitch: Wrist_Pitch
+    Wrist_Roll: Wrist_Roll
+    Jaw: Jaw
   resampling:
     type: uniform
     dt: 0.02
