@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Tuple, Union
 
-from pxr import Sdf, Usd, UsdPhysics
+from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 
 from anchor_bench.schema.actuator_sys_id import ControllerClamps
 from anchor_bench.tasks.actuator_sys_id.model import Candidate
@@ -90,6 +90,7 @@ def write_identified_usd_layer(
     output_stage = Usd.Stage.Open(output_layer)
     if output_stage is None:
         raise RuntimeError(f"could not open identified USD layer: {destination}")
+    _copy_stage_coordinate_metadata(source_stage, output_stage)
     source_default_prim = source_stage.GetDefaultPrim()
     if source_default_prim:
         default_prim = output_stage.GetPrimAtPath(source_default_prim.GetPath())
@@ -155,6 +156,20 @@ def write_identified_usd_layer(
     if not output_layer.Save():
         raise RuntimeError(f"could not save identified USD layer: {destination}")
     return destination
+
+
+def _copy_stage_coordinate_metadata(source_stage: Any, output_stage: Any) -> None:
+    """Preserve the source stage's coordinate system and physical units."""
+
+    UsdGeom.SetStageUpAxis(output_stage, UsdGeom.GetStageUpAxis(source_stage))
+    UsdGeom.SetStageMetersPerUnit(
+        output_stage,
+        UsdGeom.GetStageMetersPerUnit(source_stage),
+    )
+    UsdPhysics.SetStageKilogramsPerUnit(
+        output_stage,
+        UsdPhysics.GetStageKilogramsPerUnit(source_stage),
+    )
 
 
 def _find_joint(stage: Any, requested: str) -> Any:

@@ -44,6 +44,9 @@ def _clamps(
 def _create_source_usd(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     stage = Usd.Stage.CreateNew(str(path))
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    UsdGeom.SetStageMetersPerUnit(stage, 0.25)
+    UsdPhysics.SetStageKilogramsPerUnit(stage, 2.0)
     world = UsdGeom.Xform.Define(stage, "/World")
     stage.SetDefaultPrim(world.GetPrim())
     UsdGeom.Cube.Define(stage, "/World/visual")
@@ -116,6 +119,9 @@ def test_writes_sparse_opinions_over_the_source_asset(tmp_path):
     stage = Usd.Stage.Open(str(output))
     assert stage.GetDefaultPrim().GetPath() == Sdf.Path("/World")
     assert stage.GetPrimAtPath("/World/visual")
+    assert UsdGeom.GetStageUpAxis(stage) == UsdGeom.Tokens.z
+    assert UsdGeom.GetStageMetersPerUnit(stage) == pytest.approx(0.25)
+    assert UsdPhysics.GetStageKilogramsPerUnit(stage) == pytest.approx(2.0)
 
     hip = stage.GetPrimAtPath("/World/hip")
     hip_drive = UsdPhysics.DriveAPI.Get(hip, "angular")
