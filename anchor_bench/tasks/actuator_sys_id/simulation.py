@@ -104,6 +104,7 @@ class NewtonPopulationEvaluator:
         context = create_simulation_context(
             self.config.simulation.type,
             self.config.simulation.usd_path,
+            fixed_base=True,
         )
         if not isinstance(context, NewtonSimulationContext):
             raise TypeError("actuator_sys_id requires a Newton simulation context")
@@ -273,11 +274,13 @@ class NewtonPopulationEvaluator:
             raise ValueError("trajectory joints do not match the Newton evaluator")
         if trajectory.measured_position.shape[0] < 2:
             raise ValueError("trajectory must contain at least two samples")
+        transition_count = trajectory.measured_position.shape[0] - 1
+        if self.buffer_steps >= transition_count:
+            raise ValueError(
+                "trajectory must contain at least one scored transition after "
+                f"the {self.buffer_steps}-step buffer"
+            )
         self._reset(trajectory.measured_position[0])
-        first_command = trajectory.commanded_position[0]
-        for _ in range(self.buffer_steps):
-            self._set_targets(first_command)
-            self._step_control_interval()
 
         commanded = np.asarray(trajectory.commanded_position, dtype=np.float32)
         sample_indices = np.arange(commanded.shape[0], dtype=np.int64)[:, np.newaxis]
@@ -299,8 +302,9 @@ class NewtonPopulationEvaluator:
         for sample_index in range(measured_positions.shape[0]):
             self._set_targets(delayed_commands[sample_index])
             self._step_control_interval()
-            self._launch_position_error(measured_positions_device, sample_index)
-        return measured_positions.shape[0]
+            if sample_index >= self.buffer_steps:
+                self._launch_position_error(measured_positions_device, sample_index)
+        return measured_positions.shape[0] - self.buffer_steps
 
     def _launch_position_error(
         self,

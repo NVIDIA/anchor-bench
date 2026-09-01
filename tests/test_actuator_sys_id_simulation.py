@@ -215,10 +215,20 @@ def test_newton_evaluator_uses_shared_simulation_context(
     context = FakeContext()
     config = _config(tmp_path)
     monkeypatch.setattr(simulation_module, "NewtonSimulationContext", FakeContext)
+    requested_context = {}
+
+    def create_context(backend, usd_path, *, fixed_base):
+        requested_context.update(
+            backend=backend,
+            usd_path=usd_path,
+            fixed_base=fixed_base,
+        )
+        return context
+
     monkeypatch.setattr(
         simulation_module,
         "create_simulation_context",
-        lambda backend, usd_path: context,
+        create_context,
     )
     monkeypatch.setattr(
         simulation_module,
@@ -242,6 +252,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
     assert evaluator._simulation_context.control is context.control
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
+    assert requested_context["fixed_base"] is True
     assert context.template.joint_target_ke == [15.0]
     assert context.captured_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
@@ -300,6 +311,21 @@ def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
     scores = evaluator.evaluate([{}, {}], [short, long])
 
     np.testing.assert_allclose(scores, [1.0, 3.0])
+
+
+def test_newton_evaluator_rejects_a_buffer_without_scored_transitions():
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.joint_names = ["hip"]
+    evaluator.buffer_steps = 1
+    trajectory = Trajectory(
+        experiment="too-short",
+        joint_names=["hip"],
+        commanded_position=np.zeros((2, 1)),
+        measured_position=np.zeros((2, 1)),
+    )
+
+    with pytest.raises(ValueError, match="at least one scored transition"):
+        evaluator._evaluate_trajectory(trajectory)
 
 
 def test_position_error_kernel_accumulates_all_worlds_and_samples():
@@ -468,7 +494,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     evaluator.num_envs = 2
     evaluator.physics_dt = 0.001
     evaluator.control_substeps = 2
-    evaluator.buffer_steps = 0
+    evaluator.buffer_steps = 1
     evaluator.delay_steps = np.asarray([0, 1], dtype=np.int64)
     evaluator._simulation_context = cast(NewtonSimulationContext, context)
     evaluator._joint_q_indices = np.asarray([[0, 1], [2, 3]])
