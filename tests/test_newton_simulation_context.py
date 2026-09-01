@@ -221,17 +221,20 @@ def test_initializes_one_configurable_replicated_simulation(
         configure_builder=configure,
         configuration_key=("actuators", 1),
         solver_options={"iterations": 5},
+        usd_ignore_paths=["/World/actuator"],
     )
     context.initialize(
         world_count=4,
         configure_builder=configure,
         configuration_key=("actuators", 1),
         solver_options={"iterations": 5},
+        usd_ignore_paths=["/World/actuator"],
     )
 
     template, population = FakeModelBuilder.instances
     assert FakeSolver.registered_builders == [template, population]
     assert template.usd_source == str(source)
+    assert template.options == {"ignore_paths": ["/World/actuator"]}
     assert configured == [template]
     assert population.replicated_template is template
     assert population.world_count == 4
@@ -283,6 +286,14 @@ def test_rejects_conflicting_reinitialization(
             configure_builder=configure,
             configuration_key=("actuators", 1),
             solver_options={"iterations": 6},
+        )
+    with pytest.raises(RuntimeError, match="different world count or configuration"):
+        context.initialize(
+            world_count=4,
+            configure_builder=configure,
+            configuration_key=("actuators", 1),
+            solver_options={"iterations": 5},
+            usd_ignore_paths=["/World/actuator"],
         )
 
 

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Hashable
+from collections.abc import Hashable, Sequence
 from pathlib import Path
 from typing import Any, Callable, Mapping, Tuple
 
@@ -31,6 +31,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     _world_count: int
     _configuration_key: Hashable | None
     _solver_options: dict[str, Any]
+    _usd_ignore_paths: tuple[str, ...]
     _control: newton.Control
     _contacts: newton.Contacts
     _solver: newton.solvers.SolverMuJoCo
@@ -47,6 +48,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         super().__init__(usd_path, fixed_base=fixed_base)
         if not hasattr(self, "_initialized"):
             self._initialized = False
+            self._usd_ignore_paths = ()
 
     def initialize(
         self,
@@ -55,6 +57,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         configure_builder: Callable[[newton.ModelBuilder], None] | None = None,
         configuration_key: Hashable | None = None,
         solver_options: Mapping[str, Any] | None = None,
+        usd_ignore_paths: Sequence[str] | None = None,
     ) -> None:
         """Initialize and own one model, solver, and set of simulation buffers.
 
@@ -78,11 +81,13 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
                 "configure_builder is required when configuration_key is provided."
             )
         requested_solver_options = dict(solver_options or {})
+        requested_usd_ignore_paths = tuple(usd_ignore_paths or ())
         if self._initialized:
             if (
                 self._world_count != world_count
                 or self._configuration_key != configuration_key
                 or self._solver_options != requested_solver_options
+                or self._usd_ignore_paths != requested_usd_ignore_paths
             ):
                 raise RuntimeError(
                     "Newton simulation context is already initialized with a "
@@ -96,7 +101,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
             world_count,
             self.fixed_base,
         )
-        template = self._create_usd_builder()
+        template = self._create_usd_builder(requested_usd_ignore_paths)
         if configure_builder is not None:
             configure_builder(template)
 
@@ -126,6 +131,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         self._world_count = world_count
         self._configuration_key = configuration_key
         self._solver_options = requested_solver_options
+        self._usd_ignore_paths = requested_usd_ignore_paths
         self._initialized = True
         logger.info(
             "Initialized Newton simulation path=%s worlds=%d fixed_base=%s",
@@ -197,14 +203,24 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         if not self._initialized:
             self.initialize()
 
-    def _create_usd_builder(self) -> newton.ModelBuilder:
+    def _create_usd_builder(
+        self,
+        ignore_paths: Sequence[str] = (),
+    ) -> newton.ModelBuilder:
         """Create a configured builder and load the context's USD asset."""
 
         builder = self._create_builder()
-        builder.add_usd(
-            source=str(self.usd_path),
-            floating=not self.fixed_base,
-        )
+        if ignore_paths:
+            builder.add_usd(
+                source=str(self.usd_path),
+                floating=not self.fixed_base,
+                ignore_paths=list(ignore_paths),
+            )
+        else:
+            builder.add_usd(
+                source=str(self.usd_path),
+                floating=not self.fixed_base,
+            )
         return builder
 
     def _create_builder(self) -> newton.ModelBuilder:

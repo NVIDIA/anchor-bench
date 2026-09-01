@@ -71,16 +71,23 @@ def write_artifacts(
         yaml.safe_dump(summary, sort_keys=False),
         encoding="utf-8",
     )
+    joint_names = [
+        joint_name for group in config.joint_parameters for joint_name in group.names
+    ]
     write_identified_usd_layer(
         source_usd_path,
         identified_usd_path,
-        best_parameters,
+        {joint_name: best_parameters[joint_name] for joint_name in joint_names},
         {
             joint_name: group.controller.clamps
             for group in config.joint_parameters
             for joint_name in group.names
         },
         config.model_dump_json(),
+        {
+            body.name: best_parameters[body.name]["mass"]
+            for body in config.rigid_body_parameters
+        },
     )
     return SysIdResult(
         best_parameters=best_parameters,

@@ -45,6 +45,7 @@ def write_identified_usd_layer(
     best_parameters: Candidate,
     controller_clamps: Mapping[str, ControllerClamps],
     config_metadata: str,
+    rigid_body_masses: Mapping[str, float] | None = None,
 ) -> Path:
     """Write a sparse USD layer containing fitted parameters and controller clamps.
 
@@ -66,6 +67,7 @@ def write_identified_usd_layer(
         raise ValueError(
             "controller clamps must exactly match the identified joint parameters"
         )
+    body_masses = dict(rigid_body_masses or {})
 
     source_stage = Usd.Stage.Open(str(source_path))
     if source_stage is None:
@@ -73,6 +75,10 @@ def write_identified_usd_layer(
     joints = {
         joint_name: _find_joint(source_stage, joint_name)
         for joint_name in best_parameters
+    }
+    bodies = {
+        body_name: _find_rigid_body(source_stage, body_name)
+        for body_name in body_masses
     }
     drive_gain_scaling = _joint_drive_gain_scaling(source_stage)
 
@@ -147,6 +153,45 @@ def write_identified_usd_layer(
         # layer has one authoritative representation instead of mirroring both.
         _block_mujoco_joint_attributes(source_joint, joint_override)
 
+    kilograms_per_unit = float(UsdPhysics.GetStageKilogramsPerUnit(source_stage))
+    for body_name, mass_kg in body_masses.items():
+        if not math.isfinite(mass_kg) or mass_kg <= 0.0:
+            raise ValueError(
+                f"identified mass for rigid body {body_name!r} must be positive "
+                "and finite"
+            )
+        source_body = bodies[body_name]
+        source_mass_api = UsdPhysics.MassAPI(source_body)
+        source_mass = source_mass_api.GetMassAttr().Get()
+        if source_mass is None or float(source_mass) <= 0.0:
+            raise ValueError(
+                f"source rigid body {body_name!r} must have positive explicit mass"
+            )
+        source_mass_kg = float(source_mass) * kilograms_per_unit
+        mass_scale = mass_kg / source_mass_kg
+        body_override = output_stage.OverridePrim(source_body.GetPath())
+        mass_api = UsdPhysics.MassAPI.Apply(body_override)
+        mass_api.CreateMassAttr(mass_kg / kilograms_per_unit)
+        source_inertia = source_mass_api.GetDiagonalInertiaAttr().Get()
+        if source_inertia is not None and any(
+            float(value) > 0.0 for value in source_inertia
+        ):
+            mass_api.CreateDiagonalInertiaAttr(
+                tuple(float(value) * mass_scale for value in source_inertia)
+            )
+        source_newton_inertia = source_body.GetAttribute("newton:inertia")
+        if (
+            source_newton_inertia
+            and source_newton_inertia.HasAuthoredValueOpinion()
+            and (newton_inertia := source_newton_inertia.Get()) is not None
+        ):
+            body_override.CreateAttribute(
+                source_newton_inertia.GetName(),
+                source_newton_inertia.GetTypeName(),
+                custom=source_newton_inertia.IsCustom(),
+                variability=source_newton_inertia.GetVariability(),
+            ).Set([float(value) * mass_scale for value in newton_inertia])
+
     _deactivate_mujoco_actuators(
         source_stage,
         output_stage,
@@ -182,6 +227,20 @@ def _find_joint(stage: Any, requested: str) -> Any:
     if len(matches) != 1:
         raise ValueError(
             f"source USD must contain exactly one joint matching {requested!r}"
+        )
+    return matches[0]
+
+
+def _find_rigid_body(stage: Any, requested: str) -> Any:
+    matches = [
+        prim
+        for prim in stage.Traverse()
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI)
+        and (str(prim.GetPath()) == requested or prim.GetName() == requested)
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"source USD must contain exactly one rigid body matching {requested!r}"
         )
     return matches[0]
 

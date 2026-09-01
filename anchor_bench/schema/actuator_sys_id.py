@@ -94,6 +94,19 @@ class JointParameterGroup(StrictBaseModel):
         return self
 
 
+class RigidBodyParameter(StrictBaseModel):
+    """Mass search bounds for one rigid body in the simulation asset."""
+
+    name: NonEmptyString
+    mass: Bound
+
+    @model_validator(mode="after")
+    def mass_bounds_must_be_positive(self) -> RigidBodyParameter:
+        if self.mass.lower <= 0:
+            raise ValueError("rigid-body mass bounds must be positive")
+        return self
+
+
 class WarpMujocoSolverConfig(StrictBaseModel):
     type: Literal["warp_mujoco"]
     integrator: NonEmptyString = "implicitfast"
@@ -125,6 +138,7 @@ class ActuatorSysIdConfig(BaseConfig):
         description="Optional experiment-tracking configuration for this task.",
     )
     joint_parameters: Annotated[List[JointParameterGroup], Field(min_length=1)]
+    rigid_body_parameters: List[RigidBodyParameter] = Field(default_factory=list)
     optimizer: CmaesOptimizerConfig
     simulation: NewtonSimulationConfig
     num_envs: CmaesPopulationSize = 64
@@ -142,6 +156,14 @@ class ActuatorSysIdConfig(BaseConfig):
         ]
         if len(names) != len(set(names)):
             raise ValueError("joint names must be unique across parameter groups")
+        body_names = [parameter.name for parameter in self.rigid_body_parameters]
+        if len(body_names) != len(set(body_names)):
+            raise ValueError("rigid-body names must be unique")
+        overlap = sorted(set(names) & set(body_names))
+        if overlap:
+            raise ValueError(
+                "joint and rigid-body names must not overlap: " + ", ".join(overlap)
+            )
         dataset_dt = float(self.dataset.resampling.dt)
         control_dt = 1.0 / self.simulation.control_freq
         if not isclose(dataset_dt, control_dt, rel_tol=1.0e-9, abs_tol=1.0e-12):

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+# pyright: reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
 import logging
@@ -11,6 +13,7 @@ import newton
 import numpy as np
 import pytest
 import warp as wp
+from pxr import Usd, UsdPhysics
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -20,9 +23,15 @@ from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_
 from anchor_bench.tasks.actuator_sys_id.simulation import (
     NewtonPopulationEvaluator,
     _accumulate_position_error,
+    _builder_body_indices,
     _builder_joint_indices,
+    _model_body_indices,
     _model_joint_indices,
+    _mujoco_actuator_paths,
+    _set_builder_body_mass,
 )
+
+# The OpenUSD extension modules do not publish complete Python type information.
 
 
 def _config(tmp_path, *, dataset_dt=0.005):
@@ -152,6 +161,68 @@ def test_builder_joint_mapping_handles_final_joint_without_end_sentinel():
     assert _builder_joint_indices(builder, ["hip"]) == {"hip": (0, 0)}
 
 
+def test_builder_body_mapping_and_mass_scaling():
+    builder = cast(
+        "newton.ModelBuilder",
+        SimpleNamespace(
+            body_label=["/World/base", "/World/link"],
+            body_mass=[4.0, 2.0],
+            body_inv_mass=[0.25, 0.5],
+            body_inertia=[np.eye(3), np.eye(3) * 4.0],
+            body_inv_inertia=[np.eye(3), np.eye(3) * 0.25],
+        ),
+    )
+
+    indices = _builder_body_indices(builder, ["link"])
+    _set_builder_body_mass(builder, indices["link"], 1.0)
+
+    assert indices == {"link": 1}
+    assert builder.body_mass[1] == pytest.approx(1.0)
+    assert builder.body_inv_mass[1] == pytest.approx(1.0)
+    np.testing.assert_allclose(
+        np.asarray(cast(Any, builder.body_inertia[1])), np.eye(3) * 2.0
+    )
+    np.testing.assert_allclose(
+        np.asarray(cast(Any, builder.body_inv_inertia[1])), np.eye(3) * 0.5
+    )
+
+
+def test_newton_body_mapping_resolves_each_replicated_world():
+    class FakeArray:
+        def __init__(self, values):
+            self.values = np.asarray(values)
+
+        def numpy(self):
+            return self.values
+
+    model = cast(
+        "newton.Model",
+        SimpleNamespace(
+            body_label=["base", "link", "base", "link"],
+            body_world=FakeArray([0, 0, 1, 1]),
+        ),
+    )
+
+    np.testing.assert_array_equal(
+        _model_body_indices(model, ["link"], 2),
+        [[1], [3]],
+    )
+
+
+def test_mujoco_actuator_paths_select_only_identified_joints(tmp_path):
+    source = tmp_path / "robot.usda"
+    stage = Usd.Stage.CreateNew(str(source))
+    hip = UsdPhysics.RevoluteJoint.Define(stage, "/World/hip")
+    knee = UsdPhysics.RevoluteJoint.Define(stage, "/World/knee")
+    hip_actuator = stage.DefinePrim("/World/hip_actuator", "MjcActuator")
+    hip_actuator.CreateRelationship("mjc:target").SetTargets([hip.GetPath()])
+    knee_actuator = stage.DefinePrim("/World/knee_actuator", "MjcActuator")
+    knee_actuator.CreateRelationship("mjc:target").SetTargets([knee.GetPath()])
+    stage.GetRootLayer().Save()
+
+    assert _mujoco_actuator_paths(source, ["hip"]) == ("/World/hip_actuator",)
+
+
 def test_actuator_config_rejects_dataset_timestep_mismatch(tmp_path):
     with pytest.raises(ValueError, match="resampling dt must match"):
         _config(tmp_path, dataset_dt=0.01)
@@ -208,10 +279,12 @@ def test_newton_evaluator_uses_shared_simulation_context(
             configure_builder,
             configuration_key,
             solver_options,
+            usd_ignore_paths,
         ):
             self.created_world_count = world_count
             self.configuration_key = configuration_key
             self.solver_options = solver_options
+            self.usd_ignore_paths = usd_ignore_paths
             configure_builder(self.template)
 
         def capture_step_graph(self, *, dt, substeps):
@@ -221,10 +294,25 @@ def test_newton_evaluator_uses_shared_simulation_context(
     context = FakeContext()
     config = _config(tmp_path)
     monkeypatch.setattr(simulation_module, "NewtonSimulationContext", FakeContext)
+    requested_context = {}
+
+    def create_context(backend, usd_path, *, fixed_base):
+        requested_context.update(
+            backend=backend,
+            usd_path=usd_path,
+            fixed_base=fixed_base,
+        )
+        return context
+
     monkeypatch.setattr(
         simulation_module,
         "create_simulation_context",
-        lambda backend, usd_path: context,
+        create_context,
+    )
+    monkeypatch.setattr(
+        simulation_module,
+        "_mujoco_actuator_paths",
+        lambda source_usd_path, joint_names: ("/World/hip_actuator",),
     )
     monkeypatch.setattr(
         simulation_module,
@@ -248,6 +336,8 @@ def test_newton_evaluator_uses_shared_simulation_context(
     assert evaluator._simulation_context.control is context.control
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
+    assert requested_context["fixed_base"] is True
+    assert context.usd_ignore_paths == ("/World/hip_actuator",)
     assert context.template.joint_target_ke == [15.0]
     assert (
         context.template.custom_attributes["mujoco:dof_passive_damping"].values[0]
@@ -259,6 +349,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
         "integrator": "implicitfast",
         "iterations": 10,
         "ls_iterations": 4,
+        "njmax": 512,
     }
     assert (
         "Initialized device score accumulation device=cpu worlds=2 joints=1"
@@ -310,6 +401,77 @@ def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
     scores = evaluator.evaluate([{}, {}], [short, long])
 
     np.testing.assert_allclose(scores, [1.0, 3.0])
+
+
+def test_newton_evaluator_penalizes_only_nonfinite_worlds(monkeypatch, caplog):
+    class FakeScoreArray:
+        def __init__(self):
+            self.values = np.asarray([2.0, np.nan, 4.0], dtype=np.float64)
+
+        def zero_(self):
+            pass
+
+        def numpy(self):
+            return self.values
+
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.num_envs = 3
+    evaluator.joint_names = ["hip"]
+    evaluator._score_sums = cast(Any, FakeScoreArray())
+    trajectory = Trajectory(
+        experiment="unstable",
+        joint_names=["hip"],
+        commanded_position=np.zeros((2, 1)),
+        measured_position=np.zeros((2, 1)),
+    )
+    monkeypatch.setattr(evaluator, "_apply_population", lambda population: None)
+    monkeypatch.setattr(evaluator, "_evaluate_trajectory", lambda trajectory: 1)
+
+    with caplog.at_level(logging.WARNING, logger=simulation_module.__name__):
+        scores = evaluator.evaluate([{}, {}, {}], [trajectory])
+
+    np.testing.assert_allclose(scores, [2.0, 8.0, 4.0])
+    assert "worlds=[1] omitted_worlds=0 penalty=8 invalid=1/3" in caplog.text
+
+
+def test_newton_evaluator_rejects_fully_nonfinite_population(monkeypatch):
+    class FakeScoreArray:
+        def zero_(self):
+            pass
+
+        def numpy(self):
+            return np.asarray([np.nan, np.inf], dtype=np.float64)
+
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.num_envs = 2
+    evaluator.joint_names = ["hip"]
+    evaluator._score_sums = cast(Any, FakeScoreArray())
+    trajectory = Trajectory(
+        experiment="unstable",
+        joint_names=["hip"],
+        commanded_position=np.zeros((2, 1)),
+        measured_position=np.zeros((2, 1)),
+    )
+    monkeypatch.setattr(evaluator, "_apply_population", lambda population: None)
+    monkeypatch.setattr(evaluator, "_evaluate_trajectory", lambda trajectory: 1)
+
+    with pytest.raises(RuntimeError, match=r"every candidate \(2 worlds\)"):
+        evaluator.evaluate([{}, {}], [trajectory])
+
+
+def test_newton_evaluator_rejects_a_buffer_without_scored_transitions():
+    evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
+    evaluator.joint_names = ["hip"]
+    evaluator.buffer_steps = 1
+    trajectory = Trajectory(
+        experiment="too-short",
+        joint_names=["hip"],
+        commanded_position=np.zeros((2, 1)),
+        measured_position=np.zeros((2, 1)),
+    )
+
+    with pytest.raises(ValueError, match="at least one scored transition"):
+        evaluator._evaluate_trajectory(trajectory)
 
 
 def test_position_error_kernel_accumulates_all_worlds_and_samples():
@@ -440,6 +602,10 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 joint_armature=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_friction=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_damping=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                body_mass=FakeArray([2.0, 2.0]),
+                body_inv_mass=FakeArray([0.5, 0.5]),
+                body_inertia=FakeArray(np.stack([np.eye(3) * 4.0] * 2)),
+                body_inv_inertia=FakeArray(np.stack([np.eye(3) * 0.25] * 2)),
             )
             self.state = SimpleNamespace(
                 joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
@@ -475,21 +641,29 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     context = FakeContext()
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
     evaluator.joint_names = ["hip", "knee"]
+    evaluator.body_names = ["link"]
     evaluator.num_envs = 2
     evaluator.physics_dt = 0.001
     evaluator.control_substeps = 2
-    evaluator.buffer_steps = 0
+    evaluator.buffer_steps = 1
     evaluator.delay_steps = np.asarray([0, 1], dtype=np.int64)
     evaluator._simulation_context = cast(NewtonSimulationContext, context)
     evaluator._joint_q_indices = np.asarray([[0, 1], [2, 3]])
     evaluator._joint_dof_indices = np.asarray([[0, 1], [2, 3]])
     evaluator._joint_target_indices = np.asarray([[1, 2], [4, 5]])
+    evaluator._body_indices = np.asarray([[0], [1]])
     evaluator._base_q = np.zeros(4, dtype=np.float32)
     evaluator._base_qd = np.zeros(4, dtype=np.float32)
     evaluator._base_targets = np.full(6, -9.0, dtype=np.float32)
     evaluator._base_model_arrays = {
         model_array_name: np.zeros(4, dtype=np.float32)
         for model_array_name in evaluator._MODEL_ARRAYS.values()
+    }
+    evaluator._base_body_arrays = {
+        "body_mass": np.asarray([2.0, 2.0], dtype=np.float32),
+        "body_inv_mass": np.asarray([0.5, 0.5], dtype=np.float32),
+        "body_inertia": np.stack([np.eye(3, dtype=np.float32) * 4.0] * 2),
+        "body_inv_inertia": np.stack([np.eye(3, dtype=np.float32) * 0.25] * 2),
     }
     evaluator._device = cast(Any, "cpu")
     evaluator._joint_q_indices_device = cast(Any, object())
@@ -526,6 +700,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 "dry_friction": 14.0,
                 "viscous_friction": 15.0,
             },
+            "link": {"mass": 1.0},
         },
         {
             "hip": {
@@ -542,6 +717,7 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 "dry_friction": 34.0,
                 "viscous_friction": 35.0,
             },
+            "link": {"mass": 4.0},
         },
     ]
     trajectory = Trajectory(
@@ -559,6 +735,16 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     np.testing.assert_allclose(context.model.joint_armature.values, [3, 13, 23, 33])
     np.testing.assert_allclose(context.model.joint_friction.values, [4, 14, 24, 34])
     np.testing.assert_allclose(context.model.joint_damping.values, [5, 15, 25, 35])
+    np.testing.assert_allclose(context.model.body_mass.values, [1.0, 4.0])
+    np.testing.assert_allclose(context.model.body_inv_mass.values, [1.0, 0.25])
+    np.testing.assert_allclose(
+        context.model.body_inertia.values,
+        np.stack([np.eye(3) * 2.0, np.eye(3) * 8.0]),
+    )
+    np.testing.assert_allclose(
+        context.model.body_inv_inertia.values,
+        np.stack([np.eye(3) * 0.5, np.eye(3) * 0.125]),
+    )
     expected_targets = np.asarray(
         [
             [-9.0, 10.0, 100.0, -9.0, 10.0, 100.0],
@@ -571,4 +757,8 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     assert context.state.joint_q.numpy_calls == 0
     assert score_sums.numpy_calls == 1
     assert context.solver.reset_states == [context.state]
-    assert len(context.solver.changed_flags) == 1
+    assert context.solver.changed_flags == [
+        newton.ModelFlags.JOINT_DOF_PROPERTIES
+        | newton.ModelFlags.ACTUATOR_PROPERTIES
+        | newton.ModelFlags.BODY_INERTIAL_PROPERTIES
+    ]

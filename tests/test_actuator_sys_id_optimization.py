@@ -110,6 +110,32 @@ def test_parameter_space_uses_deterministic_order_and_initials(tmp_path):
         space.normalize(np.asarray([31.0, 5.0, 0.05, 0.5, 1.0]))
 
 
+def test_parameter_space_appends_rigid_body_masses(tmp_path):
+    config = _config(
+        tmp_path,
+        rigid_body_parameters=[
+            {
+                "name": "/World/link",
+                "mass": {"lower": 0.1, "upper": 0.3, "initial": 0.2},
+            }
+        ],
+    )
+
+    space = create_parameter_space(config)
+
+    assert [(parameter.target, parameter.name) for parameter in space.parameters] == [
+        ("hip", "stiffness"),
+        ("hip", "damping"),
+        ("hip", "armature"),
+        ("hip", "dry_friction"),
+        ("hip", "viscous_friction"),
+        ("/World/link", "mass"),
+    ]
+    assert space.decode(space.initial_normalized)["/World/link"]["mass"] == (
+        pytest.approx(0.2)
+    )
+
+
 def test_trajectory_requires_a_state_transition():
     with pytest.raises(ValueError, match="at least two samples"):
         Trajectory(

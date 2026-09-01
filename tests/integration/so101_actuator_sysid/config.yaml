@@ -1,31 +1,48 @@
 type: actuator_sys_id
+mlops:
+  backend: mlflow
+  experiment_name: actuator-identification
+  run_name: so101-baseline
+  options:
+    tracking_uri: sqlite:///outputs/mlflow.db
 joint_parameters:
   - names: [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
     controller:
       type: pd
       delay_duration_ms: 0
       clamps:
-        effort_limit: 3.35
+        effort_limit: 2.94
         velocity_limit: 30.0
-      stiffness: {lower: 1.0, upper: 80.0, initial: 40.0}
-      damping: {lower: 0.01, upper: 5.0, initial: 2.0}
+      stiffness: {lower: 1.0, upper: 120.0, initial: 40.0}
+      damping: {lower: 0.01, upper: 10.0, initial: 2.0}
     parameters:
-      dry_friction: {lower: 0.0, upper: 1.0, initial: 0.25}
-      viscous_friction: {lower: 0.0, upper: 2.0, initial: 0.75}
-      armature: {lower: 0.0, upper: 0.1, initial: 0.05}
+      dry_friction: {lower: 0.0, upper: 2.0, initial: 0.25}
+      viscous_friction: {lower: 0.0, upper: 4.0, initial: 0.75}
+      armature: {lower: 0.0, upper: 0.3, initial: 0.1}
+#rigid_body_parameters:
+#  - name: /so101/Geometry/base/shoulder
+#    mass: {lower: 0.073275, upper: 0.122125, initial: 0.0977}
+#  - name: /so101/Geometry/base/shoulder/upper_arm
+#    mass: {lower: 0.083325, upper: 0.138875, initial: 0.1111}
+#  - name: /so101/Geometry/base/shoulder/upper_arm/lower_arm
+#    mass: {lower: 0.08205, upper: 0.13675, initial: 0.1094}
+#  - name: /so101/Geometry/base/shoulder/upper_arm/lower_arm/wrist
+#    mass: {lower: 0.0765, upper: 0.1275, initial: 0.102}
+#  - name: /so101/Geometry/base/shoulder/upper_arm/lower_arm/wrist/gripper
+#    mass: {lower: 0.076875, upper: 0.128125, initial: 0.1025}
+#  - name: /so101/Geometry/base/shoulder/upper_arm/lower_arm/wrist/gripper/moving_jaw_so101_v1
+#    mass: {lower: 0.0093, upper: 0.0155, initial: 0.0124}
 optimizer:
   type: python-cmaes
-  sigma: 0.25
-  max_iterations: 10
+  sigma: 0.05
+  max_iterations: 50
   epsilon: 0.001
 simulation:
   type: newton
   usd:
-    type: newton-assets
-    folder: robotstudio_so101
-    path: usd_structured/so101.usda
-    ref: a96f0973b6ae69c90609f9fafef9d2c1db2d6431
-  physics_freq: 250
+    type: local
+    path: data/so101/newton-measured-mass-701g/so101_measured_mass_701g_no_camera.usda
+  physics_freq: 100
   control_freq: 50
   render_freq: 25
   solver:
@@ -33,13 +50,13 @@ simulation:
     integrator: implicitfast
     solver_iterations: 5
     line_search_iterations: 2
-num_envs: 6
-buffer_time: 0.2
+num_envs: 4096
+buffer_time: 0.0
 seed: 42
-output_dir: outputs/integration/so101_actuator_sysid
+output_dir: outputs/integration/so101_actuator_sysid_custom
 dataset:
   type: parquet
-  source: tests/integration/so101_actuator_sysid/trajectories/train-*.parquet
+  source: /home/fmeyer/src/anchor-bench-copy/recordings/so101_500hz_adjusted/*.parquet
   joint_name_mapping:
     Rotation: shoulder_pan
     Pitch: shoulder_lift

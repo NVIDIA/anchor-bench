@@ -35,6 +35,26 @@ def usd_trajectory_accuracy(
     joints are excluded because their normalized error is unstable.
     """
 
+    measured, simulated = _replay_trajectories(usd_file, trajectory_file, config)
+    return _position_accuracy(measured, simulated)
+
+
+def usd_trajectory_mse(
+    usd_file: Union[str, Path],
+    trajectory_file: Union[str, Path],
+    config: ActuatorSysIdConfig,
+) -> float:
+    """Return the position MSE used by actuator system identification."""
+
+    measured, simulated = _replay_trajectories(usd_file, trajectory_file, config)
+    return float(np.mean(np.square(simulated - measured)))
+
+
+def _replay_trajectories(
+    usd_file: Union[str, Path],
+    trajectory_file: Union[str, Path],
+    config: ActuatorSysIdConfig,
+) -> tuple[np.ndarray, np.ndarray]:
     usd_path = Path(usd_file).expanduser().resolve()
     trajectory_path = Path(trajectory_file).expanduser().resolve()
     evaluation_config = config.model_copy(
@@ -55,15 +75,21 @@ def usd_trajectory_accuracy(
         joint_names=joint_names,
     )
     runner = _NewtonTrajectoryRunner(evaluation_config)
+    score_start = runner.score_start_index
+    if any(
+        score_start >= trajectory.measured_position.shape[0]
+        for trajectory in trajectories
+    ):
+        raise ValueError("trajectory buffer leaves no samples for accuracy scoring")
     measured = np.concatenate(
-        [trajectory.measured_position for trajectory in trajectories],
+        [trajectory.measured_position[score_start:] for trajectory in trajectories],
         axis=0,
     )
     simulated = np.concatenate(
-        [runner.simulate(trajectory) for trajectory in trajectories],
+        [runner.simulate(trajectory)[score_start:] for trajectory in trajectories],
         axis=0,
     )
-    return _position_accuracy(measured, simulated)
+    return measured, simulated
 
 
 class _NewtonTrajectoryRunner:
@@ -152,15 +178,6 @@ class _NewtonTrajectoryRunner:
             )
 
         target = np.asarray(model_joint_target_q.numpy()).copy()
-        first_command = trajectory.commanded_position[0]
-        _set_targets(target, first_command, selected)
-        control_joint_target_q.assign(target)
-        for _ in range(self._buffer_steps):
-            self._step_executor.step(
-                dt=self._control_dt,
-                substeps=self._substeps,
-            )
-
         simulated = np.empty_like(trajectory.measured_position)
         simulated[0] = trajectory.measured_position[0]
         delays = [
@@ -188,6 +205,12 @@ class _NewtonTrajectoryRunner:
                 positions[q_index] for q_index, _, _ in selected
             ]
         return simulated
+
+    @property
+    def score_start_index(self) -> int:
+        """Return the first measured sample after the unscored trajectory prefix."""
+
+        return self._buffer_steps + 1
 
 
 def _position_accuracy(measured: np.ndarray, simulated: np.ndarray) -> float:

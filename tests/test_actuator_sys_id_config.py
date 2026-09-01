@@ -170,6 +170,50 @@ def test_model_rejects_negative_actuator_parameter_bounds(valid_config_data):
         ActuatorSysIdConfig.model_validate(data)
 
 
+def test_model_accepts_positive_rigid_body_mass_bounds(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["rigid_body_parameters"] = [
+        {
+            "name": "/World/link",
+            "mass": {"lower": 0.1, "upper": 0.3, "initial": 0.2},
+        }
+    ]
+
+    config = ActuatorSysIdConfig.model_validate(data)
+
+    assert config.rigid_body_parameters[0].name == "/World/link"
+    assert config.rigid_body_parameters[0].mass.initial == pytest.approx(0.2)
+
+
+def test_model_rejects_nonpositive_rigid_body_mass_bounds(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["rigid_body_parameters"] = [
+        {"name": "/World/link", "mass": {"lower": 0.0, "upper": 0.3}}
+    ]
+
+    with pytest.raises(ValidationError, match="mass bounds must be positive"):
+        ActuatorSysIdConfig.model_validate(data)
+
+
+def test_model_rejects_duplicate_rigid_body_names(valid_config_data):
+    data = deepcopy(valid_config_data)
+    body = {"name": "/World/link", "mass": {"lower": 0.1, "upper": 0.3}}
+    data["rigid_body_parameters"] = [body, deepcopy(body)]
+
+    with pytest.raises(ValidationError, match="rigid-body names must be unique"):
+        ActuatorSysIdConfig.model_validate(data)
+
+
+def test_model_rejects_overlapping_joint_and_rigid_body_names(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["rigid_body_parameters"] = [
+        {"name": "hip", "mass": {"lower": 0.1, "upper": 0.3}}
+    ]
+
+    with pytest.raises(ValidationError, match="must not overlap: hip"):
+        ActuatorSysIdConfig.model_validate(data)
+
+
 def test_controller_rejects_null(valid_config_data):
     data = deepcopy(valid_config_data)
     data["joint_parameters"][0]["controller"] = None

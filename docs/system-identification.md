@@ -68,6 +68,9 @@ the USD.
 Optional top-level settings include `num_envs`, `buffer_time`, `seed`,
 `output_dir`, descriptive tags, and an [`mlops` block](mlops.md). The CMA-ES
 population contains at least two environments; `num_envs` defaults to 64.
+`buffer_time` excludes an aligned prefix of each recorded trajectory from the
+objective while still replaying its commands, allowing the simulated state to
+settle without advancing it ahead of the measurements.
 
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 

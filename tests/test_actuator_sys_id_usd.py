@@ -69,6 +69,16 @@ def _create_source_usd(path):
             custom=False,
         ).Set(value)
     UsdPhysics.PrismaticJoint.Define(stage, "/World/slider")
+    link = UsdGeom.Xform.Define(stage, "/World/link").GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(link)
+    link_mass = UsdPhysics.MassAPI.Apply(link)
+    link_mass.CreateMassAttr(3.0)
+    link_mass.CreateDiagonalInertiaAttr((1.0, 2.0, 3.0))
+    link.CreateAttribute(
+        "newton:inertia",
+        Sdf.ValueTypeNames.DoubleArray,
+        custom=False,
+    ).Set([1.0, 2.0, 3.0, 0.1, 0.2, 0.3])
 
     d6_joint = UsdPhysics.Joint.Define(stage, "/World/wrist")
     limit = UsdPhysics.LimitAPI.Apply(d6_joint.GetPrim(), "rotX")
@@ -174,6 +184,31 @@ def test_infers_a_scalar_d6_axis_and_uses_newton_angular_scaling(tmp_path):
     assert drive.GetStiffnessAttr().Get() == pytest.approx(
         20.0 * (math.pi / 180.0) * 2.0
     )
+
+
+def test_writes_identified_mass_and_proportionally_scaled_inertia(tmp_path):
+    source = tmp_path / "robot.usda"
+    output = tmp_path / "identified.usda"
+    _create_source_usd(source)
+
+    write_identified_usd_layer(
+        source,
+        output,
+        {"hip": _parameters()},
+        {"hip": _clamps()},
+        _CONFIG_METADATA,
+        {"link": 12.0},
+    )
+
+    stage = Usd.Stage.Open(str(output))
+    mass_api = UsdPhysics.MassAPI(stage.GetPrimAtPath("/World/link"))
+    # The test stage uses two kilograms per authored mass unit. Its source mass
+    # is therefore 6 kg, so the 12 kg result doubles the source inertia.
+    assert mass_api.GetMassAttr().Get() == pytest.approx(6.0)
+    assert mass_api.GetDiagonalInertiaAttr().Get() == pytest.approx((2.0, 4.0, 6.0))
+    assert stage.GetPrimAtPath("/World/link").GetAttribute(
+        "newton:inertia"
+    ).Get() == pytest.approx((2.0, 4.0, 6.0, 0.2, 0.4, 0.6))
 
 
 def test_preserves_a_supplied_symlink_as_the_sublayer_path(tmp_path):

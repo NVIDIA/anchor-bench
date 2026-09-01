@@ -18,9 +18,9 @@ from anchor_bench.tasks.actuator_sys_id.model import Candidate
 
 @dataclass(frozen=True)
 class Parameter:
-    """One scalar actuator parameter in the optimizer vector."""
+    """One scalar physical parameter in the optimizer vector."""
 
-    joint: str
+    target: str
     name: str
     lower: float
     upper: float
@@ -33,9 +33,9 @@ class ParameterSpace:
     def __init__(self, parameters: List[Parameter]) -> None:
         if not parameters:
             raise ValueError("actuator system identification requires parameters")
-        keys = [(item.joint, item.name) for item in parameters]
+        keys = [(item.target, item.name) for item in parameters]
         if len(keys) != len(set(keys)):
-            raise ValueError("parameter space contains duplicate joint parameters")
+            raise ValueError("parameter space contains duplicate target parameters")
         for item in parameters:
             values = np.asarray(
                 [item.lower, item.upper, item.initial],
@@ -93,7 +93,7 @@ class ParameterSpace:
             raise ValueError("decode expects one parameter vector")
         candidate: Candidate = {}
         for parameter, value in zip(self.parameters, physical):
-            candidate.setdefault(parameter.joint, {})[parameter.name] = float(value)
+            candidate.setdefault(parameter.target, {})[parameter.name] = float(value)
         return candidate
 
     def decode_population(self, normalized: np.ndarray) -> List[Candidate]:
@@ -128,11 +128,13 @@ def create_parameter_space(config: BaseConfig) -> ParameterSpace:
             for joint in group.names:
                 for name, bound in bounds.items():
                     parameters.append(_create_parameter(joint, name, bound))
+        for body in actuator_config.rigid_body_parameters:
+            parameters.append(_create_parameter(body.name, "mass", body.mass))
         return ParameterSpace(parameters)
     raise ValueError(f"Unsupported parameter-space config type: {config.type!r}")
 
 
-def _create_parameter(joint: str, name: str, bound: Bound) -> Parameter:
+def _create_parameter(target: str, name: str, bound: Bound) -> Parameter:
     lower = float(bound.lower)
     upper = float(bound.upper)
     initial = (
@@ -140,4 +142,4 @@ def _create_parameter(joint: str, name: str, bound: Bound) -> Parameter:
         if bound.initial is not None
         else lower + (upper - lower) / 2.0
     )
-    return Parameter(joint, name, lower, upper, initial)
+    return Parameter(target, name, lower, upper, initial)
