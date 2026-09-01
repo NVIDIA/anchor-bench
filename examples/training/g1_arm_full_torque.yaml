@@ -4,7 +4,7 @@ tags: [g1, right-arm, gru, full-torque, autoregressive]
 
 dataset:
   type: parquet
-  source: tests/integration/g1/data/g1-arm-multijoint-*.parquet
+  source: examples/training/data/g1-arm-multijoint-*.parquet
   joint_name_mapping:
     right_shoulder_pitch: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
     right_shoulder_roll: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
@@ -23,7 +23,7 @@ simulation:
   backend: newton
   usd:
     type: local
-    path: tests/integration/g1/usd/g1_arm_full_torque.usda
+    path: assets/robots/g1/files/g1_arm_full_torque.usda
   fixed_base: true
 
 input_features:
@@ -60,7 +60,7 @@ model:
     scale: 15.0
 
 training:
-  epochs: 2
+  epochs: 50
   batch_size: 4
   seed: 48
   validation_ratio: 0.2
@@ -85,7 +85,7 @@ training:
     output: actual_effort
     initial_value: 0.0
   checkpoint:
-    every_n_epochs: 2
+    every_n_epochs: 10
 
 validation:
   validators:

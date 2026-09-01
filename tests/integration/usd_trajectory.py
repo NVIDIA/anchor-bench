@@ -99,7 +99,10 @@ class _NewtonTrajectoryRunner:
         newton.use_coord_layout_targets = True
         builder = newton.ModelBuilder()
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
-        builder.add_usd(source=str(resolve_usd_path(config.simulation.usd)))
+        builder.add_usd(
+            source=str(resolve_usd_path(config.simulation.usd)),
+            floating=False,
+        )
         self._model = builder.finalize()
         self._solver = newton.solvers.SolverMuJoCo(
             self._model,

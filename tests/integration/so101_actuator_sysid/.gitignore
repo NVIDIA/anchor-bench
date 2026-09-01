@@ -3,7 +3,5 @@ best_params.yaml
 optimization_log.csv
 run_summary.yaml
 identified.usda
-!so101.usd
 !trajectories/
-!trajectories/train-*.parquet
 !trajectories/heldout-square-pattern.parquet

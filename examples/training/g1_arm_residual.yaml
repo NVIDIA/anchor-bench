@@ -4,7 +4,7 @@ tags: [g1, right-arm, gru, residual-torque]
 
 dataset:
   type: parquet
-  source: tests/integration/g1/data/g1-arm-multijoint-*.parquet
+  source: examples/training/data/g1-arm-multijoint-*.parquet
   joint_name_mapping:
     right_shoulder_pitch: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
     right_shoulder_roll: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
@@ -23,7 +23,7 @@ simulation:
   backend: newton
   usd:
     type: local
-    path: tests/integration/g1/usd/g1_arm_residual.usda
+    path: assets/robots/g1/files/g1_arm_residual.usda
   fixed_base: true
 
 input_features:
@@ -57,7 +57,7 @@ model:
     scale: 5.0
 
 training:
-  epochs: 2
+  epochs: 50
   batch_size: 4
   seed: 42
   validation_ratio: 0.2
@@ -78,7 +78,7 @@ training:
     inputs: standard
     outputs: none
   checkpoint:
-    every_n_epochs: 2
+    every_n_epochs: 10
 
 validation:
   validators:

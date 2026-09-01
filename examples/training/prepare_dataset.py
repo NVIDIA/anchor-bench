@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Download the pinned Anchor-Lab G1 arm recordings."""
+"""Download the pinned Anchor-Lab recordings used by the G1 examples."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def prepare_dataset(
 
 
 def main() -> None:
-    """Prepare the default integration dataset from the command line."""
+    """Prepare the G1 example dataset from the command line."""
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true")

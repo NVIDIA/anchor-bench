@@ -8,6 +8,20 @@ recorded state.
 Newton's simulation components are included in the default Anchor Bench
 installation.
 
+## Run the included example
+
+The maintained SO-101 example includes its source USD and three recorded
+training trajectories. From the repository root, run:
+
+```bash
+uv run anchor-bench \
+  --config examples/system_identification/so101.yaml \
+  --output outputs/so101_actuator_sysid
+```
+
+The configuration evaluates up to 100 CMA-ES generations across 64 replicated
+worlds and may stop earlier when it reaches the configured convergence target.
+
 ## Configuration
 
 A single-joint configuration has this shape (replace the example paths with
@@ -74,7 +88,7 @@ settle without advancing it ahead of the measurements.
 
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 
-## Run the task
+## Run a custom task
 
 ```bash
 uv run anchor-bench \

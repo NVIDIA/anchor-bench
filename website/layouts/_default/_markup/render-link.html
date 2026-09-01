@@ -1,9 +1,0 @@
-{{- $dest := .Destination -}}
-{{- $u := urls.Parse $dest -}}
-{{- if $u.IsAbs -}}
-  <a href="{{ $dest | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }} rel="noopener" target="_blank">{{ .Text | safeHTML }}</a>
-{{- else if hasPrefix $dest "/" -}}
-  <a href="{{ strings.TrimPrefix "/" $dest | relLangURL }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>
-{{- else -}}
-  <a href="{{ $dest | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>
-{{- end -}}

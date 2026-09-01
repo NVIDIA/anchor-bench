@@ -10,7 +10,7 @@ From the repository root, run the example into a named output directory:
 
 ```bash
 uv run anchor-bench \
-  --config examples/so101_motion_pack.yaml \
+  --config examples/trajectory/so101_motion_pack.yaml \
   --output outputs/so101_motion_pack
 ```
 

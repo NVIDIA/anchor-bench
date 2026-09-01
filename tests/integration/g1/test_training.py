@@ -14,14 +14,14 @@ import yaml
 
 from anchor_bench.schema.parse import parse
 from anchor_bench.schema.training import TrainingConfig
-from tests.integration.g1.prepare_dataset import (
+from examples.training.prepare_dataset import (
     DATASET_GLOB,
     FILENAMES,
     prepare_dataset,
 )
 
-DIRECTORY = Path(__file__).parent
-REPOSITORY = DIRECTORY.parents[2]
+REPOSITORY = Path(__file__).parents[3]
+CONFIG_DIRECTORY = REPOSITORY / "examples" / "training"
 
 CONFIGS = ("g1_arm_residual.yaml", "g1_arm_full_torque.yaml")
 
@@ -61,10 +61,12 @@ def test_trains_and_validates_g1_example(
     if not torch.cuda.is_available():
         pytest.skip("G1 training integration requires CUDA.")
 
-    config = parse(DIRECTORY / config_name)
+    config = parse(CONFIG_DIRECTORY / config_name)
     assert isinstance(config, TrainingConfig)
     data = config.model_dump(mode="json", exclude_none=True)
     data["dataset"]["source"] = str(g1_dataset / DATASET_GLOB)
+    data["training"]["epochs"] = 2
+    data["training"]["checkpoint"]["every_n_epochs"] = 2
     config_path = tmp_path / config_name
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     output = tmp_path / Path(config_name).stem
