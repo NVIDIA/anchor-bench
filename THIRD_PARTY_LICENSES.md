@@ -65,7 +65,7 @@ text, which its distribution includes.
 | frozenlist | 1.8.0 | Apache-2.0 | Distributed |
 | fsspec | 2026.7.0 | UNRESOLVED | Distributed |
 | gitdb | 4.0.12 | BSD License | Distributed |
-| gitpython | 3.1.58 | BSD-3-Clause | Distributed |
+| gitpython | 3.1.60 | BSD-3-Clause | Distributed |
 | glfw | 2.10.2 | MIT License | Distributed |
 | google-auth | 2.56.3 | Apache Software License | Distributed |
 | graphene | 3.4.3 | MIT | Distributed |
@@ -94,9 +94,9 @@ text, which its distribution includes.
 | matplotlib | 3.11.1 | Python Software Foundation License | Distributed |
 | mdurl | 0.1.2 | MIT License | Distributed |
 | meshio | 5.3.5 | MIT License | Distributed |
-| mlflow | 3.15.1 | Apache Software License | Distributed |
-| mlflow-skinny | 3.15.1 | Apache Software License | Distributed |
-| mlflow-tracing | 3.15.1 | Apache Software License | Distributed |
+| mlflow | 3.15.2 | Apache Software License | Distributed |
+| mlflow-skinny | 3.15.2 | Apache Software License | Distributed |
+| mlflow-tracing | 3.15.2 | Apache Software License | Distributed |
 | mpmath | 1.3.0 | BSD License | Distributed |
 | mujoco | 3.10.0 | Apache-2.0 | Distributed |
 | mujoco-warp | 3.10.0.3 | Apache-2.0 | Distributed |
