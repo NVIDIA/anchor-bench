@@ -24,7 +24,11 @@ from anchor_bench.tasks.train import (
     Trainer,
     get_model,
 )
-from anchor_bench.tasks.train.trainer import _create_loss, _create_optimizer
+from anchor_bench.tasks.train.trainer import (
+    _create_loss,
+    _create_optimizer,
+    _loader_nbytes,
+)
 from tests.test_training_data import _config_data, _sequence
 
 
@@ -427,6 +431,114 @@ def test_trainer_pairs_reordered_feedback_targets_by_entity() -> None:
     trainer = Trainer(_feedback_config(), [sequence], device="cpu")
 
     assert trainer.feedback_indices == ((0, 1), (1, 0))
+
+
+def test_trainer_caches_feedback_normalization_on_training_device() -> None:
+    """Create feedback normalization tensors once on the selected device."""
+
+    trainer = Trainer(
+        _feedback_config(), [_feedback_sequence("reference")], device="cpu"
+    )
+
+    normalization = trainer.feedback_normalization
+    assert normalization is not None
+    assert normalization.input_mean.device == trainer.device
+    assert normalization.input_standard_deviation.device == trainer.device
+    assert normalization.output_mean.device == trainer.device
+    assert normalization.output_standard_deviation.device == trainer.device
+    assert normalization.input_indices.device == trainer.device
+    assert normalization.output_indices.device == trainer.device
+
+
+def test_trainer_can_cache_bounded_batches_on_selected_device() -> None:
+    """Materialize small loader batches once when device caching is requested."""
+
+    config_data = _config_data()
+    config_data["training"]["validation_ratio"] = 0.0
+    config_data["training"]["sequence"] = {"length": 2}
+    trainer = Trainer(
+        TrainingConfig.model_validate(config_data),
+        [_sequence("wave", [float(value) for value in range(12)])],
+        device="cpu",
+        cache_data_on_device=True,
+    )
+
+    assert isinstance(trainer._training_batches, tuple)
+    assert all(
+        inputs.device == trainer.device and targets.device == trainer.device
+        for inputs, targets in trainer._training_batches
+    )
+    assert _loader_nbytes(trainer.data_loaders.train) == 12 * 2 * 4
+
+
+def test_trainer_keeps_oversized_batches_in_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fall back to streaming when the device-cache budget is exhausted."""
+
+    monkeypatch.setattr(
+        "anchor_bench.tasks.train.trainer._DEVICE_BATCH_CACHE_LIMIT_BYTES",
+        0,
+    )
+    trainer = Trainer(
+        _feedback_config(),
+        [_feedback_sequence("reference")],
+        device="cpu",
+        cache_data_on_device=True,
+    )
+
+    assert trainer._training_batches is trainer.data_loaders.train
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_cuda_graph_training_matches_eager_updates() -> None:
+    """Preserve autoregressive optimizer updates when replaying a CUDA graph."""
+
+    config_data = _feedback_config().model_dump(mode="python", exclude_none=True)
+    config_data["training"]["batch_size"] = 3
+    config_data["training"]["epochs"] = 2
+    config_data["training"]["validation_ratio"] = 0.0
+    config = TrainingConfig.model_validate(config_data)
+    sequences = [
+        _feedback_sequence("first"),
+        _feedback_sequence("second"),
+    ]
+    eager = Trainer(
+        config,
+        sequences,
+        device="cuda",
+        enable_cuda_graphs=False,
+        cache_data_on_device=False,
+    )
+    captured = Trainer(
+        config,
+        sequences,
+        device="cuda",
+        enable_cuda_graphs=True,
+        cache_data_on_device=True,
+    )
+    captured.model.load_state_dict(eager.model.state_dict())
+    assert [inputs.shape[0] for inputs, _ in captured._training_batches] == [3, 1]
+
+    eager_result = eager.train()
+    captured_result = captured.train()
+
+    assert captured._training_graph is not None
+    assert captured._training_graph.inputs.shape[0] == config.training.batch_size
+    assert [entry.training for entry in captured_result.history] == pytest.approx(
+        [entry.training for entry in eager_result.history],
+        rel=1e-5,
+        abs=1e-6,
+    )
+    assert all(
+        torch.allclose(
+            captured_result.model.state_dict()[name],
+            eager_result.model.state_dict()[name],
+            rtol=1e-5,
+            atol=1e-6,
+        )
+        for name in eager_result.model.state_dict()
+    )
 
 
 @pytest.mark.parametrize(

@@ -65,6 +65,18 @@ replays without environmental contact.
 The full-torque model is autoregressive and therefore takes substantially
 longer than the residual model.
 
+### CUDA execution optimizations
+
+Autoregressive training captures a fixed-size optimizer step in a CUDA graph
+after one eager warm-up batch. Full batches replay that graph, while a final
+smaller batch continues through the eager path. Feedback column indices and
+normalization tensors are also created once on the training device.
+
+Training and validation batches are staged on the GPU when their combined size
+is at most 512 MiB and at most 10 percent of currently available device memory.
+Larger datasets remain streamed from the CPU, avoiding an unbounded GPU-memory
+commitment.
+
 ## Run the integration tests
 
 To execute dataset preparation, training, and Newton replay through pytest:

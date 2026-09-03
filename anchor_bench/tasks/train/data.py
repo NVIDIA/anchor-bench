@@ -82,6 +82,12 @@ class SequenceDataset(Dataset[tuple[Tensor, Tensor]]):
         self._window_length = window_length
         self.input_size, self.output_size = expected_shape or (0, 0)
 
+    @property
+    def window_length(self) -> int:
+        """Return the number of timesteps in each exposed window."""
+
+        return self._window_length
+
     def __len__(self) -> int:
         """Return the number of complete sequence windows."""
 
