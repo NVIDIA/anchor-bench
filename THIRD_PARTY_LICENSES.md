@@ -181,7 +181,7 @@ text, which its distribution includes.
 | skops | 0.14.0 | UNRESOLVED | Distributed |
 | smmap | 5.0.3 | BSD License | Distributed |
 | sqlalchemy | 2.0.51 | MIT | Distributed |
-| sqlparse | 0.5.5 | BSD License | Distributed |
+| sqlparse | 0.6.0 | BSD License | Distributed |
 | starlette | 1.4.1 | BSD-3-Clause | Distributed |
 | sympy | 1.14.0 | BSD License | Distributed |
 | threadpoolctl | 3.6.0 | BSD License | Distributed |
