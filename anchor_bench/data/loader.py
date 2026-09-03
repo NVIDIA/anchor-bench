@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Hashable
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from glob import glob, has_magic
@@ -209,6 +210,8 @@ class DatasetLoader:
                 joint_name_mapping or {},
                 feature_name_mapping or {},
             )
+        dataset = dataset.copy(deep=False)
+        dataset["field"] = dataset["field"].astype("category")
         resampled_experiments: list[pd.DataFrame] = []
 
         for experiment, episode in dataset.groupby("experiment", sort=False):
@@ -244,31 +247,37 @@ class DatasetLoader:
             return f"{mapped_joint}/{mapped_feature}"
 
         source_fields = dataset["field"]
-        mapped_fields = source_fields.map(mapped_field)
-        field_pairs = pd.DataFrame(
-            {
-                "experiment": dataset["experiment"],
-                "source": source_fields,
-                "mapped": mapped_fields,
-            }
-        ).drop_duplicates()
-        collisions = field_pairs.duplicated(
-            subset=["experiment", "mapped"],
-            keep=False,
-        )
-        if collisions.any():
-            names = ", ".join(
-                sorted(map(str, field_pairs.loc[collisions, "mapped"].unique()))
-            )
-            raise DatasetAlignmentError(
-                "Joint or feature name mapping produces conflicting fields: "
-                + names
-                + "."
-            )
-        if mapped_fields.equals(source_fields):
+        unique_fields = source_fields.drop_duplicates()
+        mapped_unique_fields = unique_fields.map(mapped_field)
+        if mapped_unique_fields.equals(unique_fields):
             return dataset
+
+        field_mapping: dict[object, object] = dict(
+            zip(unique_fields.tolist(), mapped_unique_fields.tolist())
+        )
+        if mapped_unique_fields.duplicated().any():
+            field_pairs = pd.DataFrame(
+                {
+                    "experiment": dataset["experiment"],
+                    "field": dataset["field"],
+                }
+            ).drop_duplicates()
+            field_pairs["mapped"] = field_pairs["field"].map(field_mapping.get)
+            collisions = field_pairs.duplicated(
+                subset=["experiment", "mapped"],
+                keep=False,
+            )
+            if collisions.any():
+                names = ", ".join(
+                    sorted(map(str, field_pairs.loc[collisions, "mapped"].unique()))
+                )
+                raise DatasetAlignmentError(
+                    "Joint or feature name mapping produces conflicting fields: "
+                    + names
+                    + "."
+                )
         mapped_dataset = dataset.copy()
-        mapped_dataset["field"] = mapped_fields
+        mapped_dataset["field"] = source_fields.map(field_mapping.get)
         return mapped_dataset
 
     @staticmethod
@@ -322,19 +331,19 @@ class DatasetLoader:
     ) -> pd.DataFrame:
         """Resample one experiment over the intersection of all signals."""
 
-        fields = list(dict.fromkeys(episode["field"].tolist()))
         if episode.duplicated(subset=["time_ns", "field"]).any():
             raise DatasetAlignmentError(
                 f"Experiment {experiment!r} contains duplicate field timestamps."
             )
 
-        signals = {}
-        for field in fields:
-            signal = episode.loc[
-                episode["field"] == field,
-                ["time_ns", "value"],
-            ]
-            signals[field] = signal.sort_values(by="time_ns")
+        signals: dict[Hashable, pd.DataFrame] = {}
+        for field, group in episode.groupby(
+            "field",
+            sort=False,
+            observed=True,
+        ):
+            signal: pd.DataFrame = group.loc[:, ["time_ns", "value"]]
+            signals[field] = signal.sort_values(by=["time_ns"])
 
         start = max(int(signal["time_ns"].iloc[0]) for signal in signals.values())
         end = min(int(signal["time_ns"].iloc[-1]) for signal in signals.values())
@@ -346,7 +355,7 @@ class DatasetLoader:
         sample_count = ((end - start) // dt_ns) + 1
         target_time = start + np.arange(sample_count, dtype=np.int64) * dt_ns
         target_offset = (target_time - start).astype(np.float64)
-        resampled_values: dict[str, np.ndarray] = {}
+        resampled_values: dict[Hashable, np.ndarray] = {}
 
         for field, signal in signals.items():
             source_time = signal["time_ns"].to_numpy(dtype=np.int64)

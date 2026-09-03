@@ -311,6 +311,53 @@ def test_maps_parquet_feature_names_before_resampling(tmp_path: Path) -> None:
     ]
 
 
+def test_maps_each_distinct_field_name_once() -> None:
+    dataset = pd.DataFrame(
+        _rows("recorded_hip/dq", [0, 10_000_000], [1.0, 1.5])
+        + _rows("recorded_hip/tau_est", [0, 10_000_000], [2.0, 2.5])
+    )
+    joint_name_mapping = Mock(wraps={"recorded_hip": "hip"})
+    feature_name_mapping = Mock(wraps={"dq": "actual_dq", "tau_est": "actual_effort"})
+
+    result = DatasetLoader._map_field_names(
+        dataset,
+        joint_name_mapping,
+        feature_name_mapping,
+    )
+
+    assert result["field"].tolist() == [
+        "hip/actual_dq",
+        "hip/actual_dq",
+        "hip/actual_effort",
+        "hip/actual_effort",
+    ]
+    assert joint_name_mapping.get.call_count == 2
+    assert feature_name_mapping.get.call_count == 2
+
+
+def test_resamples_experiments_with_different_fields(tmp_path: Path) -> None:
+    first = pd.DataFrame(
+        _rows("actual_q", [10_000_000, 0], [2.0, 1.0])
+        + _rows("command_q", [10_000_000, 0], [4.0, 2.0])
+    )
+    second = pd.DataFrame(_rows("actual_q", [10_000_000, 0], [6.0, 5.0]))
+    second["experiment"] = "episode-2"
+    source = _write_dataset(tmp_path, pd.concat([first, second], ignore_index=True))
+
+    result = DatasetLoader.load(source, dt=0.01)
+
+    assert result.index.tolist() == [
+        ("episode", 0),
+        ("episode", 10_000_000),
+        ("episode-2", 0),
+        ("episode-2", 10_000_000),
+    ]
+    assert result.columns.tolist() == ["actual_q", "command_q"]
+    assert result["actual_q"].tolist() == [1.0, 2.0, 5.0, 6.0]
+    assert result["command_q"].iloc[:2].tolist() == [2.0, 4.0]
+    assert result["command_q"].iloc[2:].isna().all()
+
+
 def test_rejects_joint_name_mapping_field_collisions(tmp_path: Path) -> None:
     dataset = pd.DataFrame(
         _rows("recorded_hip/actual_q", [0, 10_000_000], [1.0, 1.5])
@@ -327,6 +374,23 @@ def test_rejects_joint_name_mapping_field_collisions(tmp_path: Path) -> None:
             dt=0.01,
             joint_name_mapping={"recorded_hip": "hip"},
         )
+
+
+def test_allows_mapped_field_names_in_different_experiments(tmp_path: Path) -> None:
+    first = pd.DataFrame(_rows("recorded_hip/actual_q", [0], [1.0]))
+    second = pd.DataFrame(_rows("hip/actual_q", [0], [2.0]))
+    second["experiment"] = "episode-2"
+    source = _write_dataset(tmp_path, pd.concat([first, second], ignore_index=True))
+
+    result = DatasetLoader.load(
+        source,
+        dt=0.01,
+        joint_name_mapping={"recorded_hip": "hip"},
+    )
+
+    assert result.index.tolist() == [("episode", 0), ("episode-2", 0)]
+    assert result.columns.tolist() == ["hip/actual_q"]
+    assert result["hip/actual_q"].tolist() == [1.0, 2.0]
 
 
 def test_rejects_feature_name_mapping_field_collisions(tmp_path: Path) -> None:
