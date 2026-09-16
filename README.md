@@ -1,8 +1,8 @@
 # Anchor Bench
 
-[![Quality](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/quality.yml)
-[![Tests](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/tests.yml)
-[![Coverage](https://raw.githubusercontent.com/NVIDIA-dev/anchor-bench/badges/badges/coverage.svg)](https://github.com/NVIDIA-dev/anchor-bench/actions/workflows/tests.yml)
+[![Quality](https://github.com/NVIDIA/anchor-bench/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/NVIDIA/anchor-bench/actions/workflows/quality.yml)
+[![Tests](https://github.com/NVIDIA/anchor-bench/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/NVIDIA/anchor-bench/actions/workflows/tests.yml)
+[![Coverage](https://raw.githubusercontent.com/NVIDIA/anchor-bench/badges/badges/coverage.svg)](https://github.com/NVIDIA/anchor-bench/actions/workflows/tests.yml)
 
 Anchor Bench is an early-stage, configuration-driven toolkit for robot actuator
 workflows. It validates a YAML task, runs the corresponding implementation, and
