@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pxr import Usd, UsdGeom, UsdPhysics
 
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 from anchor_bench.schema.parse import parse
 from anchor_bench.schema.training import TrainingConfig
 
@@ -29,6 +30,15 @@ RAW_JOINTS = [
     "right_shoulder_yaw",
     "right_elbow",
 ]
+ANCHOR_LAB_REVISION = "be6010113e7b769e68f2779fbdf321908725f929"
+G1_DATASET_PATH = "data/g1_arm_multijoint/*.parquet"
+
+
+def _assert_huggingface_dataset(source: object) -> None:
+    assert isinstance(source, HuggingFaceDatasetSource)
+    assert source.repo_id == "nvidia/Anchor-Lab"
+    assert source.revision == ANCHOR_LAB_REVISION
+    assert source.paths == [G1_DATASET_PATH]
 
 
 def test_g1_asset_is_pinned_and_upright() -> None:
@@ -66,7 +76,7 @@ def test_g1_residual_training_config() -> None:
     config = parse(CONFIG_DIRECTORY / "g1_arm_residual.yaml")
 
     assert isinstance(config, TrainingConfig)
-    assert config.dataset.source.endswith("g1-arm-multijoint-*.parquet")
+    _assert_huggingface_dataset(config.dataset.source)
     assert list(config.dataset.joint_name_mapping) == RAW_JOINTS
     assert list(config.dataset.joint_name_mapping.values()) == JOINTS
     assert config.dataset.feature_name_mapping == {
@@ -96,7 +106,7 @@ def test_g1_full_torque_training_config() -> None:
     config = parse(CONFIG_DIRECTORY / "g1_arm_full_torque.yaml")
 
     assert isinstance(config, TrainingConfig)
-    assert config.dataset.source.endswith("g1-arm-multijoint-*.parquet")
+    _assert_huggingface_dataset(config.dataset.source)
     assert list(config.dataset.joint_name_mapping) == RAW_JOINTS
     assert list(config.dataset.joint_name_mapping.values()) == JOINTS
     assert config.dataset.feature_name_mapping == {
