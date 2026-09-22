@@ -9,6 +9,8 @@ import hashlib
 import logging
 from collections.abc import Hashable
 from contextlib import contextmanager
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from decimal import Decimal, InvalidOperation
 from glob import glob, has_magic
 from pathlib import Path
@@ -19,8 +21,12 @@ from urllib.parse import urlparse
 import numpy as np
 import pandas as pd
 
-from anchor_bench.data.datasets import download_from_huggingface
+from anchor_bench.data.datasets import (
+    download_from_huggingface,
+    download_huggingface_dataset,
+)
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 
 if TYPE_CHECKING:
     from anchor_bench.mlops import MLOpsRun
@@ -32,12 +38,19 @@ REQUIRED_COLUMNS = {"time_ns", "experiment", "field", "value"}
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _MaterializedDatasetFile:
+    path: Path
+    source: str
+    metadata: dict[str, str] = dataclass_field(default_factory=dict)
+
+
 class DatasetLoader:
     """Load a Parquet dataset and resample its signals."""
 
     @staticmethod
     def load(
-        source: Union[str, Path],
+        source: Union[str, Path, HuggingFaceDatasetSource],
         *,
         dt: float,
         http_timeout_seconds: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -55,39 +68,42 @@ class DatasetLoader:
         until the backend has finished consuming it.
         """
 
-        source_text = str(source)
-        is_remote_source = urlparse(source_text).scheme in ("http", "https")
         with DatasetLoader._get_files(
             source,
             http_timeout_seconds=http_timeout_seconds,
         ) as dataset_files:
             datasets = []
             for dataset_file in dataset_files:
-                logger.debug("Reading dataset file path=%s", dataset_file)
-                dataset = DatasetLoader._read_file(dataset_file, source)
+                logger.debug("Reading dataset file path=%s", dataset_file.path)
+                dataset = DatasetLoader._read_file(
+                    dataset_file.path,
+                    dataset_file.source,
+                )
                 datasets.append(dataset)
                 if dataset_tracker is not None:
                     tracked_name = (
                         dataset_name
                         if len(dataset_files) == 1
-                        else f"{dataset_name}-{dataset_file.stem}"
+                        else f"{dataset_name}-{dataset_file.path.stem}"
                     )
                     # Fingerprint the materialized file rather than the DataFrame so
                     # the digest identifies exactly the bytes a later run can reuse.
                     metadata: dict[str, Union[str, int]] = {
                         "digest_algorithm": "sha256",
                         "format": "parquet",
-                        "size_bytes": dataset_file.stat().st_size,
+                        "size_bytes": dataset_file.path.stat().st_size,
                     }
-                    if has_magic(source_text):
-                        metadata["source_pattern"] = source_text
+                    metadata.update(dataset_file.metadata)
                     dataset_tracker.log_dataset(
                         dataset,
-                        source=(source_text if is_remote_source else str(dataset_file)),
-                        digest=DatasetLoader._sha256(dataset_file, source),
+                        source=dataset_file.source,
+                        digest=DatasetLoader._sha256(
+                            dataset_file.path,
+                            dataset_file.source,
+                        ),
                         name=tracked_name,
                         context=dataset_context,
-                        path=dataset_file,
+                        path=dataset_file.path,
                         metadata=metadata,
                         upload=upload_dataset,
                     )
@@ -111,11 +127,31 @@ class DatasetLoader:
     @staticmethod
     @contextmanager
     def _get_files(
-        source: Union[str, Path],
+        source: Union[str, Path, HuggingFaceDatasetSource],
         *,
         http_timeout_seconds: float,
-    ) -> Iterator[Sequence[Path]]:
+    ) -> Iterator[Sequence[_MaterializedDatasetFile]]:
         """Yield validated local files, downloading remote data when needed."""
+
+        if isinstance(source, HuggingFaceDatasetSource):
+            files = download_huggingface_dataset(source)
+            yield [
+                _MaterializedDatasetFile(
+                    path=file.path,
+                    source=(
+                        f"hf://datasets/{source.repo_id}@{source.revision}/"
+                        f"{file.repo_path}"
+                    ),
+                    metadata={
+                        "provider": source.provider,
+                        "repo_id": source.repo_id,
+                        "revision": source.revision,
+                        "repo_path": file.repo_path,
+                    },
+                )
+                for file in files
+            ]
+            return
 
         source_text = str(source)
         scheme = urlparse(source_text).scheme
@@ -124,15 +160,28 @@ class DatasetLoader:
                 raise DatasetLoadError("URL dataset sources do not support globbing.")
             # TODO: We should also cache these downloads at some point.
             with TemporaryDirectory(prefix="anchor-bench-dataset-") as folder:
+                path = download_from_huggingface(
+                    source_text,
+                    folder,
+                    http_timeout_seconds=http_timeout_seconds,
+                )
                 yield [
-                    download_from_huggingface(
-                        source_text,
-                        folder,
-                        http_timeout_seconds=http_timeout_seconds,
+                    _MaterializedDatasetFile(
+                        path=path,
+                        source=source_text,
                     )
                 ]
             return
-        yield DatasetLoader._local_paths(source)
+        paths = DatasetLoader._local_paths(source)
+        metadata = {"source_pattern": source_text} if has_magic(source_text) else {}
+        yield [
+            _MaterializedDatasetFile(
+                path=path,
+                source=str(path),
+                metadata=metadata,
+            )
+            for path in paths
+        ]
 
     @staticmethod
     def _local_paths(source: Union[str, Path]) -> list[Path]:

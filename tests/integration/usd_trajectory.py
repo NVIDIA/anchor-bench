@@ -14,6 +14,7 @@ import numpy as np
 
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import Trajectory
 
@@ -22,7 +23,7 @@ MIN_JOINT_RANGE_RADIANS = 1.0e-3
 
 def usd_trajectory_accuracy(
     usd_file: Union[str, Path],
-    trajectory_file: Union[str, Path],
+    trajectory_file: Union[str, Path, HuggingFaceDatasetSource],
     config: ActuatorSysIdConfig,
 ) -> float:
     """Return the USD robot's measured-trajectory accuracy as a percentage.
@@ -39,7 +40,7 @@ def usd_trajectory_accuracy(
 
 def usd_trajectory_mse(
     usd_file: Union[str, Path],
-    trajectory_file: Union[str, Path],
+    trajectory_file: Union[str, Path, HuggingFaceDatasetSource],
     config: ActuatorSysIdConfig,
 ) -> float:
     """Return the position MSE used by actuator system identification."""
@@ -50,19 +51,21 @@ def usd_trajectory_mse(
 
 def _replay_trajectories(
     usd_file: Union[str, Path],
-    trajectory_file: Union[str, Path],
+    trajectory_file: Union[str, Path, HuggingFaceDatasetSource],
     config: ActuatorSysIdConfig,
 ) -> tuple[np.ndarray, np.ndarray]:
     usd_path = Path(usd_file).expanduser().resolve()
-    trajectory_path = Path(trajectory_file).expanduser().resolve()
+    trajectory_source: Union[str, HuggingFaceDatasetSource]
+    if isinstance(trajectory_file, HuggingFaceDatasetSource):
+        trajectory_source = trajectory_file
+    else:
+        trajectory_source = str(Path(trajectory_file).expanduser().resolve())
     evaluation_config = config.model_copy(
         update={
             "simulation": config.simulation.model_copy(
                 update={"usd_path": str(usd_path)}
             ),
-            "dataset": config.dataset.model_copy(
-                update={"source": str(trajectory_path)}
-            ),
+            "dataset": config.dataset.model_copy(update={"source": trajectory_source}),
         }
     )
     joint_names = [

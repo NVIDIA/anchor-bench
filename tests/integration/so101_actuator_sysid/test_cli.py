@@ -15,6 +15,7 @@ import yaml
 from pxr import Usd, UsdPhysics
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from tests.integration.cli_runner import CliResult
@@ -31,8 +32,13 @@ TEST_DIRECTORY = Path(__file__).parent
 REPOSITORY = TEST_DIRECTORY.parents[2]
 CONFIG_PATH = REPOSITORY / "examples" / "system_identification" / "so101.yaml"
 SOURCE_USD_PATH = REPOSITORY / "assets" / "robots" / "so101" / "files" / "so101.usd"
-EVALUATION_TRAJECTORY_PATH = (
-    TEST_DIRECTORY / "trajectories" / "heldout-square-pattern.parquet"
+EVALUATION_DATASET_SOURCE = HuggingFaceDatasetSource(
+    provider="huggingface",
+    repo_id="nvidia/Anchor-Lab",
+    revision="be6010113e7b769e68f2779fbdf321908725f929",
+    paths=[
+        "data/so101_arm_50motion/so101-sysid-50motion-heldout-square-pattern.parquet"
+    ],
 )
 EXPECTED_ARTIFACTS = (
     ".completed",
@@ -116,12 +122,12 @@ def test_runs_actuator_sysid_config(
 
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,
-        EVALUATION_TRAJECTORY_PATH,
+        EVALUATION_DATASET_SOURCE,
         config,
     )
     identified_accuracy = usd_trajectory_accuracy(
         output_directory / "identified.usda",
-        EVALUATION_TRAJECTORY_PATH,
+        EVALUATION_DATASET_SOURCE,
         config,
     )
 
