@@ -34,7 +34,14 @@ buffer_time: 0.2
 seed: 42
 dataset:
   type: parquet
-  source: examples/system_identification/data/train-*.parquet
+  source:
+    provider: huggingface
+    repo_id: nvidia/Anchor-Lab
+    revision: be6010113e7b769e68f2779fbdf321908725f929
+    paths:
+      - data/so101_arm_50motion/so101-sysid-50motion-train-random-waypoints.parquet
+      - data/so101_arm_50motion/so101-sysid-50motion-train-staircase-motion.parquet
+      - data/so101_arm_50motion/so101-sysid-50motion-train-wave-motion.parquet
   # Map Anchor-Lab Parquet joint prefixes to canonical USD joint names.
   joint_name_mapping:
     rotation: Rotation

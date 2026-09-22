@@ -7,10 +7,10 @@ workflow provides two complete configurations:
 - residual-torque training with identified actuator parameters;
 - autoregressive full-torque training.
 
-The configurations and dataset preparation script live under
-[`examples/training/`](../examples/training/). Their reusable physics assets
-live under [`assets/robots/g1/`](../assets/robots/g1/), and the integration tests
-consume the same examples rather than maintaining separate copies.
+The configurations live under [`examples/training/`](../examples/training/).
+Their reusable physics assets live under
+[`assets/robots/g1/`](../assets/robots/g1/), and the integration tests consume
+the same examples rather than maintaining separate copies.
 
 The example pins the corrected Anchor-Lab `g1_29dof_tri_hand_closed.usd`
 asset at revision `50881f268b6600251df6f2011cfaa5a392fb96eb` and verifies its checksum
@@ -19,21 +19,19 @@ before replay.
 A CUDA-capable GPU is required for training and Newton replay. Run all commands
 from the repository root.
 
-## Prepare the environment and dataset
+## Prepare the environment
 
-Install the development dependencies, then download and prepare the 15
-revision-pinned Anchor-Lab recordings. Newton's simulation components are
-included in the default installation:
+Install the development dependencies. Newton's simulation components and the
+Hugging Face client are included in the default installation:
 
 ```bash
 uv sync --extra dev
-uv run python examples/training/prepare_dataset.py
 ```
 
-The preparation script downloads the 15 original Parquet files under
-`examples/training/data/`. The configs load them through one local glob and
-map their raw joint and feature names without rewriting the source files. The
-downloads are ignored by Git.
+The configurations select all 15 original G1 Parquet files from a pinned
+Anchor-Lab revision. The first run downloads them into the Hugging Face cache;
+later runs reuse those bytes. Anchor Bench maps their raw joint and feature
+names without rewriting the source files.
 
 ## Train the models
 
@@ -79,12 +77,11 @@ commitment.
 
 ## Run the integration tests
 
-To execute dataset preparation, training, and Newton replay through pytest:
+To execute dataset acquisition, training, and Newton replay through pytest:
 
 ```bash
 uv run pytest -m integration tests/integration/g1 -v
 ```
 
 The integration tests load the distributed configurations and override only
-the dataset location, epoch count, and checkpoint interval to keep the test run
-bounded.
+the epoch count and checkpoint interval to keep the test run bounded.

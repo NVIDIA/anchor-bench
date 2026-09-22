@@ -8,7 +8,70 @@ import pytest
 
 import anchor_bench.data.datasets as datasets_module
 from anchor_bench.data import download_from_huggingface
+from anchor_bench.data.datasets import download_huggingface_dataset
 from anchor_bench.errors import DatasetLoadError
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
+
+
+def test_download_huggingface_dataset_uses_snapshot_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    first = snapshot / "data" / "selected" / "b.parquet"
+    second = snapshot / "data" / "selected" / "a.parquet"
+    for path in (first, second):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.name, encoding="utf-8")
+    seen = []
+
+    def download(**kwargs):
+        seen.append(kwargs)
+        return str(snapshot)
+
+    monkeypatch.setattr(datasets_module, "snapshot_download", download)
+    source = HuggingFaceDatasetSource(
+        provider="huggingface",
+        repo_id="nvidia/Anchor-Lab",
+        revision="abc123",
+        paths=["data/selected/*.parquet"],
+    )
+
+    files = download_huggingface_dataset(source)
+
+    assert [file.repo_path for file in files] == [
+        "data/selected/a.parquet",
+        "data/selected/b.parquet",
+    ]
+    assert [file.path for file in files] == [second, first]
+    assert seen == [
+        {
+            "repo_id": "nvidia/Anchor-Lab",
+            "repo_type": "dataset",
+            "revision": "abc123",
+            "allow_patterns": ["data/selected/*.parquet"],
+        }
+    ]
+
+
+def test_download_huggingface_dataset_rejects_unmatched_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        datasets_module,
+        "snapshot_download",
+        lambda **_: str(tmp_path),
+    )
+    source = HuggingFaceDatasetSource(
+        provider="huggingface",
+        repo_id="nvidia/Anchor-Lab",
+        revision="abc123",
+        paths=["data/missing/*.parquet"],
+    )
+
+    with pytest.raises(DatasetLoadError, match="did not match any files"):
+        download_huggingface_dataset(source)
 
 
 def test_download_from_huggingface_writes_file(tmp_path: Path, monkeypatch):

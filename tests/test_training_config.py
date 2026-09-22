@@ -8,7 +8,10 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from anchor_bench.schema.dataset import ParquetDatasetConfig
+from anchor_bench.schema.dataset import (
+    HuggingFaceDatasetSource,
+    ParquetDatasetConfig,
+)
 from anchor_bench.schema.parse import parse
 from anchor_bench.schema.training import (
     GruModelConfig,
@@ -158,6 +161,39 @@ def test_model_matches_general_training_schema(valid_config_data):
         config.search.search_space["model.hidden_size"],
         IntegerSearchParameter,
     )
+
+
+def test_accepts_structured_huggingface_dataset_source(valid_config_data):
+    data = deepcopy(valid_config_data)
+    data["dataset"]["source"] = {
+        "provider": "huggingface",
+        "repo_id": "nvidia/Anchor-Lab",
+        "revision": "abc123",
+        "paths": ["data/g1_arm_multijoint/*.parquet"],
+    }
+
+    config = TrainingConfig.model_validate(data)
+
+    assert isinstance(config.dataset.source, HuggingFaceDatasetSource)
+    assert config.dataset.source.repo_id == "nvidia/Anchor-Lab"
+    assert config.dataset.source.paths == ["data/g1_arm_multijoint/*.parquet"]
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [[], ["/absolute.parquet"], ["../outside.parquet"], ["data\\file.parquet"]],
+)
+def test_rejects_invalid_huggingface_dataset_paths(valid_config_data, paths):
+    data = deepcopy(valid_config_data)
+    data["dataset"]["source"] = {
+        "provider": "huggingface",
+        "repo_id": "nvidia/Anchor-Lab",
+        "revision": "abc123",
+        "paths": paths,
+    }
+
+    with pytest.raises(ValidationError):
+        TrainingConfig.model_validate(data)
 
 
 def test_parser_selects_training_model(valid_config_data, tmp_path: Path):
