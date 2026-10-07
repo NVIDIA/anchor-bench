@@ -5,15 +5,23 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
-from importlib import import_module
-from typing import Any, Mapping, Sequence
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
 from anchor_bench.tasks.train.data import ValidationDataset
-from anchor_bench.tasks.train.models import ModelOutput
+from anchor_bench.tasks.train.models import GruModel
+from anchor_bench.tasks.train.newton_export import (
+    BUILTIN_FEATURES,
+    FEATURE_NAMES,
+    export_newton_gru,
+)
+from anchor_bench.tasks.train.normalization import _PhysicalUnitModel
 from anchor_bench.tasks.train.task import MappedTrainingSequence
 from anchor_bench.tasks.train.utils import position_error
 from anchor_bench.tasks.train.validators.base import (
@@ -106,24 +114,38 @@ class NewtonReplayValidator(BaseValidator):
             signal: [] for signal in self.signals
         }
         try:
-            if callable(getattr(model, "eval", None)):
-                model.eval()
-            for sequence in sequences:
-                simulated = self._replay(model, sequence, adapter)
-                prefix = f"experiment/{sequence.experiment}"
-                recorded = {
-                    "position": sequence.position,
-                    "velocity": sequence.velocity,
-                }
-                for signal in self.signals:
-                    values = (
-                        recorded[signal].loc[:, output_joints].to_numpy(dtype=float),
-                        simulated[signal],
-                    )
-                    metrics.update(_metrics(prefix, signal, output_joints, *values))
-                    aggregate[signal].append(values)
+            with self._configure_actuator(model, validation_dataset, adapter):
+                return self._validate_sequences(
+                    model, sequences, adapter, output_joints, metrics, aggregate
+                )
         finally:
             adapter.close()
+
+    def _validate_sequences(
+        self,
+        model: Any,
+        sequences: Sequence[NewtonReplaySequence],
+        adapter: _NewtonReplayAdapter,
+        output_joints: tuple[str, ...],
+        metrics: dict[str, float],
+        aggregate: dict[str, list[tuple[np.ndarray, np.ndarray]]],
+    ) -> ValidationResult:
+        if callable(getattr(model, "eval", None)):
+            model.eval()
+        for sequence in sequences:
+            simulated = self._replay(model, sequence, adapter)
+            prefix = f"experiment/{sequence.experiment}"
+            recorded = {
+                "position": sequence.position,
+                "velocity": sequence.velocity,
+            }
+            for signal in self.signals:
+                values = (
+                    recorded[signal].loc[:, output_joints].to_numpy(dtype=float),
+                    simulated[signal],
+                )
+                metrics.update(_metrics(prefix, signal, output_joints, *values))
+                aggregate[signal].append(values)
 
         for signal, pairs in aggregate.items():
             actual, simulated = (
@@ -133,6 +155,28 @@ class NewtonReplayValidator(BaseValidator):
                 _metrics("aggregate", signal, output_joints, actual, simulated)
             )
         return ValidationResult(name=self.name, type=self.type, metrics=metrics)
+
+    @staticmethod
+    @contextmanager
+    def _configure_actuator(
+        model: Any, dataset: ValidationDataset, adapter: _NewtonReplayAdapter
+    ) -> Iterator[None]:
+        """Use the same exporter for replay and persisted deployment artifacts."""
+        if not isinstance(model, _PhysicalUnitModel) or not isinstance(
+            model.model, GruModel
+        ):
+            raise TypeError(
+                "Newton GRU replay requires a trained GRU with normalization statistics."
+            )
+        with TemporaryDirectory(prefix="anchor-gru-") as directory:
+            path = export_newton_gru(
+                model.model,
+                model.statistics,
+                dataset.sequences,
+                Path(directory) / "model.onnx",
+            )
+            adapter.configure_gru(str(path))
+            yield
 
     @staticmethod
     def _prepare_sequences(dataset: Any) -> tuple[NewtonReplaySequence, ...]:
@@ -401,7 +445,6 @@ class NewtonReplayValidator(BaseValidator):
         ):
             simulated[signal][0] = frame.loc[frame.index[0], output_columns]
 
-        model_state = None
         previous_effort = {joint: 0.0 for joint in adapter.output_joints}
         timestamps = sequence.command.index.get_level_values("time_ns").to_numpy(
             dtype=np.int64
@@ -430,12 +473,9 @@ class NewtonReplayValidator(BaseValidator):
                 ],
                 dtype=np.float32,
             )[:, np.newaxis, :]
-            predictions, model_state = self._predict(
-                model,
-                features,
-                model_state,
+            effort = self._actuator_effort(
+                adapter, features, command, input_columns, dt
             )
-            effort = _route_effort(predictions, sequence.mappings)
             previous_effort = effort
             state = adapter.step(command=command, effort=effort, dt=dt)
             for signal, values in (
@@ -470,6 +510,10 @@ class NewtonReplayValidator(BaseValidator):
                 value = state.velocity[joint]
             elif feature == "command_q":
                 value = command[joint]
+            elif feature == "command_dq":
+                value = 0.0
+            elif feature == "velocity_error":
+                value = -state.velocity[joint]
             elif feature == "position_error":
                 value = position_error(command[joint], state.position[joint])
             elif feature == "solver_pd":
@@ -486,40 +530,24 @@ class NewtonReplayValidator(BaseValidator):
         return np.asarray(values, dtype=np.float32)
 
     @staticmethod
-    def _predict(
-        model: Any,
+    def _actuator_effort(
+        adapter: _NewtonReplayAdapter,
         features: np.ndarray,
-        state: Any,
-    ) -> tuple[np.ndarray, Any]:
-        torch = import_module("torch")
-        parameters = getattr(model, "parameters", lambda: iter(()))()
-        first_parameter = next(iter(parameters), None)
-        device = None if first_parameter is None else first_parameter.device
-        tensor = torch.as_tensor(features, dtype=torch.float32, device=device)
-        with torch.inference_mode():
-            result = model(tensor, state)
-        if not isinstance(result, ModelOutput):
-            raise TypeError("Newton replay models must return ModelOutput.")
-        values = result.predictions[:, -1, :].detach().cpu().numpy()
-        if values.ndim != 2 or not np.all(np.isfinite(values)):
-            raise ValueError("Newton replay model returned invalid predictions.")
-        return values, result.state
-
-
-def _route_effort(
-    predictions: np.ndarray,
-    mappings: Sequence[NewtonReplayMapping],
-) -> dict[str, float]:
-    expected = (len(mappings), len(mappings[0].output_joints))
-    if predictions.shape != expected:
-        raise ValueError(
-            f"Newton replay model output has shape {predictions.shape}, expected {expected}."
-        )
-    return {
-        joint: float(predictions[row, column])
-        for row, mapping in enumerate(mappings)
-        for column, joint in enumerate(mapping.output_joints)
-    }
+        command: Mapping[str, float],
+        input_columns: Sequence[Sequence[object]],
+        dt: float,
+    ) -> dict[str, float]:
+        """Supply custom inputs while Newton computes built-in features from state."""
+        custom_inputs: dict[str, dict[str, float]] = {}
+        for row, columns in enumerate(input_columns):
+            for column, label in enumerate(columns):
+                joint, feature = str(label).rsplit("/", 1)
+                name = FEATURE_NAMES.get(feature, feature)
+                if name not in BUILTIN_FEATURES:
+                    custom_inputs.setdefault(name, {})[joint] = float(
+                        features[row, 0, column]
+                    )
+        return adapter.gru_effort(command=command, custom_inputs=custom_inputs, dt=dt)
 
 
 def _metrics(

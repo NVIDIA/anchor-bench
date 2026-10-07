@@ -88,3 +88,35 @@ uv run pytest -m integration tests/integration/g1 -v
 The integration tests load the distributed configurations and override only
 the dataset location, epoch count, and checkpoint interval to keep the test run
 bounded.
+
+## Newton GRU deployment
+
+For compatible per-joint models, training saves `model.onnx` alongside the
+PyTorch training weights. The ONNX file
+embeds ordered feature names, fitted input and output normalization, and the
+sample timestep. Load it directly with `newton.actuators.DriveNeuralGRU` and bind
+it to joint DOFs with `newton.actuators.Actuator` or `ModelBuilder.add_actuator`.
+Evaluate the actuator once per training sample interval; physics substeps may
+run more frequently while holding the resulting effort. Reset both actuator
+state buffers at each episode boundary.
+
+Newton replay validates the exported ONNX graph through `DriveNeuralGRU`, using
+the live simulated joint state and commands. It updates hidden state once per
+sample and resets it between experiments. Output normalization is applied once
+by the drive. Residual models produce residual effort, so retain the base PD
+controller when deploying them; full-torque models replace that controller.
+
+Newton currently requires one scalar output per joint lane, identity or tanh
+output activation, and at most one caller-supplied input. Mappings must each
+contain one joint's inputs and output, with the same feature order in every
+mapping. MIMO training and PyTorch weights remain supported. `metadata.yaml`
+records `newton.supported` and either the ONNX artifact path or an incompatibility
+reason. Unsupported models do not produce ONNX files; requesting Newton GRU
+replay for them fails explicitly. The G1 examples now share one per-joint model
+across four mappings. The full-torque example keeps
+`previous_torque` feedback and removes `solver_pd` and `qfrc_bias` from its inputs
+to fit Newton's one-custom-input contract. Applications must supply the chosen
+custom input as a DOF-sized Warp array on the actuator's control object.
+
+The Newton dependency is pinned to a source revision containing `DriveNeuralGRU`
+and includes the `onnx` extra. Install the locked dependencies with `uv sync`.

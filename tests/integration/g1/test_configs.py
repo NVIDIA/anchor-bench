@@ -78,8 +78,12 @@ def test_g1_residual_training_config() -> None:
         "position_error",
         "actual_dq",
     ]
-    assert config.mapping["right_arm"].inputs == JOINTS
-    assert config.mapping["right_arm"].outputs == JOINTS
+    assert [mapping.inputs for mapping in config.mapping.values()] == [
+        [joint] for joint in JOINTS
+    ]
+    assert [mapping.outputs for mapping in config.mapping.values()] == [
+        [joint] for joint in JOINTS
+    ]
     assert config.model.hidden_size == 128
     assert config.model.num_layers == 2
     assert config.model.output.activation == "tanh"
@@ -107,11 +111,11 @@ def test_g1_full_torque_training_config() -> None:
         "actual_q",
         "position_error",
         "actual_dq",
-        "solver_pd",
-        "qfrc_bias",
         "previous_torque",
     ]
-    assert config.mapping["right_arm"].inputs == JOINTS
+    assert [mapping.inputs for mapping in config.mapping.values()] == [
+        [joint] for joint in JOINTS
+    ]
     assert config.model.hidden_size == 192
     assert config.model.num_layers == 2
     assert config.model.output.activation == "tanh"
