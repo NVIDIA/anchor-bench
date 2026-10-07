@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, ClassVar, Mapping
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -143,21 +143,32 @@ def replay_dependencies(monkeypatch: pytest.MonkeyPatch) -> object:
     monkeypatch.setattr(SimulationContext, "current", lambda: context)
     monkeypatch.setattr(newton_validator, "_NewtonReplayAdapter", FakeReplayAdapter)
 
-    def predict(
-        model: FakeModel,
-        features: np.ndarray,
-        state: int | None,
-    ) -> tuple[np.ndarray, int]:
-        """Return the live feature while recording recurrent-state flow."""
+    @contextmanager
+    def configure(model, dataset, adapter):
+        adapter.fake_model = model
+        adapter.fake_state = None
+        yield
 
-        model.state_inputs.append(state)
-        next_state = 1 if state is None else state + 1
-        return features[:, 0, :1], next_state
+    def predict(adapter, features, command, columns, dt):
+        adapter.fake_model.state_inputs.append(adapter.fake_state)
+        adapter.fake_state = 1 if adapter.fake_state is None else adapter.fake_state + 1
+        return {
+            joint: float(features[row, 0, 0])
+            for row, joint in enumerate(adapter.output_joints)
+        }
 
+    original_reset = FakeReplayAdapter.reset
+
+    def reset(adapter, **kwargs):
+        adapter.fake_state = None
+        return original_reset(adapter, **kwargs)
+
+    monkeypatch.setattr(FakeReplayAdapter, "reset", reset)
     monkeypatch.setattr(
-        NewtonReplayValidator,
-        "_predict",
-        staticmethod(predict),
+        NewtonReplayValidator, "_configure_actuator", staticmethod(configure)
+    )
+    monkeypatch.setattr(
+        NewtonReplayValidator, "_actuator_effort", staticmethod(predict)
     )
     return context
 

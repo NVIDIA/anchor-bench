@@ -85,6 +85,10 @@ def test_trains_and_validates_g1_example(
     )
 
     assert (output / ".completed").is_file()
+    assert (output / "model.onnx").is_file()
+    from newton.actuators import DriveNeuralGRU
+
+    DriveNeuralGRU(str(output / "model.onnx"))
     assert (output / "history.yaml").is_file()
     assert (output / "validation.yaml").is_file()
     assert (output / "checkpoints" / "epoch-000002.pt").is_file()

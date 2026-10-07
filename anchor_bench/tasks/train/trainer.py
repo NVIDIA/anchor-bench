@@ -639,6 +639,16 @@ def _feedback_layout(
 
     input_indices = tuple(inputs_by_entity.values())
     target_indices = tuple(targets_by_entity[entity] for entity in inputs_by_entity)
+    columns = (*sequence.inputs.columns, *sequence.targets.columns)
+    if len(input_entities) == 1 and all(
+        isinstance(column, str)
+        and "/" in column
+        and column.rsplit("/", 1)[0] in input_entities
+        for column in columns
+    ):
+        # Per-joint mappings share tensor slots even when their joint names differ.
+        input_columns = tuple(column.rsplit("/", 1)[1] for column in input_columns)
+        target_columns = tuple(column.rsplit("/", 1)[1] for column in target_columns)
     return _FeedbackLayout(
         input_columns=input_columns,
         target_columns=target_columns,

@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import newton
 import numpy as np
 import warp as wp
+from newton.actuators import Actuator, DriveNeuralGRU
 
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.tasks.train.utils import (
@@ -106,6 +107,9 @@ class _NewtonReplayAdapter:
             contacts=None,
             clear_forces=False,
         )
+        self._actuator: Actuator | None = None
+        self._actuator_state: Actuator.State | None = None
+        self._actuator_next: Actuator.State | None = None
         self._bias_solver: Any = None
         self._bias_state: _ReplayState | None = None
         self._bias_values: dict[str, float] = {}
@@ -142,8 +146,74 @@ class _NewtonReplayAdapter:
             state_q, state_qd = self._state_joint_arrays(state)
             state_q.assign(q)
             state_qd.assign(recorded_qd)
+        if self._actuator_state is not None:
+            self._actuator_state.reset()
+        if self._actuator_next is not None:
+            self._actuator_next.reset()
         self._write_control(command, {})
         return self._read_state()
+
+    def configure_gru(self, model_path: str) -> None:
+        """Bind exported GRU weights to the model's selected joint coordinates."""
+
+        def indices(coordinate: int) -> wp.array:
+            return wp.array(
+                [self._indices[joint][coordinate] for joint in self.output_joints],
+                dtype=wp.uint32,
+                device=self._model.device,
+            )
+
+        self._actuator = Actuator(
+            indices=indices(1),
+            pos_indices=indices(0),
+            target_pos_indices=indices(2),
+            drive=DriveNeuralGRU(model_path),
+        )
+        self._actuator_state = self._actuator.state()
+        self._actuator_next = self._actuator.state()
+
+    def gru_effort(
+        self,
+        *,
+        command: Mapping[str, float],
+        custom_inputs: Mapping[str, Mapping[str, float]],
+        dt: float,
+    ) -> dict[str, float]:
+        """Evaluate one actuator sample, retaining hidden state between intervals."""
+
+        actuator = self._actuator
+        if actuator is None:
+            raise RuntimeError("Newton replay GRU actuator is not configured.")
+        self._write_control(command, {})
+        control = {
+            "joint_target_q": self._control.joint_target_q,
+            "joint_target_qd": self._control.joint_target_qd,
+            "joint_f": self._control.joint_f,
+        }
+        for name, values in custom_inputs.items():
+            control[name] = wp.array(
+                self._joint_array(self._control.joint_f, values, 1, clear=True),
+                dtype=wp.float32,
+                device=self._model.device,
+            )
+        actuator.step(
+            self._step_executor.state,
+            control,
+            self._actuator_state,
+            self._actuator_next,
+            dt=dt,
+        )
+        self._actuator_state, self._actuator_next = (
+            self._actuator_next,
+            self._actuator_state,
+        )
+        forces = self._control.joint_f.numpy()
+        if not np.all(np.isfinite(forces)):
+            raise ValueError("Newton GRU returned non-finite effort.")
+        return {
+            joint: float(forces[self._indices[joint][1]])
+            for joint in self.output_joints
+        }
 
     def capture_step_graph(self, *, dt: float) -> None:
         """Capture the configured replay interval when the solver supports it."""

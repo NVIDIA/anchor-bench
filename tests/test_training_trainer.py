@@ -650,3 +650,24 @@ def test_trainer_rejects_shifted_feedback_tensor_positions(
             [reference, later],
             device="cpu",
         )
+
+
+def test_trainer_shares_autoregressive_model_across_joint_mappings() -> None:
+    """Pair feedback within each joint while sharing tensor positions and weights."""
+    config_data = _config_data()
+    config_data["input_features"]["feedback"] = None
+    config_data["training"]["feedback"] = {
+        "input": "feedback",
+        "output": "target",
+        "initial_value": 0.0,
+    }
+    config = TrainingConfig.model_validate(config_data)
+    first = _sequence("first", [float(value) for value in range(8)])
+    first.inputs["joint/feedback"] = 0.0
+    second = _sequence("second", [float(value) for value in range(8)])
+    second.inputs.columns = ["other/input"]
+    second.targets.columns = ["other/target"]
+    second.inputs["other/feedback"] = 0.0
+    trainer = Trainer(config, [first, second], device="cpu")
+    assert trainer.feedback_indices == ((1,), (0,))
+    assert len(trainer.train().history) == 1

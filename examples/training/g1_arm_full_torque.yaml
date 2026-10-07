@@ -1,5 +1,5 @@
 type: training
-description: Train the enriched four-joint G1 right-arm full-torque GRU.
+description: Train a shared per-joint G1 right-arm full-torque GRU with previous-torque feedback.
 tags: [g1, right-arm, gru, full-torque, autoregressive]
 
 dataset:
@@ -28,24 +28,31 @@ input_features:
   actual_q: null
   position_error: null
   actual_dq: null
-  solver_pd: solver_pd
-  qfrc_bias: qfrc_bias
   previous_torque: previous_torque
 
 output_features:
   actual_effort: null
 
 mapping:
-  right_arm:
+  right_shoulder_pitch_joint:
     inputs:
       - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
-      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
-      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_yaw_joint
-      - /g1_29dof_rev_1_0_tri_hand/joints/right_elbow_joint
     outputs:
       - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
+  right_shoulder_roll_joint:
+    inputs:
       - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
+    outputs:
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
+  right_shoulder_yaw_joint:
+    inputs:
       - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_yaw_joint
+    outputs:
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_yaw_joint
+  right_elbow_joint:
+    inputs:
+      - /g1_29dof_rev_1_0_tri_hand/joints/right_elbow_joint
+    outputs:
       - /g1_29dof_rev_1_0_tri_hand/joints/right_elbow_joint
 
 model:

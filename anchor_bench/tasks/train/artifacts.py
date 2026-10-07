@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Sequence
@@ -12,6 +13,8 @@ from typing import TYPE_CHECKING, Literal, Sequence
 import torch
 
 from anchor_bench.core.artifacts import write_yaml
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from anchor_bench.schema.training import TrainingConfig
@@ -34,6 +37,31 @@ def save_training_artifacts(
 ) -> Path:
     """Write one portable, config-addressed training artifact folder."""
 
+    from anchor_bench.tasks.train.models import GruModel
+    from anchor_bench.tasks.train.newton_export import (
+        UnsupportedNewtonGRUModel,
+        export_newton_gru,
+    )
+
+    if not isinstance(result.model, GruModel):
+        raise TypeError("Newton artifact export requires a GruModel.")
+    deployment = {
+        "supported": True,
+        "artifact": "model.onnx",
+        "drive": "DriveNeuralGRU",
+    }
+    try:
+        export_newton_gru(
+            result.model, result.normalization, sequences, output_folder / "model.onnx"
+        )
+    except UnsupportedNewtonGRUModel as error:
+        deployment = {
+            "supported": False,
+            "reason": str(error),
+            "drive": "DriveNeuralGRU",
+        }
+        (output_folder / "model.onnx").unlink(missing_ok=True)
+        logger.info("Newton GRU export unavailable: %s", error)
     state_dict = {
         name: tensor.detach().cpu()
         for name, tensor in result.model.state_dict().items()
@@ -64,6 +92,7 @@ def save_training_artifacts(
         output_folder / "metadata.yaml",
         {
             "format_version": 1,
+            "newton": deployment,
             "model_type": config.model.type,
             "seed": config.training.seed,
             "input_features": [

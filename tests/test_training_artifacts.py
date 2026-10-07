@@ -62,6 +62,10 @@ def test_save_training_artifacts_writes_portable_run(
     )
 
     assert saved_output_folder == output_folder
+    assert (output_folder / "model.onnx").is_file()
+    from newton.actuators import DriveNeuralGRU
+
+    assert DriveNeuralGRU(str(output_folder / "model.onnx")).custom_inputs == ("input",)
     assert yaml.safe_load((output_folder / "history.yaml").read_text()) == [
         {"epoch": 1, "training": 2.0, "validation": 3.0},
         {"epoch": 2, "training": 1.0, "validation": None},
@@ -87,6 +91,11 @@ def test_save_training_artifacts_writes_portable_run(
     }
     assert yaml.safe_load((output_folder / "metadata.yaml").read_text()) == {
         "format_version": 1,
+        "newton": {
+            "supported": True,
+            "artifact": "model.onnx",
+            "drive": "DriveNeuralGRU",
+        },
         "model_type": "gru",
         "seed": 7,
         "input_features": [
@@ -250,3 +259,32 @@ def test_save_training_artifacts_separates_final_test_results(
         "validation": ["validation"],
         "test": ["test"],
     }
+
+
+def test_mimo_training_preserves_weights_and_records_export_limit(
+    tmp_path: Path,
+) -> None:
+    """Keep a MIMO training run usable while declaring Newton compatibility."""
+    config = TrainingConfig.model_validate(_config_data())
+    sequence = _sequence("training", [0.0, 1.0])
+    sequence.targets["other/target"] = [2.0, 3.0]
+    result = TrainingResult(
+        model=GruModel(config.model, input_size=1, output_size=2),
+        history=[],
+        normalization=fit_normalization([sequence], inputs="none", outputs="none"),
+    )
+    # A repeated export must not leave a stale compatible model in the folder.
+    (tmp_path / "model.onnx").write_bytes(b"stale")
+    save_training_artifacts(result, [sequence], [], config, tmp_path)
+    assert (tmp_path / "model.pt").is_file()
+    assert not (tmp_path / "model.onnx").exists()
+    metadata = yaml.safe_load((tmp_path / "metadata.yaml").read_text())
+    assert metadata["newton"] == {
+        "supported": False,
+        "drive": "DriveNeuralGRU",
+        "reason": "Newton GRU requires one output joint per mapping.",
+    }
+    assert (
+        torch.load(tmp_path / "model.pt", weights_only=True)["output.weight"].shape[0]
+        == 2
+    )
