@@ -1,0 +1,211 @@
+type: mpm_sys_id
+schema_version: 1
+description: Six dry-sand experiments with anchored elastic parameters
+tags: []
+execution:
+  device: cuda:0
+  seed: 48
+  cuda_graphs: true
+  worker_timeout_s: 1800.0
+material:
+  fixed:
+    young_modulus: 9576000.0
+    poisson_ratio: 0.25
+    hardening: 0.0
+    hardening_rate: 1.0
+    softening_rate: 1.0
+    dilatancy: 0.0
+    viscosity: 0.0
+  optimized:
+    damping:
+      lower: 0.0
+      upper: 0.1
+      scale: log
+      offset: 0.0001
+    friction:
+      lower: 0.1
+      upper: 1.5
+      scale: linear
+      offset: 0.0
+    yield_pressure:
+      lower: 1000.0
+      upper: 1000000000000.0
+      scale: log
+      offset: 0.0
+    tensile_yield_ratio:
+      lower: 0.0
+      upper: 1.0
+      scale: linear
+      offset: 0.0
+    yield_stress:
+      lower: 0.0
+      upper: 100000.0
+      scale: log
+      offset: 100.0
+optimizer:
+  type: random_forest
+  initial_samples: 16
+  pool_size: 4096
+  exploration: 1.0
+  stopping:
+    mode: continuous
+objective:
+  type: relative_rms
+  target_reduction: mean
+experiments:
+- id: 1m-5gal-sand-pour
+  enabled: true
+  weight: 1.0
+  input_data:
+    type: csv
+    source: data/1m-5gal-sand-pour.csv
+  simulation:
+    drop_height_m: 1.0
+    density: 1600.0
+    voxel_size: 0.02
+    fps: 60
+    substeps: 8
+    num_frames: 720
+    ground_friction: 0.6
+    type: sand_pour
+    sand_volume_m3: 0.01892705892
+    bucket_radius: 0.15
+    funnel_height: 0.2
+    outlet_diameter: 0.1
+    funnel_friction: 0.25
+- id: 2m-gal-sand-pour
+  enabled: true
+  weight: 1.0
+  input_data:
+    type: csv
+    source: data/2m-gal-sand-pour.csv
+  simulation:
+    drop_height_m: 2.0
+    density: 1600.0
+    voxel_size: 0.02
+    fps: 60
+    substeps: 8
+    num_frames: 720
+    ground_friction: 0.6
+    type: sand_pour
+    sand_volume_m3: 0.01892705892
+    bucket_radius: 0.15
+    funnel_height: 0.2
+    outlet_diameter: 0.1
+    funnel_friction: 0.25
+- id: 1m-1l-water-bottle-drop
+  enabled: true
+  weight: 1.0
+  input_data:
+    type: csv
+    source: data/1m-1l-water-bottle-drop.csv
+  simulation:
+    drop_height_m: 1.0
+    density: 1600.0
+    voxel_size: 0.015
+    fps: 60
+    substeps: 8
+    num_frames: 720
+    ground_friction: 0.6
+    type: bottle_drop
+    water_volume_m3: 0.001
+    bed_width: 0.45
+    bed_length: 0.45
+    bed_depth: 0.3
+    bottle_radius: 0.04
+    bottle_height: 0.25
+    cap_radius: 0.015
+    cap_height: 0.015
+    bottle_friction: 0.3
+    pre_settle_seconds: 0.5
+    impact_settle_seconds: 3.0
+    lift_speed: 0.25
+    lift_distance: 0.6
+    crater_threshold: 0.003
+- id: 1m-500ml-water-bottle-drop
+  enabled: true
+  weight: 1.0
+  input_data:
+    type: csv
+    source: data/1m-500ml-water-bottle-drop.csv
+  simulation:
+    drop_height_m: 1.0
+    density: 1600.0
+    voxel_size: 0.015
+    fps: 60
+    substeps: 8
+    num_frames: 720
+    ground_friction: 0.6
+    type: bottle_drop
+    water_volume_m3: 0.0005
+    bed_width: 0.45
+    bed_length: 0.45
+    bed_depth: 0.3
+    bottle_radius: 0.033
+    bottle_height: 0.2
+    cap_radius: 0.015
+    cap_height: 0.015
+    bottle_friction: 0.3
+    pre_settle_seconds: 0.5
+    impact_settle_seconds: 3.0
+    lift_speed: 0.25
+    lift_distance: 0.6
+    crater_threshold: 0.003
+- id: 2m-1l-water-bottle-drop
+  enabled: true
+  weight: 1.0
+  input_data:
+    type: csv
+    source: data/2m-1l-water-bottle-drop.csv
+  simulation:
+    drop_height_m: 2.0
+    density: 1600.0
+    voxel_size: 0.015
+    fps: 60
+    substeps: 8
+    num_frames: 720
+    ground_friction: 0.6
+    type: bottle_drop
+    water_volume_m3: 0.001
+    bed_width: 0.45
+    bed_length: 0.45
+    bed_depth: 0.3
+    bottle_radius: 0.04
+    bottle_height: 0.25
+    cap_radius: 0.015
+    cap_height: 0.015
+    bottle_friction: 0.3
+    pre_settle_seconds: 0.5
+    impact_settle_seconds: 3.0
+    lift_speed: 0.25
+    lift_distance: 0.6
+    crater_threshold: 0.003
+- id: 2m-500ml-water-bottle-drop
+  enabled: true
+  weight: 1.0
+  input_data:
+    type: csv
+    source: data/2m-500ml-water-bottle-drop.csv
+  simulation:
+    drop_height_m: 2.0
+    density: 1600.0
+    voxel_size: 0.015
+    fps: 60
+    substeps: 8
+    num_frames: 720
+    ground_friction: 0.6
+    type: bottle_drop
+    water_volume_m3: 0.0005
+    bed_width: 0.45
+    bed_length: 0.45
+    bed_depth: 0.3
+    bottle_radius: 0.033
+    bottle_height: 0.2
+    cap_radius: 0.015
+    cap_height: 0.015
+    bottle_friction: 0.3
+    pre_settle_seconds: 0.5
+    impact_settle_seconds: 3.0
+    lift_speed: 0.25
+    lift_distance: 0.6
+    crater_threshold: 0.003

@@ -195,7 +195,10 @@ def test_task_runner_loads_mlflow_backend_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     TaskRunner({"tracked": ReportingTask}).run("tracked.yaml")
@@ -220,7 +223,10 @@ def test_task_runner_reports_unknown_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     with pytest.raises(
@@ -243,7 +249,10 @@ def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_pa
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     result = TaskRunner(
@@ -300,7 +309,10 @@ def test_active_run_is_reset_when_task_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     with pytest.raises(RuntimeError, match="training failed"):
@@ -326,7 +338,10 @@ def test_output_validation_failure_marks_tracked_run_failed(monkeypatch, tmp_pat
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     with pytest.raises(
@@ -356,7 +371,10 @@ def test_backend_exit_failure_removes_completion_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     with pytest.raises(OSError, match="run finalization failed"):
@@ -382,7 +400,10 @@ def test_artifact_failure_fails_run_without_completion_marker(monkeypatch, tmp_p
     monkeypatch.setattr(
         task_runner,
         "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
+        lambda config, *, output_root=None, output_folder=None, initialize_config=True: (
+            tmp_path,
+            False,
+        ),
     )
 
     with pytest.raises(OSError, match="artifact upload failed"):

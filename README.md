@@ -14,6 +14,7 @@ The current task types are:
 | --- | --- |
 | `trajectory_v1` | Generate piecewise actuator command trajectories. |
 | `actuator_sys_id` | Fit actuator parameters by replaying recorded data in replicated Newton worlds. |
+| `mpm_sys_id` | Fit shared sand material across selectable pour and bottle-drop experiments ([guide](docs/mpm-sys-id.md)). |
 | `training` | Prepare mapped trajectories and train recurrent actuator models. |
 
 Anchor Bench also provides a Parquet dataset loader, a Newton USD adapter, and

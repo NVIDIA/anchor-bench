@@ -20,6 +20,7 @@ def get_or_create_output_folder(
     *,
     output_root: Optional[Union[str, Path]] = None,
     output_folder: Optional[Union[str, Path]] = None,
+    initialize_config: bool = True,
 ) -> Tuple[Path, bool]:
     """Get or initialize an output folder and report whether it is complete."""
 
@@ -34,10 +35,11 @@ def get_or_create_output_folder(
         if output_folder.is_dir():
             return output_folder, (output_folder / COMPLETION_MARKER).is_file()
         raise
-    write_yaml(
-        output_folder / "config.yaml",
-        config.model_dump(mode="json"),
-    )
+    if initialize_config:
+        write_yaml(
+            output_folder / "config.yaml",
+            config.model_dump(mode="json"),
+        )
     return output_folder, False
 
 

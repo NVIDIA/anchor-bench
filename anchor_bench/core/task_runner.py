@@ -15,7 +15,11 @@ from anchor_bench.core.artifacts import (
     get_or_create_output_folder,
     write_yaml,
 )
-from anchor_bench.errors import MLOpsBackendNotFoundError, TaskNotFoundError
+from anchor_bench.errors import (
+    AnchorBenchError,
+    MLOpsBackendNotFoundError,
+    TaskNotFoundError,
+)
 from anchor_bench.mlops import (
     MLflowBackend,
     MLOpsBackend,
@@ -27,12 +31,14 @@ from anchor_bench.schema.mlops import MLOpsConfig
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id import ActuatorSysIdTask
 from anchor_bench.tasks.base_task import BaseTask
+from anchor_bench.tasks.mpm_sys_id.task import MpmSysIdTask
 from anchor_bench.tasks.train.task import TrainingTask
 from anchor_bench.tasks.trajectory import TrajectoryTask
 
 logger = logging.getLogger(__name__)
 
 TASKS: Dict[str, Type[BaseTask[Any]]] = {
+    MpmSysIdTask.name(): MpmSysIdTask,
     ActuatorSysIdTask.name(): ActuatorSysIdTask,
     TrainingTask.name(): TrainingTask,
     TrajectoryTask.name(): TrajectoryTask,
@@ -57,11 +63,17 @@ class TaskRunner:
         config_path: str,
         *,
         force: bool = False,
+        resume: bool = False,
+        expected_type: Optional[str] = None,
         output: Optional[Union[str, Path]] = None,
     ) -> Path:
         logger.debug("Parsing task configuration path=%s", config_path)
         config = parse(config_path)
         task_type = config.type
+        if expected_type is not None and task_type != expected_type:
+            raise AnchorBenchError(
+                f"Expected task type {expected_type}, got {task_type}"
+            )
         task_class = self._tasks.get(task_type)
 
         if task_class is None:
@@ -75,51 +87,54 @@ class TaskRunner:
             config,
             output_root=getattr(config, "output_dir", None),
             output_folder=output,
+            initialize_config=False,
         )
-        if already_completed and not force:
-            logger.info(
-                "Skipping completed task type=%s output=%s",
-                task_type,
-                output_directory,
-            )
-            return output_directory
-        if already_completed:
-            logger.warning(
-                "Forcing completed task type=%s output=%s",
-                task_type,
-                output_directory,
-            )
-
-        completion_marker = output_directory / COMPLETION_MARKER
-        completion_marker.unlink(missing_ok=True)
-        write_yaml(
-            output_directory / "config.yaml",
-            config.model_dump(mode="json"),
-        )
-        logger.debug(
-            "Wrote resolved configuration path=%s", output_directory / "config.yaml"
-        )
-
         task = task_class(config)
-        logger.info("Starting task type=%s output=%s", task_type, output_directory)
-        mlops_config = getattr(config, "mlops", None)
-        if isinstance(mlops_config, MLOpsConfig):
-            result = self._run_with_mlops(
-                task,
-                config,
-                mlops_config,
-                output_directory,
-                completion_marker,
+        with task.output_context(output_directory, force=force, resume=resume):
+            already_completed = (output_directory / COMPLETION_MARKER).exists()
+            if already_completed and not force:
+                logger.info(
+                    "Skipping completed task type=%s output=%s",
+                    task_type,
+                    output_directory,
+                )
+                return output_directory
+            if already_completed:
+                logger.warning(
+                    "Forcing completed task type=%s output=%s",
+                    task_type,
+                    output_directory,
+                )
+
+            completion_marker = output_directory / COMPLETION_MARKER
+            completion_marker.unlink(missing_ok=True)
+            write_yaml(
+                output_directory / "config.yaml",
+                config.model_dump(mode="json"),
             )
-        else:
-            result = self._finalize_task(
-                task,
-                task.run(output_directory),
-                output_directory,
-                completion_marker,
+            logger.debug(
+                "Wrote resolved configuration path=%s", output_directory / "config.yaml"
             )
-        logger.info("Completed task type=%s output=%s", task_type, result)
-        return result
+
+            logger.info("Starting task type=%s output=%s", task_type, output_directory)
+            mlops_config = getattr(config, "mlops", None)
+            if isinstance(mlops_config, MLOpsConfig):
+                result = self._run_with_mlops(
+                    task,
+                    config,
+                    mlops_config,
+                    output_directory,
+                    completion_marker,
+                )
+            else:
+                result = self._finalize_task(
+                    task,
+                    task.run(output_directory),
+                    output_directory,
+                    completion_marker,
+                )
+            logger.info("Completed task type=%s output=%s", task_type, result)
+            return result
 
     def _run_with_mlops(
         self,
