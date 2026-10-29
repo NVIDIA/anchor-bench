@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Generic, Type, TypeVar, get_args, get_origin
 
+from anchor_bench.errors import AnchorBenchError
 from anchor_bench.schema.base import BaseConfig
 from anchor_bench.schema.helpers import _config_type
 
@@ -52,6 +54,15 @@ class BaseTask(ABC, Generic[ConfigT]):
         raise TypeError(
             f"{cls.__name__} must bind a concrete config as BaseTask[ConfigType]"
         )
+
+    @contextmanager
+    def output_context(
+        self, output: Path, *, force: bool = False, resume: bool = False
+    ):
+        """Protect and validate artifacts before the runner reads completion state."""
+        if resume:
+            raise AnchorBenchError(f"{self.name()} does not support --resume")
+        yield
 
     @abstractmethod
     def run(self, output_directory: Path) -> Path:

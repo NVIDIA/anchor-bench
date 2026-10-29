@@ -22,6 +22,15 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run an Anchor Bench task from a YAML configuration file.",
     )
     parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["mpm_sys_id"],
+        help="Optional explicit task subcommand.",
+    )
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume an interrupted MPM search."
+    )
+    parser.add_argument(
         "--config",
         required=True,
         help="Path to the task's YAML configuration file.",
@@ -58,8 +67,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     configure_logging(args.verbose, quiet=args.quiet)
 
     try:
-        TaskRunner().run(args.config, force=args.force, output=args.output)
+        options = {}
+        if args.command:
+            options["expected_type"] = args.command
+        if args.resume:
+            options["resume"] = True
+        TaskRunner().run(args.config, force=args.force, output=args.output, **options)
     except (AnchorBenchError, ValidationError) as error:
         parser.error(str(error))
+
+    except KeyboardInterrupt:
+        return 130
 
     return 0

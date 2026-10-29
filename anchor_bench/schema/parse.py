@@ -13,10 +13,12 @@ import yaml
 from anchor_bench.errors import ConfigParseError, UnknownConfigTypeError
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.base import BaseConfig
+from anchor_bench.schema.mpm_sys_id import MpmSysIdConfig
 from anchor_bench.schema.training import TrainingConfig
 from anchor_bench.schema.trajectory import TrajectoryConfig
 
 DATA_MODELS: Dict[str, Type[BaseConfig]] = {
+    "mpm_sys_id": MpmSysIdConfig,
     "actuator_sys_id": ActuatorSysIdConfig,
     "training": TrainingConfig,
     "trajectory_v1": TrajectoryConfig,
@@ -60,4 +62,7 @@ def parse(config_file: Union[str, Path]) -> BaseConfig:
             f"{config_path}. Registered config types: {known_types}."
         )
 
-    return data_model.model_validate(raw_config)
+    config = data_model.model_validate(raw_config)
+    if isinstance(config, MpmSysIdConfig):
+        config.resolve_sources(config_path.resolve().parent)
+    return config
