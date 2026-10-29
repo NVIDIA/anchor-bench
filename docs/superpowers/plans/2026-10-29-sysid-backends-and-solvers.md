@@ -68,6 +68,8 @@ Paths above are relative to `anchor_bench/`. Tests and documentation are named i
 
 ## PR 1: Pinned Newton runtime
 
+Implemented in [draft PR #174](https://github.com/NVIDIA/anchor-bench/pull/174). All 334 unit and integration tests passed, including CPU/CUDA physical regressions and existing SO-101/G1 workflows; lint, formatting, type checks, and independent reviews passed. Later stages remain pending acceptance of this stage.
+
 ### Task 1: Pin the fork and migrate model construction
 
 **Files:** Modify `pyproject.toml`, `uv.lock`, `THIRD_PARTY_LICENSES.md`, `anchor_bench/core/simulation/newton.py`, `tests/test_newton_simulation_context.py`, `tests/integration/usd_trajectory.py`, `docs/system-identification.md`.
@@ -90,7 +92,7 @@ Paths above are relative to `anchor_bench/`. Tests and documentation are named i
 - [x] **Step 2: Establish the fork baseline.** Run `uv run pytest -m integration tests/integration/test_newton_native_runtime.py -q`. Add `test_native_replay_direct_and_residual_reset` and `test_offline_bias_matches_live_replay_bias` with nonzero q/qd and MuJoCo `dof_ref`; compare the latter against `mj_forward(...).qfrc_bias`. New regression tests may already pass because this is a compatibility upgrade; do not manufacture failures or change physics to make them red.
 - [x] **Step 3: Fix only demonstrated API incompatibilities.** Preserve native target arrays, modes, reset order, and `joint_target_q_start` indexing. Keep the training replay product on native MuJoCo. Warm up real graphs outside capture and restore state before measuring.
 - [x] **Step 4: Run Stage 1 acceptance.** Run the complete gate below, including existing SO-101 two-generation/six-world export-MSE and held-out accuracy assertions plus G1 residual/full-torque training. Keep SO-101 MSE tolerance `rel=1e-4, abs=1e-7`. Diagnose changed outcomes instead of lowering thresholds. GPU-only claims require observed CUDA results.
-- [ ] **Step 5: Review, commit, and prepare PR 1.** Commit compatibility coverage/fixes as `test: verify native simulation against pinned Newton`. Use independent agents on native sysID versus training/bias tests with disjoint files. Review the combined branch, then prepare its own draft PR and attach it.
+- [x] **Step 5: Review, commit, and prepare PR 1.** Commit compatibility coverage/fixes as `test: verify native simulation against pinned Newton`. Use independent agents on native sysID versus training/bias tests with disjoint files. Review the combined branch, then prepare its own draft PR and attach it.
 
 ## PR 2: Simulator-pluggable sysID
 
