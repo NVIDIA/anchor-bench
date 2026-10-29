@@ -1,7 +1,7 @@
 # Pluggable sysID backends and configurable Newton solvers
 
 Date: 2026-10-29
-Status: Builder-reviewed draft; awaiting design approval
+Status: Approved on 2026-10-29; implementation plan in review
 
 ## Intent and agreed scope
 
