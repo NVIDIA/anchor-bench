@@ -94,7 +94,6 @@ class _NewtonTrajectoryRunner:
     """Replay measured commands using actuator properties authored in one USD."""
 
     def __init__(self, config: ActuatorSysIdConfig) -> None:
-        newton.use_coord_layout_targets = True
         builder = newton.ModelBuilder()
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
         builder.add_usd(
@@ -102,6 +101,9 @@ class _NewtonTrajectoryRunner:
             floating=False,
         )
         self._model = builder.finalize()
+        self._collision_pipeline = newton.CollisionPipeline(
+            self._model, broad_phase="explicit"
+        )
         self._solver = newton.solvers.SolverMuJoCo(
             self._model,
             solver="newton",
@@ -110,7 +112,7 @@ class _NewtonTrajectoryRunner:
             integrator=config.simulation.solver.integrator,
         )
         self._newton = newton
-        self._contacts = self._model.contacts()
+        self._contacts = self._collision_pipeline.contacts()
         self._control_dt = 1.0 / config.simulation.control_freq
         self._substeps = (
             config.simulation.physics_freq // config.simulation.control_freq
