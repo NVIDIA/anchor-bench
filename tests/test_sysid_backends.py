@@ -33,24 +33,23 @@ class ToyContext(SimulationContext[object, object]):
         return object(), object()
 
 
-def toy_registration(name: str = "toy") -> registry.SimulationBackend:
-    return registry.SimulationBackend(
-        name=name,
-        context_type=ToyContext,
-        sysid=registry.SysIdBackend(
-            config_model=ToyConfig,
-            create_context=lambda config: ToyContext(
-                usd_path=config.simulation.usd_path
-            ),
-            create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
-        ),
+def toy_registration(name: str = "toy") -> None:
+    registry.register_simulation_backend(
+        name,
+        ToyContext,
+        config_model=ToyConfig,
+        create_context=lambda config: ToyContext(usd_path=config.simulation.usd_path),
+        create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
     )
 
 
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch: pytest.MonkeyPatch):
     registry.discover_sysid_backends()
-    monkeypatch.setattr(registry, "_BACKENDS", registry._BACKENDS.copy())
+    monkeypatch.setattr(
+        registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
+    )
+    monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
     monkeypatch.setattr(registry, "_DISCOVERED", False)
     monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [])
     monkeypatch.setattr(SimulationContext, "_instance", None)
@@ -100,7 +99,7 @@ def toy_task_data(tmp_path):
 
 
 def test_plugin_simulation_roundtrips_without_losing_fields(toy_task_data):
-    registry.register_simulation_backend(toy_registration())
+    toy_registration()
     config = ActuatorSysIdConfig.model_validate(toy_task_data)
     assert isinstance(config.simulation, ToyConfig)
     assert config.simulation.gain == 2
@@ -115,7 +114,7 @@ def test_plugin_simulation_roundtrips_without_losing_fields(toy_task_data):
 
 @pytest.mark.parametrize("patch", [{"gain": "2"}, {"extra": 1}, {"control_freq": 300}])
 def test_plugin_simulation_is_strict(toy_task_data, patch):
-    registry.register_simulation_backend(toy_registration())
+    toy_registration()
     toy_task_data["simulation"].update(patch)
     with pytest.raises(ValidationError):
         ActuatorSysIdConfig.model_validate(toy_task_data)
@@ -130,7 +129,7 @@ def test_discovery_is_idempotent(monkeypatch):
     registry.discover_sysid_backends()
     registry.discover_sysid_backends()
     assert loads == ["load"]
-    assert registry.get_sysid_backend("toy").config_model is ToyConfig
+    assert registry.get_sysid_callbacks("toy")["config_model"] is ToyConfig
 
 
 def test_discovery_error_does_not_leave_partial_registration(monkeypatch):
@@ -142,6 +141,7 @@ def test_discovery_error_does_not_leave_partial_registration(monkeypatch):
     with pytest.raises(SimulationBackendError, match="broken"):
         registry.discover_sysid_backends()
     assert "toy" not in registry.SIMULATION_CONTEXTS
+    assert "toy" not in registry._SYSID_CALLBACKS
     assert not registry._DISCOVERED
     monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [first])
     registry.discover_sysid_backends()
@@ -163,20 +163,19 @@ def test_entry_point_name_must_match_registration(monkeypatch):
     with pytest.raises(SimulationBackendError, match="name"):
         registry.discover_sysid_backends()
     assert "toy" not in registry.SIMULATION_CONTEXTS
+    assert "toy" not in registry._SYSID_CALLBACKS
 
 
 def test_python_registration_rejects_duplicate_names():
-    registry.register_simulation_backend(toy_registration())
+    toy_registration()
     with pytest.raises(SimulationBackendError, match="already registered"):
-        registry.register_simulation_backend(toy_registration())
+        toy_registration()
     with pytest.raises(SimulationBackendError, match="already registered"):
-        registry.register_simulation_backend(toy_registration("newton"))
+        toy_registration("newton")
 
 
 def test_registered_backend_without_sysid_fails_early(toy_task_data):
-    registry.register_simulation_backend(
-        registry.SimulationBackend("toy", ToyContext, None)
-    )
+    registry.register_simulation_backend("toy", ToyContext)
     with pytest.raises(SimulationBackendError, match="system identification"):
         ActuatorSysIdConfig.model_validate(toy_task_data)
 
@@ -185,13 +184,12 @@ def test_wrong_concrete_context_factory_is_rejected(toy_task_data):
     class OtherContext(ToyContext):
         pass
 
-    capability = registry.SysIdBackend(
+    registry.register_simulation_backend(
+        "toy",
+        ToyContext,
         config_model=ToyConfig,
         create_context=lambda config: OtherContext(config.simulation.usd_path),
         create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
-    )
-    registry.register_simulation_backend(
-        registry.SimulationBackend("toy", ToyContext, capability)
     )
     config = ActuatorSysIdConfig.model_validate(toy_task_data)
     with pytest.raises(SimulationBackendError, match="context type"):
@@ -210,7 +208,7 @@ def test_discovery_loads_providers_in_metadata_name_order(monkeypatch):
     def entry(name):
         def load():
             loaded.append(name)
-            return lambda: registry.SimulationBackend(name, ToyContext)
+            return lambda: registry.register_simulation_backend(name, ToyContext)
 
         return SimpleNamespace(name=name, load=load)
 
@@ -226,7 +224,7 @@ def test_discovery_loads_providers_in_metadata_name_order(monkeypatch):
     [
         None,
         lambda: object(),
-        lambda: registry.SimulationBackend("toy", cast(Any, object)),
+        lambda: registry.register_simulation_backend("toy", cast(Any, object)),
     ],
 )
 def test_invalid_plugin_capabilities_fail_atomically(monkeypatch, provider):
@@ -235,6 +233,7 @@ def test_invalid_plugin_capabilities_fail_atomically(monkeypatch, provider):
     with pytest.raises(SimulationBackendError):
         registry.discover_sysid_backends()
     assert "toy" not in registry.SIMULATION_CONTEXTS
+    assert "toy" not in registry._SYSID_CALLBACKS
     assert not registry._DISCOVERED
 
 
@@ -262,7 +261,7 @@ def test_entry_point_enumeration_errors_are_wrapped_and_retryable(monkeypatch):
 
 def test_provider_registration_side_effects_are_rolled_back(monkeypatch):
     def broken():
-        registry.register_simulation_backend(toy_registration())
+        toy_registration()
         raise RuntimeError("provider failed")
 
     entry = SimpleNamespace(name="toy", load=lambda: broken)
@@ -270,6 +269,7 @@ def test_provider_registration_side_effects_are_rolled_back(monkeypatch):
     with pytest.raises(SimulationBackendError, match="provider failed"):
         registry.discover_sysid_backends()
     assert "toy" not in registry.SIMULATION_CONTEXTS
+    assert "toy" not in registry._SYSID_CALLBACKS
 
 
 def test_validation_discovers_before_dispatch(monkeypatch, toy_task_data):
@@ -296,7 +296,7 @@ def test_yaml_parser_discovers_before_dispatch(monkeypatch, toy_task_data, tmp_p
 
 
 def test_plugin_simulation_requires_usd_input(toy_task_data):
-    registry.register_simulation_backend(toy_registration())
+    toy_registration()
     toy_task_data["simulation"].pop("usd_path", None)
     with pytest.raises(ValidationError, match="usd_path"):
         ActuatorSysIdConfig.model_validate(toy_task_data)

@@ -30,10 +30,3 @@ def test_rejects_unknown_backend() -> None:
 
     with pytest.raises(ValueError, match="Unknown simulation backend 'missing'"):
         create_simulation_context("missing", "robot.usda")
-
-
-def test_registry_exposes_typed_sysid_registration() -> None:
-    from anchor_bench.core.simulation import registry
-
-    assert hasattr(registry, "SysIdBackend")
-    assert hasattr(registry, "register_simulation_backend")

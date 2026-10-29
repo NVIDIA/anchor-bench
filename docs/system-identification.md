@@ -118,23 +118,16 @@ the resolved USD path and returns the model and initial state.
 Register these components through the Python API before validating a task:
 
 ```python
-from anchor_bench.core.simulation.registry import (
-    SimulationBackend,
-    SysIdBackend,
-    register_simulation_backend,
-)
+from anchor_bench.core.simulation.registry import register_simulation_backend
 
-registration = SimulationBackend(
-    name="my_simulator",
-    context_type=MySimulationContext,
-    sysid=SysIdBackend(
-        config_model=MySimulationConfig,
-        create_context=create_context,
-        create_evaluator=create_evaluator,
-        export_model=export_model,
-    ),
+register_simulation_backend(
+    "my_simulator",
+    MySimulationContext,
+    config_model=MySimulationConfig,
+    create_context=create_context,
+    create_evaluator=create_evaluator,
+    export_model=export_model,
 )
-register_simulation_backend(registration)
 ```
 
 The classes and callbacks in this example are supplied by the plugin.
@@ -145,15 +138,30 @@ finite position-MSE score per decoded candidate. The evaluator owns its
 simulator's candidate application, resets, command delay, buffer exclusion,
 actuation, and stepping. The task retains dataset loading and optimization.
 
-An installed package can expose a zero-argument provider that returns the
-`SimulationBackend` registration, using this entry-point group:
+An installed package can expose a zero-argument provider that registers its
+components with the same function call:
+
+```python
+def provide_backend() -> None:
+    register_simulation_backend(
+        "my_simulator",
+        MySimulationContext,
+        config_model=MySimulationConfig,
+        create_context=create_context,
+        create_evaluator=create_evaluator,
+        export_model=export_model,
+    )
+```
+
+Declare the provider using this entry-point group:
 
 ```toml
 [project.entry-points."anchor_bench.sysid_backends"]
 my_simulator = "my_package.backend:provide_backend"
 ```
 
-The entry-point name, registration name, and configuration `type` must agree.
+The provider returns `None`. The entry-point name, registered name, and
+configuration `type` must agree.
 Discovery runs before direct configuration validation and YAML parsing;
 duplicate names and invalid providers fail before optimization. Select the
 backend using `simulation.type: my_simulator` and provide its configuration

@@ -15,7 +15,6 @@ import pytest
 import yaml
 
 from anchor_bench.core.simulation import SimulationContext, registry
-from anchor_bench.core.simulation.registry import SimulationBackend, SysIdBackend
 from anchor_bench.core.task_runner import TaskRunner
 from anchor_bench.errors import DatasetAlignmentError, SimulationBackendError
 from anchor_bench.mlops import MLOpsRun, bind_active_run
@@ -104,7 +103,10 @@ class ToyContext(SimulationContext[object, object]):
 @pytest.fixture
 def register_toy(monkeypatch, tmp_path):
     monkeypatch.setattr(SimulationContext, "_instance", None)
-    monkeypatch.setattr(registry, "_BACKENDS", registry._BACKENDS.copy())
+    monkeypatch.setattr(
+        registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
+    )
+    monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
     monkeypatch.setattr(registry, "_DISCOVERED", True)
 
     def register(create_evaluator, *, export_model=None, describe_runtime=None):
@@ -118,17 +120,13 @@ def register_toy(monkeypatch, tmp_path):
             return context
 
         registry.register_simulation_backend(
-            SimulationBackend(
-                "task-toy",
-                ToyContext,
-                SysIdBackend(
-                    ToySimulationConfig,
-                    create_context,
-                    create_evaluator,
-                    export_model,
-                    describe_runtime,
-                ),
-            )
+            "task-toy",
+            ToyContext,
+            config_model=ToySimulationConfig,
+            create_context=create_context,
+            create_evaluator=create_evaluator,
+            export_model=export_model,
+            describe_runtime=describe_runtime,
         )
         config = _config(
             tmp_path,
@@ -527,9 +525,12 @@ def test_export_failure_prevents_completion(tmp_path, monkeypatch, register_toy)
 
 def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
     config = _config(tmp_path)
-    monkeypatch.setattr(registry, "_BACKENDS", registry._BACKENDS.copy())
+    monkeypatch.setattr(
+        registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
+    )
+    monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
     monkeypatch.setattr(registry, "_DISCOVERED", True)
-    registry.register_simulation_backend(SimulationBackend("resource-only", ToyContext))
+    registry.register_simulation_backend("resource-only", ToyContext)
     config.simulation = SysIdSimulationConfig(
         usd_path=config.simulation.usd_path,
         type="resource-only",

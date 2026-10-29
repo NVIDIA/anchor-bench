@@ -137,21 +137,21 @@ class ActuatorSysIdConfig(BaseConfig):
     @field_validator("simulation", mode="before")
     @classmethod
     def dispatch_simulation(cls, value: object) -> SysIdSimulationConfig:
-        from anchor_bench.core.simulation.registry import get_sysid_backend
+        from anchor_bench.core.simulation.registry import get_sysid_callbacks
 
         if isinstance(value, SysIdSimulationConfig):
-            backend = get_sysid_backend(value.type)
-            if type(value) is not backend.config_model:
+            callbacks = get_sysid_callbacks(value.type)
+            if type(value) is not callbacks["config_model"]:
                 raise ValueError(
                     "simulation config must use the registered config model"
                 )
-            return backend.config_model.model_validate(value.model_dump())
+            return callbacks["config_model"].model_validate(value.model_dump())
         if not isinstance(value, dict):
             raise ValueError("simulation must be a configuration object")  # noqa: TRY004 - Pydantic validation errors require ValueError
         backend_name = value.get("type")
         if not isinstance(backend_name, str):
             raise ValueError("simulation must define a string type")  # noqa: TRY004 - Pydantic validation errors require ValueError
-        return get_sysid_backend(backend_name).config_model.model_validate(value)
+        return get_sysid_callbacks(backend_name)["config_model"].model_validate(value)
 
     @model_validator(mode="after")
     def validate_task_invariants(self) -> ActuatorSysIdConfig:

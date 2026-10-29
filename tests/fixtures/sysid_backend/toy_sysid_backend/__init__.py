@@ -14,7 +14,7 @@ from typing import Any, Literal
 import numpy as np
 
 from anchor_bench.core.simulation import SimulationContext
-from anchor_bench.core.simulation.registry import SimulationBackend, SysIdBackend
+from anchor_bench.core.simulation.registry import register_simulation_backend
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.simulation import SysIdSimulationConfig
 from anchor_bench.tasks.actuator_sys_id.model import (
@@ -106,26 +106,22 @@ def export_model(
     return IdentifiedModelArtifact(path=path, format="json")
 
 
-def provide_json() -> SimulationBackend:
-    return SimulationBackend(
-        name="toy-sysid",
-        context_type=ToyContext,
-        sysid=SysIdBackend(
-            config_model=ToyConfig,
-            create_context=create_context,
-            create_evaluator=create_evaluator,
-            export_model=export_model,
-        ),
+def provide_json() -> None:
+    register_simulation_backend(
+        "toy-sysid",
+        ToyContext,
+        config_model=ToyConfig,
+        create_context=create_context,
+        create_evaluator=create_evaluator,
+        export_model=export_model,
     )
 
 
-def provide_no_export() -> SimulationBackend:
-    return SimulationBackend(
-        name="toy-sysid",
-        context_type=ToyContext,
-        sysid=SysIdBackend(
-            config_model=ToyConfig,
-            create_context=create_context,
-            create_evaluator=create_evaluator,
-        ),
+def provide_no_export() -> None:
+    register_simulation_backend(
+        "toy-sysid",
+        ToyContext,
+        config_model=ToyConfig,
+        create_context=create_context,
+        create_evaluator=create_evaluator,
     )

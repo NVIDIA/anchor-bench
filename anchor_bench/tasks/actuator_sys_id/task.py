@@ -10,7 +10,7 @@ from pathlib import Path
 
 from anchor_bench.core.simulation.registry import (
     create_sysid_context,
-    get_sysid_backend,
+    get_sysid_callbacks,
 )
 from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
@@ -30,7 +30,7 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
     """Fit actuator parameters with the configured simulation backend."""
 
     def run(self, output_directory: Path) -> Path:
-        backend = get_sysid_backend(self.config.simulation.type)
+        callbacks = get_sysid_callbacks(self.config.simulation.type)
         mlops_run = get_active_run()
         joint_names = [
             joint for group in self.config.joint_parameters for joint in group.names
@@ -46,7 +46,7 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
         context = create_sysid_context(self.config)
-        evaluator = backend.create_evaluator(self.config, parameter_space, context)
+        evaluator = callbacks["create_evaluator"](self.config, parameter_space, context)
         objective = ActuatorSysIdObjective(
             parameter_space,
             evaluator,
@@ -84,15 +84,15 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
 
         best_parameters = parameter_space.decode(optimizer.best_candidate)
         model_artifact = (
-            backend.export_model(
+            callbacks["export_model"](
                 self.config, best_parameters, context, output_directory
             )
-            if backend.export_model is not None
+            if callbacks["export_model"] is not None
             else None
         )
         runtime_simulation = (
-            backend.describe_runtime(evaluator)
-            if backend.describe_runtime is not None
+            callbacks["describe_runtime"](evaluator)
+            if callbacks["describe_runtime"] is not None
             else None
         )
         write_artifacts(
