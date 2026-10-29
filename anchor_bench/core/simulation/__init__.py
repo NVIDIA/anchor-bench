@@ -93,7 +93,7 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
         """Load and cache the model and state on first use."""
 
         if self._model is None or self._state is None:
-            model, state = self._load()
+            model, state = self._load(self._usd_path)
             self._model = model
             self._state = state
         return self._model, self._state
@@ -113,6 +113,6 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
         return state
 
     @abstractmethod
-    def _load(self) -> Tuple[ModelT, StateT]:
+    def _load(self, usd_path: Path) -> Tuple[ModelT, StateT]:
         """Load a backend model and initial state from the assigned USD."""
         raise NotImplementedError

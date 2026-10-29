@@ -35,9 +35,9 @@ class ToyConfig(SysIdSimulationConfig):
 class ToyContext(SimulationContext[float, float]):
     """Load the scalar response scale from the shared USD input."""
 
-    def _load(self) -> tuple[float, float]:
+    def _load(self, usd_path: Path) -> tuple[float, float]:
         usd = import_module("pxr.Usd")
-        stage = usd.Stage.Open(str(self.usd_path))
+        stage = usd.Stage.Open(str(usd_path))
         if stage is None:
             raise ValueError("Could not open the response USD")
         scale = stage.GetPrimAtPath("/response").GetAttribute("gain_scale").Get()

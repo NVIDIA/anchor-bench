@@ -142,7 +142,7 @@ class FakeSolver:
 class OtherSimulationContext(SimulationContext):
     """Represent a second backend for singleton enforcement tests."""
 
-    def _load(self) -> Tuple[Any, Any]:
+    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
         """Return placeholder backend objects."""
 
         return object(), object()

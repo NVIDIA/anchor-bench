@@ -112,8 +112,8 @@ and population evaluator. Its configuration extends
 required `usd_path` and timing fields, and declaring its own `type` and simulator
 settings. Its context extends `SimulationContext(usd_path, *, fixed_base=False)`.
 The shared context resolves and validates the USD path and protects reuse by
-backend class, resolved path, and base mode. Its parameterless `_load()` reads
-`self.usd_path` and returns the model and initial state.
+backend class, resolved path, and base mode. Its `_load(usd_path)` receives
+the resolved USD path and returns the model and initial state.
 
 Register these components through the Python API before validating a task:
 

@@ -18,8 +18,9 @@ class ToyContext(SimulationContext[object, object]):
 
     load_count = 0
 
-    def _load(self) -> tuple[object, object]:
-        assert self.usd_path.read_text() == "#usda 1.0\n"
+    def _load(self, usd_path: Path) -> tuple[object, object]:
+        assert usd_path == self.usd_path
+        assert usd_path.read_text() == "#usda 1.0\n"
         self.load_count += 1
         return object(), object()
 

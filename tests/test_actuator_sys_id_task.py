@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+from pathlib import Path
 from typing import Literal
 from unittest.mock import Mock
 
@@ -96,7 +97,7 @@ class ToySimulationConfig(SysIdSimulationConfig):
 
 
 class ToyContext(SimulationContext[object, object]):
-    def _load(self):
+    def _load(self, usd_path: Path):
         return object(), object()
 
 

@@ -31,7 +31,7 @@ class ToyConfig(SysIdSimulationConfig):
 
 
 class ToyContext(SimulationContext[object, object]):
-    def _load(self) -> tuple[object, object]:
+    def _load(self, usd_path: Path) -> tuple[object, object]:
         return object(), object()
 
 

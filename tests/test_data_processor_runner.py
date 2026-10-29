@@ -80,7 +80,7 @@ class FakeNewtonArray:
 class RunnerSimulationContext(SimulationContext):
     """Provide the shared context required by runner data processors."""
 
-    def _load(self) -> tuple[Any, Any]:
+    def _load(self, usd_path: Path) -> tuple[Any, Any]:
         """Return inert model and state objects."""
 
         model = SimpleNamespace(

@@ -44,7 +44,7 @@ class DifferenceDataProcessor(BaseDataProcessor):
 
 
 class RecordingSimulationContext(SimulationContext):
-    def _load(self) -> Tuple[Any, Any]:
+    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
         """Provide the model consumed through the current shared context."""
 
         return SimpleNamespace(

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Hashable
+from pathlib import Path
 from typing import Any, Callable, Mapping, Tuple
 
 import newton
@@ -184,7 +185,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         self._step_executor.step(dt=dt, substeps=substeps)
         self._state = self._step_executor.state
 
-    def _load(self) -> Tuple[newton.Model, newton.State]:
+    def _load(self, usd_path: Path) -> Tuple[newton.Model, newton.State]:
         """Return the owned model and current state, initializing if needed."""
 
         self._ensure_initialized()
