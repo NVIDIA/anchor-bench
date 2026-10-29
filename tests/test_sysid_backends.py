@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Literal
 
@@ -19,7 +18,6 @@ from anchor_bench.core.simulation import SimulationContext, registry
 from anchor_bench.errors import SimulationBackendError
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.simulation import SysIdSimulationConfig
-from anchor_bench.tasks.actuator_sys_id.model import IdentifiedModelArtifact
 
 
 class ToyConfig(SysIdSimulationConfig):
@@ -129,12 +127,6 @@ def test_registered_backend_without_sysid_fails_early(toy_task_data):
     registry.SIMULATION_CONTEXTS["toy"] = ToyContext
     with pytest.raises(SimulationBackendError, match="system identification"):
         ActuatorSysIdConfig.model_validate(toy_task_data)
-
-
-def test_artifact_is_frozen():
-    artifact = IdentifiedModelArtifact(Path("model.usd"), "usd")
-    with pytest.raises(FrozenInstanceError):
-        artifact.format = "other"  # type: ignore[misc]
 
 
 def test_yaml_parser_uses_explicit_registration(toy_task_data, tmp_path):

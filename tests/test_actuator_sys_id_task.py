@@ -414,7 +414,6 @@ def test_task_uses_registered_evaluator_and_context(
         "json",
     )
     assert written["runtime_simulation"] == {"type": "task-toy", "effective_gain": 2.0}
-    assert written["config"] is config
     assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
     assert written["history"] == [
         GenerationRecord(generation=0, best_mse=0.25, population_mean_mse=0.625)
@@ -451,7 +450,6 @@ def test_common_artifacts_allow_missing_or_json_model_export(
     }
     output_dir = tmp_path / "output"
     output_dir.mkdir()
-    config = _config(tmp_path)
     model_artifact = None
     if model_format is not None:
         # Deliberately use the USD suffix for JSON: compatibility depends on format.
@@ -473,7 +471,6 @@ def test_common_artifacts_allow_missing_or_json_model_export(
         best_parameters=candidate,
         best_mse=0.125,
         history=[GenerationRecord(0, 0.125, 0.5)],
-        config=config,
         model_artifact=model_artifact,
         runtime_simulation={"type": "toy", "solver": {"iterations": 8}},
     )

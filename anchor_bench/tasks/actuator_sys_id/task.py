@@ -97,7 +97,6 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             best_parameters=best_parameters,
             best_mse=optimizer.best_score,
             history=history,
-            config=self.config,
             model_artifact=model_artifact,
             runtime_simulation=runtime_simulation,
         )

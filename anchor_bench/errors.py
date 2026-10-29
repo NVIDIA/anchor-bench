@@ -41,4 +41,4 @@ class MLOpsTrackingError(MLOpsError):
 
 
 class SimulationBackendError(AnchorBenchError):
-    """Raised when simulation backend registration or discovery fails."""
+    """Raised when simulation backend registration or selection fails."""

@@ -12,7 +12,6 @@ from pathlib import Path
 
 import yaml
 
-from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.simulation import JsonValue
 from anchor_bench.tasks.actuator_sys_id.model import (
     Candidate,
@@ -28,7 +27,6 @@ def write_artifacts(
     best_parameters: Candidate,
     best_mse: float,
     history: Sequence[GenerationRecord],
-    config: ActuatorSysIdConfig,
     model_artifact: IdentifiedModelArtifact | None = None,
     runtime_simulation: Mapping[str, JsonValue] | None = None,
 ) -> SysIdResult:
