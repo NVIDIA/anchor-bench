@@ -1,0 +1,124 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""A path-free installed backend for exercising the real sysID CLI."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Literal, cast
+
+import numpy as np
+
+from anchor_bench.core.simulation import SimulationContext
+from anchor_bench.core.simulation.registry import SimulationBackend, SysIdBackend
+from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.simulation import SysIdSimulationConfig
+from anchor_bench.tasks.actuator_sys_id.model import (
+    Candidate,
+    IdentifiedModelArtifact,
+    Trajectory,
+)
+from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray
+from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
+
+
+class ToyConfig(SysIdSimulationConfig):
+    type: Literal["toy-sysid"] = "toy-sysid"  # pyright: ignore[reportIncompatibleVariableOverride]
+    gain: float
+    model_name: str
+
+
+class ToyContext(SimulationContext[float, float]):
+    """Load a scalar response model without any USD resource."""
+
+    def _load(self) -> tuple[float, float]:
+        _, gain = cast(tuple[str, float], self.resource_key)
+        return float(gain), 0.0
+
+
+class ToyEvaluator:
+    def __init__(self, context: ToyContext) -> None:
+        self._gain = context.model
+
+    def evaluate(
+        self,
+        population: Sequence[Candidate],
+        trajectories: Sequence[Trajectory],
+    ) -> FloatArray:
+        scores = []
+        for candidate in population:
+            squared_errors = []
+            for trajectory in trajectories:
+                stiffness = candidate[trajectory.joint_names[0]]["stiffness"]
+                predicted = trajectory.commanded_position * stiffness / self._gain
+                squared_errors.extend(
+                    np.square(predicted - trajectory.measured_position).ravel()
+                )
+            scores.append(float(np.mean(squared_errors)))
+        return np.asarray(scores, dtype=np.float64)
+
+
+def create_context(config: ActuatorSysIdConfig) -> ToyContext:
+    simulation = config.simulation
+    if not isinstance(simulation, ToyConfig):
+        raise TypeError("toy backend requires its registered config model")
+    return ToyContext(resource_key=(simulation.model_name, simulation.gain))
+
+
+def create_evaluator(
+    config: ActuatorSysIdConfig,
+    space: ParameterSpace,
+    context: SimulationContext[Any, Any],
+) -> ToyEvaluator:
+    if not isinstance(context, ToyContext):
+        raise TypeError("toy evaluator requires its registered context")
+    return ToyEvaluator(context)
+
+
+def export_model(
+    config: ActuatorSysIdConfig,
+    best: Candidate,
+    context: SimulationContext[Any, Any],
+    output: Path,
+) -> IdentifiedModelArtifact:
+    path = output / "identified.json"
+    path.write_text(
+        json.dumps(
+            {
+                "parameters": best,
+                "simulation": config.simulation.model_dump(mode="json"),
+                "gain": context.model,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return IdentifiedModelArtifact(path=path, format="json")
+
+
+def provide_json() -> SimulationBackend:
+    return SimulationBackend(
+        name="toy-sysid",
+        context_type=ToyContext,
+        sysid=SysIdBackend(
+            config_model=ToyConfig,
+            create_context=create_context,
+            create_evaluator=create_evaluator,
+            export_model=export_model,
+        ),
+    )
+
+
+def provide_no_export() -> SimulationBackend:
+    return SimulationBackend(
+        name="toy-sysid",
+        context_type=ToyContext,
+        sysid=SysIdBackend(
+            config_model=ToyConfig,
+            create_context=create_context,
+            create_evaluator=create_evaluator,
+        ),
+    )

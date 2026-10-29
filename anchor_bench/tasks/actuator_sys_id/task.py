@@ -8,6 +8,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from anchor_bench.core.simulation.registry import (
+    create_sysid_context,
+    get_sysid_backend,
+)
 from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -17,16 +21,16 @@ from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord
 from anchor_bench.tasks.actuator_sys_id.objective import ActuatorSysIdObjective
 from anchor_bench.tasks.actuator_sys_id.optimizer import create_optimizer
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
-from anchor_bench.tasks.actuator_sys_id.simulation import NewtonPopulationEvaluator
 from anchor_bench.tasks.base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
 
 class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
-    """Fit actuator parameters by replaying recorded commands in Newton."""
+    """Fit actuator parameters with the configured simulation backend."""
 
     def run(self, output_directory: Path) -> Path:
+        backend = get_sysid_backend(self.config.simulation.type)
         mlops_run = get_active_run()
         joint_names = [
             joint for group in self.config.joint_parameters for joint in group.names
@@ -41,7 +45,8 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
-        evaluator = NewtonPopulationEvaluator(self.config, parameter_space)
+        context = create_sysid_context(self.config)
+        evaluator = backend.create_evaluator(self.config, parameter_space, context)
         objective = ActuatorSysIdObjective(
             parameter_space,
             evaluator,
@@ -78,13 +83,26 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             )
 
         best_parameters = parameter_space.decode(optimizer.best_candidate)
+        model_artifact = (
+            backend.export_model(
+                self.config, best_parameters, context, output_directory
+            )
+            if backend.export_model is not None
+            else None
+        )
+        runtime_simulation = (
+            backend.describe_runtime(evaluator)
+            if backend.describe_runtime is not None
+            else None
+        )
         write_artifacts(
             output_directory,
             best_parameters=best_parameters,
             best_mse=optimizer.best_score,
             history=history,
-            source_usd_path=self.config.simulation.usd_path,
             config=self.config,
+            model_artifact=model_artifact,
+            runtime_simulation=runtime_simulation,
         )
         # Upload only after every SysID output file is finalized. TaskRunner
         # separately owns the completion marker and tracked-run status.

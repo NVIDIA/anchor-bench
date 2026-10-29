@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
+from collections.abc import Hashable
 from typing import Any, ClassVar, Generic, Optional, Tuple, TypeVar, cast
 
 from typing_extensions import Self
@@ -19,54 +19,40 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
     """Own the single lazily loaded simulation model and state."""
 
     _instance: ClassVar[Optional[SimulationContext[Any, Any]]] = None
-    _usd_path: Path
-    _fixed_base: bool
+    _resource_key: Hashable
     _model: Optional[ModelT]
     _state: Optional[StateT]
 
-    def __new__(
-        cls,
-        usd_path: str,
-        *,
-        fixed_base: bool = False,
-    ) -> Self:
-        """Create or return the process-wide simulation context."""
+    def __new__(cls, *, resource_key: Hashable) -> Self:
+        """Create or return the process-wide context for a hashable resource."""
 
-        source = Path(usd_path).expanduser().resolve()
+        try:
+            hash(resource_key)
+        except TypeError as exc:
+            raise TypeError("resource_key must be hashable.") from exc
+
         current = SimulationContext._instance
         if current is not None:
             if type(current) is not cls:
                 raise RuntimeError(
                     "Only one simulation backend can be used per process."
                 )
-            if current.usd_path != source:
+            if current.resource_key != resource_key:
                 raise RuntimeError(
-                    f"Simulation context already uses {current.usd_path}."
-                )
-            if current.fixed_base != fixed_base:
-                raise RuntimeError(
-                    "Simulation context already uses a different base mode."
+                    "Simulation context already uses resource key "
+                    f"{current.resource_key!r}."
                 )
             return cast(Self, current)
 
-        if not source.is_file():
-            raise FileNotFoundError(f"USD file does not exist: {source}.")
-
         instance = super().__new__(cls)
-        instance._usd_path = source
-        instance._fixed_base = fixed_base
+        instance._resource_key = resource_key
         instance._model = None
         instance._state = None
         SimulationContext._instance = instance
         return instance
 
-    def __init__(
-        self,
-        usd_path: str,
-        *,
-        fixed_base: bool = False,
-    ) -> None:
-        """Accept the mandatory USD path handled during construction."""
+    def __init__(self, *, resource_key: Hashable) -> None:
+        """Accept the mandatory resource identity handled during construction."""
 
     @classmethod
     def current(cls) -> Self:
@@ -78,22 +64,16 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
         return cast(Self, instance)
 
     @property
-    def usd_path(self) -> Path:
-        """Return the USD file assigned to this process."""
+    def resource_key(self) -> Hashable:
+        """Return the backend-defined resource identity assigned to this process."""
 
-        return self._usd_path
-
-    @property
-    def fixed_base(self) -> bool:
-        """Return whether the imported robot root is fixed."""
-
-        return self._fixed_base
+        return self._resource_key
 
     def load(self) -> Tuple[ModelT, StateT]:
         """Load and cache the model and state on first use."""
 
         if self._model is None or self._state is None:
-            model, state = self._load(self._usd_path)
+            model, state = self._load()
             self._model = model
             self._state = state
         return self._model, self._state
@@ -113,6 +93,6 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
         return state
 
     @abstractmethod
-    def _load(self, usd_path: Path) -> Tuple[ModelT, StateT]:
-        """Load a backend model and initial state from the assigned USD."""
+    def _load(self) -> Tuple[ModelT, StateT]:
+        """Load a backend model and initial state for the assigned resource."""
         raise NotImplementedError

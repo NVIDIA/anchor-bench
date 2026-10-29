@@ -101,8 +101,69 @@ uv run anchor-bench \
 ```
 
 The runtime loads the configured trajectories, evaluates optimizer candidates
-in Newton, and stops when the optimizer reaches its iteration or convergence
-condition.
+with the selected simulator backend, and stops when the optimizer reaches its
+iteration or convergence condition.
+
+## Register another simulator
+
+A backend supplies its own strict simulation configuration, resource context,
+and population evaluator. Its configuration extends
+`anchor_bench.schema.simulation.SysIdSimulationConfig`, retaining the shared
+timing fields and declaring its own `type` and simulator settings. Its context
+extends `SimulationContext` with a hashable `resource_key` and a parameterless
+`_load()` that returns its model and initial state.
+
+Register these components through the Python API before validating a task:
+
+```python
+from anchor_bench.core.simulation.registry import (
+    SimulationBackend,
+    SysIdBackend,
+    register_simulation_backend,
+)
+
+registration = SimulationBackend(
+    name="my_simulator",
+    context_type=MySimulationContext,
+    sysid=SysIdBackend(
+        config_model=MySimulationConfig,
+        create_context=create_context,
+        create_evaluator=create_evaluator,
+        export_model=export_model,
+    ),
+)
+register_simulation_backend(registration)
+```
+
+The classes and callbacks in this example are supplied by the plugin.
+`create_context(config)` returns the registered context type.
+`create_evaluator(config, parameter_space, context)` receives that same context
+and returns an object implementing `evaluate(population, trajectories)`: one
+finite position-MSE score per decoded candidate. The evaluator owns its
+simulator's candidate application, resets, command delay, buffer exclusion,
+actuation, and stepping. The task retains dataset loading and optimization.
+
+An installed package can expose a zero-argument provider that returns the
+`SimulationBackend` registration, using this entry-point group:
+
+```toml
+[project.entry-points."anchor_bench.sysid_backends"]
+my_simulator = "my_package.backend:provide_backend"
+```
+
+The entry-point name, registration name, and configuration `type` must agree.
+Discovery runs before direct configuration validation and YAML parsing;
+duplicate names and invalid providers fail before optimization. Select the
+backend using `simulation.type: my_simulator` and provide its configuration
+fields. Plugin fields survive configuration serialization and hashing.
+
+Model export is optional. An exporter receives `(config, best_parameters,
+context, output_directory)` and returns an `IdentifiedModelArtifact(path,
+format)` or `None`. The result exposes the returned path through
+`SysIdResult.identified_model_path`; only an explicit `format="usd"` also
+supplies the compatibility `identified_usd_path`. An optional
+`describe_runtime(evaluator)` callback returns
+JSON-compatible runtime settings for `run_summary.yaml`.
 
 ## Artifacts
 
@@ -114,7 +175,7 @@ run writes:
 | `best_params.yaml` | Best candidate, position MSE, and result schema metadata. |
 | `optimization_log.csv` | Best and population-mean MSE for each generation. |
 | `run_summary.yaml` | Timestamp, best MSE, metric name, and generation count. |
-| `identified.usda` | USD layer containing the fitted actuator opinions. |
+| `identified.usda` | Newton's USD layer containing the fitted actuator opinions. Other backends can export a different format or omit model export. |
 
 When MLOps tracking is enabled, the task also reports per-generation metrics
 and uploads the finalized directory as the `sysid-output` artifact collection.

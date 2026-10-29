@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import builtins
+import importlib
+from typing import Literal
 from unittest.mock import Mock
 
 import numpy as np
@@ -10,14 +13,23 @@ import pandas as pd
 import pytest
 import yaml
 
-from anchor_bench.errors import DatasetAlignmentError
+from anchor_bench.core.simulation import SimulationContext, registry
+from anchor_bench.core.simulation.registry import SimulationBackend, SysIdBackend
+from anchor_bench.core.task_runner import TaskRunner
+from anchor_bench.errors import DatasetAlignmentError, SimulationBackendError
 from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.simulation import SysIdSimulationConfig
 from anchor_bench.tasks.actuator_sys_id import artifacts as artifacts_module
 from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
-from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord, Trajectory
+from anchor_bench.tasks.actuator_sys_id.model import (
+    GenerationRecord,
+    IdentifiedModelArtifact,
+    SysIdResult,
+    Trajectory,
+)
 from anchor_bench.tasks.actuator_sys_id.optimizer import OptimizationStep
 from anchor_bench.tasks.actuator_sys_id.task import ActuatorSysIdTask
 
@@ -76,6 +88,76 @@ def _config(tmp_path, **overrides):
     }
     data.update(overrides)
     return ActuatorSysIdConfig.model_validate(data)
+
+
+class ToySimulationConfig(SysIdSimulationConfig):
+    type: Literal["task-toy"] = "task-toy"  # pyright: ignore[reportIncompatibleVariableOverride]
+    gain: float = 2.0
+
+
+class ToyContext(SimulationContext[object, object]):
+    def _load(self):
+        return object(), object()
+
+
+@pytest.fixture
+def register_toy(monkeypatch, tmp_path):
+    monkeypatch.setattr(SimulationContext, "_instance", None)
+    monkeypatch.setattr(registry, "_BACKENDS", registry._BACKENDS.copy())
+    monkeypatch.setattr(registry, "_DISCOVERED", True)
+
+    def register(create_evaluator, *, export_model=None, describe_runtime=None):
+        context = ToyContext(resource_key=("task-toy", str(tmp_path)))
+
+        def create_context(config):
+            assert isinstance(config.simulation, ToySimulationConfig)
+            assert config.simulation.gain == 2.0
+            return context
+
+        registry.register_simulation_backend(
+            SimulationBackend(
+                "task-toy",
+                ToyContext,
+                SysIdBackend(
+                    ToySimulationConfig,
+                    create_context,
+                    create_evaluator,
+                    export_model,
+                    describe_runtime,
+                ),
+            )
+        )
+        config = _config(
+            tmp_path,
+            simulation={
+                "type": "task-toy",
+                "gain": 2.0,
+                "physics_freq": 1000,
+                "control_freq": 200,
+                "render_freq": 60,
+            },
+        )
+        return config, context
+
+    return register
+
+
+def test_sysid_result_preserves_eight_positional_argument_signature(tmp_path):
+    usd_path = tmp_path / "identified.usda"
+
+    result = SysIdResult(
+        {"hip": {"armature": 0.05}},
+        0.25,
+        2,
+        tmp_path,
+        tmp_path / "best_parameters.yaml",
+        tmp_path / "optimization_log.csv",
+        tmp_path / "run_summary.yaml",
+        usd_path,
+    )
+
+    assert result.identified_usd_path == usd_path
+    assert result.identified_model_path is None
 
 
 def test_load_trajectories_aligns_commanded_and_measured_data(
@@ -238,8 +320,9 @@ def test_load_trajectories_rejects_an_episode_without_a_transition(
         load_trajectories(_config(tmp_path).dataset, joint_names=["hip"])
 
 
-def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
-    config = _config(tmp_path)
+def test_task_uses_registered_evaluator_and_context(
+    tmp_path, monkeypatch, register_toy
+):
     trajectory = Trajectory(
         experiment="wave",
         joint_names=["hip"],
@@ -290,10 +373,30 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
         task_module, "load_trajectories", lambda *args, **kwargs: [trajectory]
     )
     monkeypatch.setattr(task_module, "create_optimizer", lambda *args: FakeOptimizer())
-    monkeypatch.setattr(
-        task_module,
-        "NewtonPopulationEvaluator",
-        lambda *args: FakeEvaluator(),
+    evaluator = FakeEvaluator()
+    received = {}
+
+    def create_evaluator(selected_config, space, selected_context):
+        received.update(config=selected_config, context=selected_context, space=space)
+        return evaluator
+
+    def export_model(selected_config, best, selected_context, output):
+        assert selected_config is config
+        assert selected_context is context
+        assert output == output_directory
+        assert best["hip"]["stiffness"] == pytest.approx(20.0)
+        path = output / "identified.json"
+        path.write_text('{"model": "toy"}')
+        return IdentifiedModelArtifact(path, "json")
+
+    def describe_runtime(selected_evaluator):
+        assert selected_evaluator is evaluator
+        return {"type": "task-toy", "effective_gain": 2.0}
+
+    config, context = register_toy(
+        create_evaluator,
+        export_model=export_model,
+        describe_runtime=describe_runtime,
     )
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
@@ -303,7 +406,13 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
-    assert written["source_usd_path"] == config.simulation.usd_path
+    assert received["config"] is config
+    assert received["context"] is context
+    assert written["model_artifact"] == IdentifiedModelArtifact(
+        output_directory / "identified.json",
+        "json",
+    )
+    assert written["runtime_simulation"] == {"type": "task-toy", "effective_gain": 2.0}
     assert written["config"] is config
     assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
     assert written["history"] == [
@@ -324,7 +433,12 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     )
 
 
-def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
+@pytest.mark.parametrize("model_format", [None, "json", "usd"])
+def test_common_artifacts_allow_missing_or_json_model_export(
+    tmp_path,
+    monkeypatch,
+    model_format,
+):
     candidate = {
         "hip": {
             "stiffness": 20.0,
@@ -334,40 +448,97 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
             "viscous_friction": 1.0,
         }
     }
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
-    source_usd_path = tmp_path / "robot.usd"
     config = _config(tmp_path)
+    model_artifact = None
+    if model_format is not None:
+        # Deliberately use the USD suffix for JSON: compatibility depends on format.
+        path = output_dir / "identified.usda"
+        path.write_text("exported")
+        model_artifact = IdentifiedModelArtifact(path, model_format)
 
-    def write_usd(source, output, parameters, controller_clamps, config_metadata):
-        assert source == source_usd_path
-        assert parameters == candidate
-        assert controller_clamps == {
-            "hip": config.joint_parameters[0].controller.clamps
-        }
-        assert config_metadata == config.model_dump_json()
-        output.write_text("#usda 1.0\n", encoding="utf-8")
-        return output
+    original_import = builtins.__import__
 
-    monkeypatch.setattr(
-        artifacts_module,
-        "write_identified_usd_layer",
-        write_usd,
-    )
+    def guard_import(name, *args, **kwargs):
+        if name.endswith("actuator_sys_id.usd"):
+            raise AssertionError("common artifacts must not import USD support")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guard_import)
+    importlib.reload(artifacts_module)
     result = write_artifacts(
         output_dir,
         best_parameters=candidate,
         best_mse=0.125,
         history=[GenerationRecord(0, 0.125, 0.5)],
-        source_usd_path=source_usd_path,
         config=config,
+        model_artifact=model_artifact,
+        runtime_simulation={"type": "toy", "solver": {"iterations": 8}},
     )
 
     document = yaml.safe_load(result.best_parameters_path.read_text())
     assert document["metric"] == "position_mse"
     assert document["parameters"] == candidate
     assert "0,0.125,0.5" in result.optimization_log_path.read_text()
-    assert result.run_summary_path.is_file()
-    assert result.identified_usd_path == output_dir / "identified.usda"
-    assert result.identified_usd_path.is_file()
+    summary = yaml.safe_load(result.run_summary_path.read_text())
+    assert summary["best_mse"] == 0.125
+    assert summary["generations"] == 1
+    assert summary["runtime_simulation"] == {"type": "toy", "solver": {"iterations": 8}}
+    assert result.identified_model_path == (
+        model_artifact.path if model_artifact else None
+    )
+    assert result.identified_usd_path == (
+        model_artifact.path if model_artifact and model_format == "usd" else None
+    )
+    if model_artifact is None:
+        assert not (output_dir / "identified.usda").exists()
+
+
+def test_export_failure_prevents_completion(tmp_path, monkeypatch, register_toy):
+    class Evaluator:
+        def evaluate(self, population, trajectories):
+            return np.asarray([1.0] * len(population))
+
+    def export_model(*args):
+        raise RuntimeError("toy export failed")
+
+    config, _ = register_toy(lambda *args: Evaluator(), export_model=export_model)
+    config.num_envs = 4
+    monkeypatch.setattr(
+        task_module,
+        "load_trajectories",
+        lambda *args, **kwargs: [
+            Trajectory("wave", ["hip"], np.zeros((2, 1)), np.zeros((2, 1)))
+        ],
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config.model_dump(mode="json")))
+    output = tmp_path / "failed"
+    with pytest.raises(RuntimeError, match="toy export failed"):
+        TaskRunner().run(str(config_path), output=output)
+    assert not (output / ".completed").exists()
+    assert not (output / "best_params.yaml").exists()
+
+
+def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    monkeypatch.setattr(registry, "_BACKENDS", registry._BACKENDS.copy())
+    monkeypatch.setattr(registry, "_DISCOVERED", True)
+    registry.register_simulation_backend(SimulationBackend("resource-only", ToyContext))
+    config.simulation = SysIdSimulationConfig(
+        type="resource-only",
+        physics_freq=1000,
+        control_freq=200,
+        render_freq=60,
+    )
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("must fail before optimization or dataset loading")
+
+    monkeypatch.setattr(task_module, "load_trajectories", unexpected)
+    monkeypatch.setattr(task_module, "create_optimizer", unexpected)
+    with pytest.raises(
+        SimulationBackendError, match="does not support system identification"
+    ):
+        ActuatorSysIdTask(config).run(tmp_path)

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -80,7 +79,7 @@ class FakeNewtonArray:
 class RunnerSimulationContext(SimulationContext):
     """Provide the shared context required by runner data processors."""
 
-    def _load(self, usd_path: Path) -> tuple[Any, Any]:
+    def _load(self) -> tuple[Any, Any]:
         """Return inert model and state objects."""
 
         model = SimpleNamespace(
@@ -95,14 +94,11 @@ class RunnerSimulationContext(SimulationContext):
 @pytest.fixture(autouse=True)
 def simulation_context(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> RunnerSimulationContext:
     """Create the shared simulation context before running data processors."""
 
     monkeypatch.setattr(SimulationContext, "_instance", None)
-    source = tmp_path / "robot.usda"
-    source.write_text("#usda 1.0", encoding="utf-8")
-    return RunnerSimulationContext(str(source))
+    return RunnerSimulationContext(resource_key="data-processor-runner")
 
 
 @pytest.fixture

@@ -14,6 +14,7 @@ import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.simulation import SysIdSimulationConfig
 from anchor_bench.tasks.actuator_sys_id import simulation as simulation_module
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
@@ -154,10 +155,12 @@ def test_actuator_config_rejects_dataset_timestep_mismatch(tmp_path):
         _config(tmp_path, dataset_dt=0.01)
 
 
+@pytest.mark.parametrize("inject_context", [False, True])
 def test_newton_evaluator_uses_shared_simulation_context(
     tmp_path,
     monkeypatch,
     caplog,
+    inject_context,
 ):
     class FakeArray:
         def __init__(self, values):
@@ -218,6 +221,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
     requested_context = {}
 
     def create_context(backend, usd_path, *, fixed_base):
+        assert not inject_context, "injected context must be reused"
         requested_context.update(
             backend=backend,
             usd_path=usd_path,
@@ -246,13 +250,22 @@ def test_newton_evaluator_uses_shared_simulation_context(
     )
 
     with caplog.at_level(logging.DEBUG, logger=simulation_module.__name__):
-        evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
+        evaluator = NewtonPopulationEvaluator(
+            config,
+            create_parameter_space(config),
+            **(
+                {"simulation_context": cast(NewtonSimulationContext, context)}
+                if inject_context
+                else {}
+            ),
+        )
 
     assert evaluator._simulation_context is context
     assert evaluator._simulation_context.control is context.control
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
-    assert requested_context["fixed_base"] is True
+    if not inject_context:
+        assert requested_context["fixed_base"] is True
     assert context.template.joint_target_ke == [15.0]
     assert context.captured_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
@@ -588,3 +601,22 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     assert score_sums.numpy_calls == 1
     assert context.solver.reset_states == [context.state]
     assert len(context.solver.changed_flags) == 1
+
+
+def test_newton_evaluator_rejects_non_newton_config_before_loading(
+    tmp_path, monkeypatch
+):
+    config = _config(tmp_path)
+    config.simulation = SysIdSimulationConfig(
+        type="other",
+        physics_freq=1000,
+        control_freq=200,
+        render_freq=60,
+    )
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("must validate backend config before loading resources")
+
+    monkeypatch.setattr(simulation_module, "create_simulation_context", unexpected)
+    with pytest.raises(TypeError, match="NewtonSimulationConfig"):
+        NewtonPopulationEvaluator(config, create_parameter_space(config))

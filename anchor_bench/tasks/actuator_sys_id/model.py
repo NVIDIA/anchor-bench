@@ -15,6 +15,14 @@ Candidate = Dict[str, Dict[str, float]]
 
 
 @dataclass(frozen=True)
+class IdentifiedModelArtifact:
+    """A backend-native model exported after identification."""
+
+    path: Path
+    format: str
+
+
+@dataclass(frozen=True)
 class Trajectory:
     """One aligned command/measurement episode."""
 
@@ -69,4 +77,5 @@ class SysIdResult:
     best_parameters_path: Path
     optimization_log_path: Path
     run_summary_path: Path
-    identified_usd_path: Path
+    identified_usd_path: Path | None = None
+    identified_model_path: Path | None = None

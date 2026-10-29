@@ -16,6 +16,7 @@ import warp as wp
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.simulation import NewtonSimulationConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -71,7 +72,12 @@ class NewtonPopulationEvaluator:
         self,
         config: ActuatorSysIdConfig,
         parameter_space: ParameterSpace,
+        *,
+        simulation_context: NewtonSimulationContext | None = None,
     ) -> None:
+        if not isinstance(config.simulation, NewtonSimulationConfig):
+            raise TypeError("Newton evaluator requires NewtonSimulationConfig")
+        self.simulation_config = config.simulation
         self.config = config
         self.parameter_space = parameter_space
         self.joint_names = _joint_names(config)
@@ -92,20 +98,25 @@ class NewtonPopulationEvaluator:
             _joint_delay_steps(config, self.control_dt),
             dtype=np.int64,
         )
-        self._initialize_simulation()
+        self._initialize_simulation(simulation_context)
         self._initialize_score_buffers()
         self._simulation_context.capture_step_graph(
             dt=self.physics_dt * self.control_substeps,
             substeps=self.control_substeps,
         )
 
-    def _initialize_simulation(self) -> None:
+    def _initialize_simulation(
+        self,
+        simulation_context: NewtonSimulationContext | None = None,
+    ) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
-        context = create_simulation_context(
-            self.config.simulation.type,
-            self.config.simulation.usd_path,
-            fixed_base=True,
-        )
+        context = simulation_context
+        if context is None:
+            context = create_simulation_context(
+                self.simulation_config.type,
+                self.simulation_config.usd_path,
+                fixed_base=True,
+            )
         if not isinstance(context, NewtonSimulationContext):
             raise TypeError("actuator_sys_id requires a Newton simulation context")
         self._simulation_context = context
@@ -114,7 +125,7 @@ class NewtonPopulationEvaluator:
             template_indices = _builder_joint_indices(template, self.joint_names)
             self._configure_template(template, template_indices, initial)
 
-        solver_config = self.config.simulation.solver
+        solver_config = self.simulation_config.solver
         context.initialize(
             world_count=self.num_envs,
             configure_builder=configure_template,

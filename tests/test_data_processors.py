@@ -3,9 +3,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 import pandas as pd
@@ -44,12 +43,9 @@ class DifferenceDataProcessor(BaseDataProcessor):
 
 
 class RecordingSimulationContext(SimulationContext):
-    loaded_path: Optional[str] = None
+    def _load(self) -> Tuple[Any, Any]:
+        """Provide the model consumed through the current shared context."""
 
-    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
-        """Record the USD selected by the current context."""
-
-        self.loaded_path = str(usd_path)
         return SimpleNamespace(
             joint_label=["shoulder", "elbow"],
             joint_qd_start=FakeNewtonArray([0, 1, 2]),
@@ -63,7 +59,6 @@ class RecordingSimulationContext(SimulationContext):
 @pytest.fixture(autouse=True)
 def simulation_context(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> RecordingSimulationContext:
     """Create one process-wide context for every data processor test."""
 
@@ -72,9 +67,7 @@ def simulation_context(
         "_instance",
         None,
     )
-    source = tmp_path / "robot.usda"
-    source.write_text("#usda 1.0", encoding="utf-8")
-    return RecordingSimulationContext(str(source))
+    return RecordingSimulationContext(resource_key="data-processors")
 
 
 @pytest.fixture
@@ -107,15 +100,12 @@ def test_base_data_processor_cannot_be_instantiated(dataset: pd.DataFrame) -> No
 
 
 def test_simulation_context_cannot_be_instantiated(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "robot.usda"
-    source.write_text("#usda 1.0", encoding="utf-8")
     monkeypatch.setattr(SimulationContext, "_instance", None)
 
     with pytest.raises(TypeError):
-        SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
+        SimulationContext(resource_key="abstract")  # pyright: ignore[reportAbstractUsage]
 
 
 def test_base_data_processor_uses_current_context(

@@ -142,7 +142,7 @@ class FakeSolver:
 class OtherSimulationContext(SimulationContext):
     """Represent a second backend for singleton enforcement tests."""
 
-    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
+    def _load(self) -> Tuple[Any, Any]:
         """Return placeholder backend objects."""
 
         return object(), object()
@@ -426,7 +426,7 @@ def test_rejects_a_different_backend(tmp_path: Path) -> None:
     NewtonSimulationContext(str(source))
 
     with pytest.raises(RuntimeError, match="Only one simulation backend"):
-        OtherSimulationContext(str(source))
+        OtherSimulationContext(resource_key=(source.resolve(), False))
 
 
 def test_rejects_different_import_configuration(tmp_path: Path) -> None:
@@ -436,5 +436,28 @@ def test_rejects_different_import_configuration(tmp_path: Path) -> None:
     source.write_text("#usda 1.0", encoding="utf-8")
     NewtonSimulationContext(str(source), fixed_base=True)
 
-    with pytest.raises(RuntimeError, match="different base mode"):
+    with pytest.raises(RuntimeError, match="already uses resource key"):
         NewtonSimulationContext(str(source), fixed_base=False)
+
+
+def test_resolved_usd_alias_reuses_newton_resources(
+    fake_newton_usd: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonicalize backend-owned paths before assigning resource identity."""
+
+    monkeypatch.chdir(fake_newton_usd.parent)
+    alias = fake_newton_usd.parent / "alias.usda"
+    alias.symlink_to(fake_newton_usd)
+    context = NewtonSimulationContext("robot.usda", fixed_base=True)
+    model, state = context.load()
+
+    repeated = NewtonSimulationContext(str(alias), fixed_base=True)
+
+    assert repeated is context
+    assert context.usd_path == fake_newton_usd.resolve()
+    assert context.fixed_base is True
+    assert context.resource_key == (fake_newton_usd.resolve(), True)
+    assert repeated.model is model
+    assert repeated.state is state
+    assert FakeModelBuilder.instance_count == 2
