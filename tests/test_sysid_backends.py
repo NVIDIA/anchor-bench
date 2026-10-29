@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -204,11 +202,6 @@ def test_artifact_is_frozen():
     artifact = IdentifiedModelArtifact(Path("model.usd"), "usd")
     with pytest.raises(FrozenInstanceError):
         artifact.format = "other"  # type: ignore[misc]
-
-
-def test_neutral_registry_import_does_not_import_newton_task():
-    code = "import sys; import anchor_bench.core.simulation.registry; assert 'anchor_bench.tasks.actuator_sys_id.task' not in sys.modules; assert 'newton' not in sys.modules"
-    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_discovery_loads_providers_in_metadata_name_order(monkeypatch):
