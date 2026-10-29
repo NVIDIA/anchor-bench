@@ -426,7 +426,7 @@ def test_rejects_a_different_backend(tmp_path: Path) -> None:
     NewtonSimulationContext(str(source))
 
     with pytest.raises(RuntimeError, match="Only one simulation backend"):
-        OtherSimulationContext(resource_key=(source.resolve(), False))
+        OtherSimulationContext(str(source))
 
 
 def test_rejects_different_import_configuration(tmp_path: Path) -> None:
@@ -436,7 +436,7 @@ def test_rejects_different_import_configuration(tmp_path: Path) -> None:
     source.write_text("#usda 1.0", encoding="utf-8")
     NewtonSimulationContext(str(source), fixed_base=True)
 
-    with pytest.raises(RuntimeError, match="already uses resource key"):
+    with pytest.raises(RuntimeError, match="different base mode"):
         NewtonSimulationContext(str(source), fixed_base=False)
 
 
@@ -457,7 +457,6 @@ def test_resolved_usd_alias_reuses_newton_resources(
     assert repeated is context
     assert context.usd_path == fake_newton_usd.resolve()
     assert context.fixed_base is True
-    assert context.resource_key == (fake_newton_usd.resolve(), True)
     assert repeated.model is model
     assert repeated.state is state
     assert FakeModelBuilder.instance_count == 2

@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A path-free installed backend for exercising the real sysID CLI."""
+"""A USD-backed installed backend for exercising the real sysID CLI."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import numpy as np
 
@@ -32,16 +33,20 @@ class ToyConfig(SysIdSimulationConfig):
 
 
 class ToyContext(SimulationContext[float, float]):
-    """Load a scalar response model without any USD resource."""
+    """Load the scalar response scale from the shared USD input."""
 
     def _load(self) -> tuple[float, float]:
-        _, gain = cast(tuple[str, float], self.resource_key)
-        return float(gain), 0.0
+        usd = import_module("pxr.Usd")
+        stage = usd.Stage.Open(str(self.usd_path))
+        if stage is None:
+            raise ValueError("Could not open the response USD")
+        scale = stage.GetPrimAtPath("/response").GetAttribute("gain_scale").Get()
+        return float(scale), 0.0
 
 
 class ToyEvaluator:
-    def __init__(self, context: ToyContext) -> None:
-        self._gain = context.model
+    def __init__(self, context: ToyContext, gain: float) -> None:
+        self._gain = context.model * gain
 
     def evaluate(
         self,
@@ -65,7 +70,7 @@ def create_context(config: ActuatorSysIdConfig) -> ToyContext:
     simulation = config.simulation
     if not isinstance(simulation, ToyConfig):
         raise TypeError("toy backend requires its registered config model")
-    return ToyContext(resource_key=(simulation.model_name, simulation.gain))
+    return ToyContext(simulation.usd_path)
 
 
 def create_evaluator(
@@ -75,7 +80,9 @@ def create_evaluator(
 ) -> ToyEvaluator:
     if not isinstance(context, ToyContext):
         raise TypeError("toy evaluator requires its registered context")
-    return ToyEvaluator(context)
+    if not isinstance(config.simulation, ToyConfig):
+        raise TypeError("toy evaluator requires its registered config model")
+    return ToyEvaluator(context, config.simulation.gain)
 
 
 def export_model(
@@ -90,7 +97,7 @@ def export_model(
             {
                 "parameters": best,
                 "simulation": config.simulation.model_dump(mode="json"),
-                "gain": context.model,
+                "gain_scale": context.model,
             },
             sort_keys=True,
         ),

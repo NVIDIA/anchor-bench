@@ -62,6 +62,11 @@ def _write_config(tmp_path: Path) -> Path:
     ]
     parquet = tmp_path / "recording.parquet"
     pd.DataFrame(rows).to_parquet(parquet, index=False)
+    usd = tmp_path / "response.usda"
+    usd.write_text(
+        '#usda 1.0\ndef Xform "response" {\n    custom double gain_scale = 2.0\n}\n',
+        encoding="utf-8",
+    )
     document = {
         "type": "actuator_sys_id",
         "joint_parameters": [
@@ -88,11 +93,12 @@ def _write_config(tmp_path: Path) -> Path:
         },
         "simulation": {
             "type": "toy-sysid",
+            "usd_path": str(usd),
             "physics_freq": 200,
             "control_freq": 100,
             "render_freq": 50,
             "gain": 2.5,
-            "model_name": "path-free-response",
+            "model_name": "usd-response",
         },
         "num_envs": 6,
         "seed": 17,
@@ -150,11 +156,12 @@ def test_cli_discovers_installed_sysid_backend(
         resolved = yaml.safe_load((output / "config.yaml").read_text())
         assert resolved["simulation"] == {
             "type": "toy-sysid",
+            "usd_path": str(tmp_path / "response.usda"),
             "physics_freq": 200,
             "control_freq": 100,
             "render_freq": 50,
             "gain": 2.5,
-            "model_name": "path-free-response",
+            "model_name": "usd-response",
         }
         best = yaml.safe_load((output / "best_params.yaml").read_text())
         summary = yaml.safe_load((output / "run_summary.yaml").read_text())
@@ -162,9 +169,10 @@ def test_cli_discovers_installed_sysid_backend(
         assert summary["best_mse"] == best["best_mse"]
         assert math.isfinite(best["best_mse"])
         # Mean command square is (1 + 0.25 + 0.5625) / 4 for this recording.
+        # The USD scale 2.0 and configured gain 2.5 give an effective gain of 5.0.
         stiffness = best["parameters"]["hip"]["stiffness"]
         assert best["best_mse"] == pytest.approx(
-            0.453125 * (stiffness / 2.5 - 0.65) ** 2
+            0.453125 * (stiffness / 5.0 - 0.65) ** 2
         )
         with (output / "optimization_log.csv").open(newline="") as stream:
             history = list(csv.DictReader(stream))
@@ -180,7 +188,7 @@ def test_cli_discovers_installed_sysid_backend(
             model = json.loads((output / "identified.json").read_text())
             assert model["parameters"] == best["parameters"]
             assert model["simulation"] == resolved["simulation"]
-            assert model["gain"] == 2.5
+            assert model["gain_scale"] == 2.0
 
     for filename in ("best_params.yaml", "optimization_log.csv"):
         assert (outputs[0] / filename).read_text() == (

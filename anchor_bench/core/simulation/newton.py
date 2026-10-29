@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Hashable
-from pathlib import Path
 from typing import Any, Callable, Mapping, Tuple
 
 import newton
-from typing_extensions import Self
 
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
@@ -28,8 +26,6 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     count.
     """
 
-    _usd_path: Path
-    _fixed_base: bool
     _initialized: bool
     _world_count: int
     _configuration_key: Hashable | None
@@ -40,23 +36,6 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     _solver: newton.solvers.SolverMuJoCo
     _step_executor: NewtonStepExecutor
 
-    def __new__(
-        cls,
-        usd_path: str,
-        *,
-        fixed_base: bool = False,
-    ) -> Self:
-        """Assign the resolved USD path and base mode as resource identity."""
-
-        source = Path(usd_path).expanduser().resolve()
-        if SimulationContext._instance is None and not source.is_file():
-            raise FileNotFoundError(f"USD file does not exist: {source}.")
-
-        instance = super().__new__(cls, resource_key=(source, fixed_base))
-        instance._usd_path = source
-        instance._fixed_base = fixed_base
-        return instance
-
     def __init__(
         self,
         usd_path: str,
@@ -65,21 +44,9 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     ) -> None:
         """Initialize instance bookkeeping without resetting the singleton."""
 
-        super().__init__(resource_key=(self.usd_path, self.fixed_base))
+        super().__init__(usd_path, fixed_base=fixed_base)
         if not hasattr(self, "_initialized"):
             self._initialized = False
-
-    @property
-    def usd_path(self) -> Path:
-        """Return the resolved USD file assigned to this Newton context."""
-
-        return self._usd_path
-
-    @property
-    def fixed_base(self) -> bool:
-        """Return whether the imported robot root is fixed."""
-
-        return self._fixed_base
 
     def initialize(
         self,

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Tuple
 
@@ -58,6 +59,7 @@ class RecordingSimulationContext(SimulationContext):
 
 @pytest.fixture(autouse=True)
 def simulation_context(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> RecordingSimulationContext:
     """Create one process-wide context for every data processor test."""
@@ -67,7 +69,9 @@ def simulation_context(
         "_instance",
         None,
     )
-    return RecordingSimulationContext(resource_key="data-processors")
+    source = tmp_path / "scene.usda"
+    source.write_text("#usda 1.0\n")
+    return RecordingSimulationContext(str(source))
 
 
 @pytest.fixture
@@ -100,12 +104,15 @@ def test_base_data_processor_cannot_be_instantiated(dataset: pd.DataFrame) -> No
 
 
 def test_simulation_context_cannot_be_instantiated(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(SimulationContext, "_instance", None)
 
+    source = tmp_path / "scene.usda"
+    source.write_text("#usda 1.0\n")
     with pytest.raises(TypeError):
-        SimulationContext(resource_key="abstract")  # pyright: ignore[reportAbstractUsage]
+        SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
 
 
 def test_base_data_processor_uses_current_context(

@@ -24,12 +24,13 @@ NonEmptyString = Annotated[str, Field(min_length=1)]
 
 
 class SysIdSimulationConfig(StrictBaseModel):
-    """Timing shared by all registered system-identification backends."""
+    """Required USD input and timing shared by identification backends."""
 
     type: NonEmptyString
     physics_freq: PositiveInteger
     control_freq: PositiveInteger
     render_freq: PositiveInteger
+    usd_path: NonEmptyString
 
     @model_validator(mode="after")
     def validate_frequencies(self) -> SysIdSimulationConfig:
@@ -47,5 +48,4 @@ class WarpMujocoSolverConfig(StrictBaseModel):
 
 class NewtonSimulationConfig(SysIdSimulationConfig):
     type: Literal["newton"]  # pyright: ignore[reportIncompatibleVariableOverride]
-    usd_path: NonEmptyString
     solver: WarpMujocoSolverConfig

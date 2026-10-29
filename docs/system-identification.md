@@ -109,9 +109,11 @@ iteration or convergence condition.
 A backend supplies its own strict simulation configuration, resource context,
 and population evaluator. Its configuration extends
 `anchor_bench.schema.simulation.SysIdSimulationConfig`, retaining the shared
-timing fields and declaring its own `type` and simulator settings. Its context
-extends `SimulationContext` with a hashable `resource_key` and a parameterless
-`_load()` that returns its model and initial state.
+required `usd_path` and timing fields, and declaring its own `type` and simulator
+settings. Its context extends `SimulationContext(usd_path, *, fixed_base=False)`.
+The shared context resolves and validates the USD path and protects reuse by
+backend class, resolved path, and base mode. Its parameterless `_load()` reads
+`self.usd_path` and returns the model and initial state.
 
 Register these components through the Python API before validating a task:
 

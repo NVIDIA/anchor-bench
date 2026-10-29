@@ -608,6 +608,7 @@ def test_newton_evaluator_rejects_non_newton_config_before_loading(
 ):
     config = _config(tmp_path)
     config.simulation = SysIdSimulationConfig(
+        usd_path=config.simulation.usd_path,
         type="other",
         physics_freq=1000,
         control_freq=200,

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -93,12 +94,15 @@ class RunnerSimulationContext(SimulationContext):
 
 @pytest.fixture(autouse=True)
 def simulation_context(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> RunnerSimulationContext:
     """Create the shared simulation context before running data processors."""
 
     monkeypatch.setattr(SimulationContext, "_instance", None)
-    return RunnerSimulationContext(resource_key="data-processor-runner")
+    source = tmp_path / "scene.usda"
+    source.write_text("#usda 1.0\n")
+    return RunnerSimulationContext(str(source))
 
 
 @pytest.fixture

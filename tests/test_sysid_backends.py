@@ -42,7 +42,7 @@ def toy_registration(name: str = "toy") -> registry.SimulationBackend:
         sysid=registry.SysIdBackend(
             config_model=ToyConfig,
             create_context=lambda config: ToyContext(
-                resource_key=("toy", config.simulation.physics_freq)
+                usd_path=config.simulation.usd_path
             ),
             create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
         ),
@@ -59,7 +59,9 @@ def isolated_registry(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def toy_task_data():
+def toy_task_data(tmp_path):
+    usd = tmp_path / "scene.usda"
+    usd.write_text("#usda 1.0\n")
     return {
         "type": "actuator_sys_id",
         "joint_parameters": [
@@ -85,6 +87,7 @@ def toy_task_data():
         },
         "simulation": {
             "type": "toy",
+            "usd_path": str(usd),
             "gain": 2,
             "physics_freq": 1000,
             "control_freq": 200,
@@ -186,7 +189,7 @@ def test_wrong_concrete_context_factory_is_rejected(toy_task_data):
 
     capability = registry.SysIdBackend(
         config_model=ToyConfig,
-        create_context=lambda config: OtherContext(resource_key="wrong"),
+        create_context=lambda config: OtherContext(config.simulation.usd_path),
         create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
     )
     registry.register_simulation_backend(
@@ -297,3 +300,10 @@ def test_yaml_parser_discovers_before_dispatch(monkeypatch, toy_task_data, tmp_p
     assert isinstance(config, ActuatorSysIdConfig)
     assert isinstance(config.simulation, ToyConfig)
     assert config.simulation.gain == 2
+
+
+def test_plugin_simulation_requires_usd_input(toy_task_data):
+    registry.register_simulation_backend(toy_registration())
+    toy_task_data["simulation"].pop("usd_path", None)
+    with pytest.raises(ValidationError, match="usd_path"):
+        ActuatorSysIdConfig.model_validate(toy_task_data)

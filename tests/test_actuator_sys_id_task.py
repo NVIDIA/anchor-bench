@@ -107,7 +107,9 @@ def register_toy(monkeypatch, tmp_path):
     monkeypatch.setattr(registry, "_DISCOVERED", True)
 
     def register(create_evaluator, *, export_model=None, describe_runtime=None):
-        context = ToyContext(resource_key=("task-toy", str(tmp_path)))
+        usd = tmp_path / "scene.usda"
+        usd.write_text("#usda 1.0\n")
+        context = ToyContext(str(usd))
 
         def create_context(config):
             assert isinstance(config.simulation, ToySimulationConfig)
@@ -131,6 +133,7 @@ def register_toy(monkeypatch, tmp_path):
             tmp_path,
             simulation={
                 "type": "task-toy",
+                "usd_path": str(usd),
                 "gain": 2.0,
                 "physics_freq": 1000,
                 "control_freq": 200,
@@ -527,6 +530,7 @@ def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "_DISCOVERED", True)
     registry.register_simulation_backend(SimulationBackend("resource-only", ToyContext))
     config.simulation = SysIdSimulationConfig(
+        usd_path=config.simulation.usd_path,
         type="resource-only",
         physics_freq=1000,
         control_freq=200,
