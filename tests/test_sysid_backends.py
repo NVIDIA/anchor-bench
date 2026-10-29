@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed plugin registration and transactional discovery boundaries."""
+"""Explicit simulator registration and configuration boundaries."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ import json
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Literal, cast
+from typing import Literal
 
 import pytest
 from pydantic import StrictInt, ValidationError
@@ -45,13 +44,11 @@ def toy_registration(name: str = "toy") -> None:
 
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch: pytest.MonkeyPatch):
-    registry.discover_sysid_backends()
+    registry.get_sysid_callbacks("newton")
     monkeypatch.setattr(
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
     monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
-    monkeypatch.setattr(registry, "_DISCOVERED", False)
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [])
     monkeypatch.setattr(SimulationContext, "_instance", None)
 
 
@@ -120,52 +117,6 @@ def test_plugin_simulation_is_strict(toy_task_data, patch):
         ActuatorSysIdConfig.model_validate(toy_task_data)
 
 
-def test_discovery_is_idempotent(monkeypatch):
-    loads = []
-    entry = SimpleNamespace(
-        name="toy", load=lambda: loads.append("load") or toy_registration
-    )
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
-    registry.discover_sysid_backends()
-    registry.discover_sysid_backends()
-    assert loads == ["load"]
-    assert registry.get_sysid_callbacks("toy")["config_model"] is ToyConfig
-
-
-def test_discovery_error_does_not_leave_partial_registration(monkeypatch):
-    first = SimpleNamespace(name="toy", load=lambda: toy_registration)
-    second = SimpleNamespace(
-        name="zzz", load=lambda: lambda: (_ for _ in ()).throw(RuntimeError("broken"))
-    )
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [second, first])
-    with pytest.raises(SimulationBackendError, match="broken"):
-        registry.discover_sysid_backends()
-    assert "toy" not in registry.SIMULATION_CONTEXTS
-    assert "toy" not in registry._SYSID_CALLBACKS
-    assert not registry._DISCOVERED
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [first])
-    registry.discover_sysid_backends()
-    assert "toy" in registry.SIMULATION_CONTEXTS
-
-
-def test_duplicate_metadata_names_fail_before_loading(monkeypatch):
-    loads = []
-    entry = SimpleNamespace(name="toy", load=lambda: loads.append(True))
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry, entry])
-    with pytest.raises(SimulationBackendError, match="Duplicate"):
-        registry.discover_sysid_backends()
-    assert loads == []
-
-
-def test_entry_point_name_must_match_registration(monkeypatch):
-    entry = SimpleNamespace(name="other", load=lambda: toy_registration)
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
-    with pytest.raises(SimulationBackendError, match="name"):
-        registry.discover_sysid_backends()
-    assert "toy" not in registry.SIMULATION_CONTEXTS
-    assert "toy" not in registry._SYSID_CALLBACKS
-
-
 def test_python_registration_rejects_duplicate_names():
     toy_registration()
     with pytest.raises(SimulationBackendError, match="already registered"):
@@ -175,25 +126,9 @@ def test_python_registration_rejects_duplicate_names():
 
 
 def test_registered_backend_without_sysid_fails_early(toy_task_data):
-    registry.register_simulation_backend("toy", ToyContext)
+    registry.SIMULATION_CONTEXTS["toy"] = ToyContext
     with pytest.raises(SimulationBackendError, match="system identification"):
         ActuatorSysIdConfig.model_validate(toy_task_data)
-
-
-def test_wrong_concrete_context_factory_is_rejected(toy_task_data):
-    class OtherContext(ToyContext):
-        pass
-
-    registry.register_simulation_backend(
-        "toy",
-        ToyContext,
-        config_model=ToyConfig,
-        create_context=lambda config: OtherContext(config.simulation.usd_path),
-        create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
-    )
-    config = ActuatorSysIdConfig.model_validate(toy_task_data)
-    with pytest.raises(SimulationBackendError, match="context type"):
-        registry.create_sysid_context(config)
 
 
 def test_artifact_is_frozen():
@@ -202,91 +137,12 @@ def test_artifact_is_frozen():
         artifact.format = "other"  # type: ignore[misc]
 
 
-def test_discovery_loads_providers_in_metadata_name_order(monkeypatch):
-    loaded = []
-
-    def entry(name):
-        def load():
-            loaded.append(name)
-            return lambda: registry.register_simulation_backend(name, ToyContext)
-
-        return SimpleNamespace(name=name, load=load)
-
-    monkeypatch.setattr(
-        registry, "entry_points", lambda **kwargs: [entry("z-last"), entry("a-first")]
-    )
-    registry.discover_sysid_backends()
-    assert loaded == ["a-first", "z-last"]
-
-
-@pytest.mark.parametrize(
-    "provider",
-    [
-        None,
-        lambda: object(),
-        lambda: registry.register_simulation_backend("toy", cast(Any, object)),
-    ],
-)
-def test_invalid_plugin_capabilities_fail_atomically(monkeypatch, provider):
-    entry = SimpleNamespace(name="toy", load=lambda: provider)
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
-    with pytest.raises(SimulationBackendError):
-        registry.discover_sysid_backends()
-    assert "toy" not in registry.SIMULATION_CONTEXTS
-    assert "toy" not in registry._SYSID_CALLBACKS
-    assert not registry._DISCOVERED
-
-
-def test_entry_point_cannot_replace_builtin_before_loading(monkeypatch):
-    loads = []
-    entry = SimpleNamespace(name="newton", load=lambda: loads.append(True))
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
-    with pytest.raises(SimulationBackendError, match="already registered"):
-        registry.discover_sysid_backends()
-    assert loads == []
-
-
-def test_entry_point_enumeration_errors_are_wrapped_and_retryable(monkeypatch):
-    def broken(**kwargs):
-        raise RuntimeError("metadata unavailable")
-
-    monkeypatch.setattr(registry, "entry_points", broken)
-    with pytest.raises(SimulationBackendError, match="metadata unavailable"):
-        registry.discover_sysid_backends()
-    assert not registry._DISCOVERED
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [])
-    registry.discover_sysid_backends()
-    assert registry._DISCOVERED
-
-
-def test_provider_registration_side_effects_are_rolled_back(monkeypatch):
-    def broken():
-        toy_registration()
-        raise RuntimeError("provider failed")
-
-    entry = SimpleNamespace(name="toy", load=lambda: broken)
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
-    with pytest.raises(SimulationBackendError, match="provider failed"):
-        registry.discover_sysid_backends()
-    assert "toy" not in registry.SIMULATION_CONTEXTS
-    assert "toy" not in registry._SYSID_CALLBACKS
-
-
-def test_validation_discovers_before_dispatch(monkeypatch, toy_task_data):
-    entry = SimpleNamespace(name="toy", load=lambda: toy_registration)
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
-    config = ActuatorSysIdConfig.model_validate(toy_task_data)
-    assert isinstance(config.simulation, ToyConfig)
-    assert config.simulation.gain == 2
-
-
-def test_yaml_parser_discovers_before_dispatch(monkeypatch, toy_task_data, tmp_path):
+def test_yaml_parser_uses_explicit_registration(toy_task_data, tmp_path):
     import yaml
 
     from anchor_bench.schema.parse import parse
 
-    entry = SimpleNamespace(name="toy", load=lambda: toy_registration)
-    monkeypatch.setattr(registry, "entry_points", lambda **kwargs: [entry])
+    toy_registration()
     path = tmp_path / "task.yaml"
     path.write_text(yaml.safe_dump(toy_task_data), encoding="utf-8")
     config = parse(path)

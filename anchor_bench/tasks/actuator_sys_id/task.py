@@ -8,10 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from anchor_bench.core.simulation.registry import (
-    create_sysid_context,
-    get_sysid_callbacks,
-)
+from anchor_bench.core.simulation.registry import get_sysid_callbacks
 from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -45,7 +42,7 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
-        context = create_sysid_context(self.config)
+        context = callbacks["create_context"](self.config)
         evaluator = callbacks["create_evaluator"](self.config, parameter_space, context)
         objective = ActuatorSysIdObjective(
             parameter_space,

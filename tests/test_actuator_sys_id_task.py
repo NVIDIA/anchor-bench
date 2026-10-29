@@ -107,7 +107,6 @@ def register_toy(monkeypatch, tmp_path):
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
     monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
-    monkeypatch.setattr(registry, "_DISCOVERED", True)
 
     def register(create_evaluator, *, export_model=None, describe_runtime=None):
         usd = tmp_path / "scene.usda"
@@ -529,8 +528,7 @@ def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
     monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
-    monkeypatch.setattr(registry, "_DISCOVERED", True)
-    registry.register_simulation_backend("resource-only", ToyContext)
+    registry.SIMULATION_CONTEXTS["resource-only"] = ToyContext
     config.simulation = SysIdSimulationConfig(
         usd_path=config.simulation.usd_path,
         type="resource-only",

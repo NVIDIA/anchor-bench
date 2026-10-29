@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fresh-process installed-plugin discovery through the complete sysID CLI."""
+"""Fresh-process explicit backend registration through the complete sysID CLI."""
 
 from __future__ import annotations
 
@@ -32,18 +32,12 @@ COMMON_OUTPUTS = (
 
 
 @pytest.fixture
-def installed_backend(tmp_path: Path) -> Path:
-    """Install an importable package and distribution metadata on a private path."""
-    installed = tmp_path / "site-packages"
-    installed.mkdir()
-    shutil.copytree(FIXTURE / "toy_sysid_backend", installed / "toy_sysid_backend")
-    distribution = installed / "anchor_bench_toy_sysid-1.0.dist-info"
-    distribution.mkdir()
-    (distribution / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: anchor-bench-toy-sysid\nVersion: 1.0\n",
-        encoding="utf-8",
-    )
-    return installed
+def custom_backend(tmp_path: Path) -> Path:
+    """Copy an importable custom backend package onto a private path."""
+    package_path = tmp_path / "custom-backend"
+    package_path.mkdir()
+    shutil.copytree(FIXTURE / "toy_sysid_backend", package_path / "toy_sysid_backend")
+    return package_path
 
 
 def _write_config(tmp_path: Path) -> Path:
@@ -114,21 +108,16 @@ def _write_config(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("export_json", [True, False], ids=["json-export", "no-export"])
-def test_cli_discovers_installed_sysid_backend(
+def test_cli_uses_explicitly_registered_sysid_backend(
     tmp_path: Path,
-    installed_backend: Path,
+    custom_backend: Path,
     export_json: bool,
 ) -> None:
     provider = "provide_json" if export_json else "provide_no_export"
-    distribution = installed_backend / "anchor_bench_toy_sysid-1.0.dist-info"
-    (distribution / "entry_points.txt").write_text(
-        f"[anchor_bench.sysid_backends]\ntoy-sysid = toy_sysid_backend:{provider}\n",
-        encoding="utf-8",
-    )
     config = _write_config(tmp_path)
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(
-        [str(installed_backend), str(REPOSITORY), environment.get("PYTHONPATH", "")]
+        [str(custom_backend), str(REPOSITORY), environment.get("PYTHONPATH", "")]
     )
     outputs = [tmp_path / "first-run", tmp_path / "repeat-run"]
     for output in outputs:
@@ -136,6 +125,7 @@ def test_cli_discovers_installed_sysid_backend(
             [
                 sys.executable,
                 str(FIXTURE / "run_cli.py"),
+                provider,
                 "--config",
                 str(config),
                 "--output",

@@ -138,34 +138,36 @@ finite position-MSE score per decoded candidate. The evaluator owns its
 simulator's candidate application, resets, command delay, buffer exclusion,
 actuation, and stepping. The task retains dataset loading and optimization.
 
-An installed package can expose a zero-argument provider that registers its
-components with the same function call:
+To run the command-line task with a custom backend, register it in your own
+entry script before invoking the CLI:
 
 ```python
-def provide_backend() -> None:
-    register_simulation_backend(
-        "my_simulator",
-        MySimulationContext,
-        config_model=MySimulationConfig,
-        create_context=create_context,
-        create_evaluator=create_evaluator,
-        export_model=export_model,
-    )
+from anchor_bench.cli import main
+from anchor_bench.core.simulation.registry import register_simulation_backend
+
+from my_package.backend import (
+    MySimulationConfig,
+    MySimulationContext,
+    create_context,
+    create_evaluator,
+    export_model,
+)
+
+register_simulation_backend(
+    "my_simulator",
+    MySimulationContext,
+    config_model=MySimulationConfig,
+    create_context=create_context,
+    create_evaluator=create_evaluator,
+    export_model=export_model,
+)
+raise SystemExit(main())
 ```
 
-Declare the provider using this entry-point group:
-
-```toml
-[project.entry-points."anchor_bench.sysid_backends"]
-my_simulator = "my_package.backend:provide_backend"
-```
-
-The provider returns `None`. The entry-point name, registered name, and
-configuration `type` must agree.
-Discovery runs before direct configuration validation and YAML parsing;
-duplicate names and invalid providers fail before optimization. Select the
-backend using `simulation.type: my_simulator` and provide its configuration
-fields. Plugin fields survive configuration serialization and hashing.
+Run this script with the usual `--config` and `--output` arguments. Select the
+backend using `simulation.type: my_simulator`; this value must match the
+registered name and configuration `type`. Plugin fields survive configuration
+serialization and hashing.
 
 Model export is optional. An exporter receives `(config, best_parameters,
 context, output_directory)` and returns an `IdentifiedModelArtifact(path,
