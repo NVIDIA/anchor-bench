@@ -166,20 +166,23 @@ def test_downloads_structured_huggingface_source_and_logs_lineage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = tmp_path / "b.parquet"
-    second = tmp_path / "a.parquet"
+    """Keep lineage distinct for files with the same basename in different dirs."""
+
+    first = tmp_path / "b" / "data.parquet"
+    second = tmp_path / "a" / "data.parquet"
     for path, experiment, value in (
         (first, "episode-b", 2.0),
         (second, "episode-a", 1.0),
     ):
         dataset = pd.DataFrame(_rows("actual_q", [0], [value]))
         dataset["experiment"] = experiment
+        path.parent.mkdir(parents=True)
         dataset.to_parquet(path, index=False)
     source = HuggingFaceDatasetSource(
         provider="huggingface",
         repo_id="nvidia/Anchor-Lab",
         revision="abc123",
-        paths=["data/selected/*.parquet"],
+        paths=["data/selected/*/data.parquet"],
     )
     tracker = Mock(spec=MLOpsRun)
 
@@ -189,11 +192,11 @@ def test_downloads_structured_huggingface_source_and_logs_lineage(
         lambda _: [
             HuggingFaceDatasetFile(
                 path=second,
-                repo_path="data/selected/a.parquet",
+                repo_path="data/selected/a/data.parquet",
             ),
             HuggingFaceDatasetFile(
                 path=first,
-                repo_path="data/selected/b.parquet",
+                repo_path="data/selected/b/data.parquet",
             ),
         ],
     )
@@ -206,12 +209,20 @@ def test_downloads_structured_huggingface_source_and_logs_lineage(
     ]
     calls = tracker.log_dataset.call_args_list
     assert [call.kwargs["source"] for call in calls] == [
-        "hf://datasets/nvidia/Anchor-Lab@abc123/data/selected/a.parquet",
-        "hf://datasets/nvidia/Anchor-Lab@abc123/data/selected/b.parquet",
+        "hf://datasets/nvidia/Anchor-Lab@abc123/data/selected/a/data.parquet",
+        "hf://datasets/nvidia/Anchor-Lab@abc123/data/selected/b/data.parquet",
     ]
     assert [call.kwargs["metadata"]["repo_path"] for call in calls] == [
-        "data/selected/a.parquet",
-        "data/selected/b.parquet",
+        "data/selected/a/data.parquet",
+        "data/selected/b/data.parquet",
+    ]
+    assert [call.kwargs["name"] for call in calls] == [
+        "dataset-data/selected/a/data.parquet",
+        "dataset-data/selected/b/data.parquet",
+    ]
+    assert [call.kwargs["digest"] for call in calls] == [
+        hashlib.sha256(second.read_bytes()).hexdigest(),
+        hashlib.sha256(first.read_bytes()).hexdigest(),
     ]
     assert all(call.kwargs["metadata"]["provider"] == "huggingface" for call in calls)
 

@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
+from fnmatch import fnmatchcase
+from functools import cache
+from glob import escape
+from pathlib import Path, PurePosixPath
 from shutil import copyfileobj
 from tempfile import NamedTemporaryFile
 from typing import Union
 from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import list_repo_files, snapshot_download
 
 from anchor_bench.errors import DatasetLoadError
 from anchor_bench.schema.dataset import HuggingFaceDatasetSource
@@ -32,40 +35,74 @@ class HuggingFaceDatasetFile:
     repo_path: str
 
 
+def _matches_repo_pattern(repo_path: str, pattern: str) -> bool:
+    """Match a whole POSIX path; only a standalone ``**`` crosses directories."""
+
+    path_parts = PurePosixPath(repo_path).parts
+    pattern_parts = PurePosixPath(pattern).parts
+
+    @cache
+    def matches(path_index: int, pattern_index: int) -> bool:
+        """Match remaining segments, letting ``**`` consume zero or more."""
+
+        if pattern_index == len(pattern_parts):
+            return path_index == len(path_parts)
+        part = pattern_parts[pattern_index]
+        if part == "**":
+            return matches(path_index, pattern_index + 1) or (
+                path_index < len(path_parts) and matches(path_index + 1, pattern_index)
+            )
+        return (
+            path_index < len(path_parts)
+            and fnmatchcase(path_parts[path_index], part)
+            and matches(path_index + 1, pattern_index + 1)
+        )
+
+    return matches(0, 0)
+
+
 def download_huggingface_dataset(
     source: HuggingFaceDatasetSource,
 ) -> list[HuggingFaceDatasetFile]:
-    """Download and return the files selected by a structured Hub source."""
+    """Select repository paths before downloading them into the Hub cache."""
 
     try:
+        repo_paths = list_repo_files(
+            repo_id=source.repo_id,
+            repo_type="dataset",
+            revision=source.revision,
+        )
+        selected_paths = sorted(
+            repo_path
+            for repo_path in repo_paths
+            if any(
+                _matches_repo_pattern(repo_path, pattern) for pattern in source.paths
+            )
+        )
+        if not selected_paths:
+            patterns = ", ".join(source.paths)
+            raise DatasetLoadError(
+                "Hugging Face dataset paths did not match any files in "
+                f"{source.repo_id}@{source.revision}: {patterns}."
+            )
         snapshot = Path(
             snapshot_download(
                 repo_id=source.repo_id,
                 repo_type="dataset",
                 revision=source.revision,
-                allow_patterns=source.paths,
+                allow_patterns=[escape(repo_path) for repo_path in selected_paths],
             )
         )
-        matches = {
-            path.relative_to(snapshot).as_posix(): path
-            for pattern in source.paths
-            for path in snapshot.glob(pattern)
-            if path.is_file()
-        }
+    except DatasetLoadError:
+        raise
     except Exception as error:
         raise DatasetLoadError(
             "Could not download Hugging Face dataset "
             f"{source.repo_id}@{source.revision}: {error}."
         ) from error
-    if not matches:
-        patterns = ", ".join(source.paths)
-        raise DatasetLoadError(
-            "Hugging Face dataset paths did not match any files in "
-            f"{source.repo_id}@{source.revision}: {patterns}."
-        )
     files = [
-        HuggingFaceDatasetFile(path=matches[repo_path], repo_path=repo_path)
-        for repo_path in sorted(matches)
+        HuggingFaceDatasetFile(path=snapshot / repo_path, repo_path=repo_path)
+        for repo_path in selected_paths
     ]
     logger.info(
         "Downloaded Hugging Face dataset repo_id=%s revision=%s files=%d",

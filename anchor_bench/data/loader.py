@@ -81,10 +81,13 @@ class DatasetLoader:
                 )
                 datasets.append(dataset)
                 if dataset_tracker is not None:
+                    file_name = dataset_file.metadata.get(
+                        "repo_path", dataset_file.path.stem
+                    )
                     tracked_name = (
                         dataset_name
                         if len(dataset_files) == 1
-                        else f"{dataset_name}-{dataset_file.path.stem}"
+                        else f"{dataset_name}-{file_name}"
                     )
                     # Fingerprint the materialized file rather than the DataFrame so
                     # the digest identifies exactly the bytes a later run can reuse.

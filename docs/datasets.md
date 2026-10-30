@@ -61,10 +61,13 @@ dataset:
     dt: 0.002
 ```
 
-`paths` accepts repository-relative file paths and glob patterns. The loader
-downloads only matching files through the Hugging Face cache, orders them by
-repository path, and reuses cached files on later runs. Pin a commit hash when
-the input data must be reproducible.
+`paths` accepts repository-relative file paths and glob patterns. `*` matches
+within one directory; `**` matches zero or more directories. For example,
+`data/*.parquet` excludes nested directories, while `data/**/*.parquet` includes
+them. The loader lists repository paths before downloading only the matching
+files through the Hugging Face cache, orders them by repository path, and reuses
+cached files on later runs. Pin a commit hash when the input data must be
+reproducible.
 
 ## Joint-name mapping
 
