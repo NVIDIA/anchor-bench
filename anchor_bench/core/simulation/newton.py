@@ -32,6 +32,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     _configuration_key: Hashable | None
     _solver_options: dict[str, Any]
     _control: newton.Control
+    _collision_pipeline: newton.CollisionPipeline
     _contacts: newton.Contacts
     _solver: newton.solvers.SolverMuJoCo
     _step_executor: NewtonStepExecutor
@@ -101,12 +102,13 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
             configure_builder(template)
 
         builder = self._create_builder()
-        builder.replicate(template, world_count=world_count)
+        builder.replicate(template, copy_count=world_count)
         model = builder.finalize()
         state = model.state()
         state_next = model.state()
         control = model.control()
-        contacts = model.contacts()
+        collision_pipeline = newton.CollisionPipeline(model, broad_phase="explicit")
+        contacts = collision_pipeline.contacts()
         solver = newton.solvers.SolverMuJoCo(model, **requested_solver_options)
         step_executor = NewtonStepExecutor(
             model=model,
@@ -120,6 +122,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         self._model = model
         self._state = state
         self._control = control
+        self._collision_pipeline = collision_pipeline
         self._contacts = contacts
         self._solver = solver
         self._step_executor = step_executor

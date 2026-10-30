@@ -1,22 +1,27 @@
 # Third-Party Licenses
 
 Anchor Bench is licensed under Apache-2.0 (see `LICENSE`). It does not vendor or
-redistribute third-party source code; the packages below are resolved from PyPI at
-install time and are listed here to attribute each dependency and its license.
+redistribute third-party source code; the packages below are resolved from PyPI,
+[NVIDIA's package index](https://pypi.nvidia.com/), or pinned Git sources at install
+time and are listed here to attribute each dependency and its license.
 
-- **182** packages are installed alongside the project at runtime and are
+- **200** packages are installed alongside the project at runtime and are
   marked *Distributed*.
 - **8** are build, lint, or test tools only, marked
   *Development only*, and are never shipped to users.
 
-Each entry is pinned to the exact version in `uv.lock`. License identifiers come from
-the corresponding release's PyPI metadata. Consult each project for its full license
-text, which its distribution includes.
+Each entry is pinned to the exact version in `uv.lock`. License identifiers come
+from the corresponding release's PyPI metadata or the pinned source's package
+metadata. Consult each project for its full license text, which its distribution
+includes.
+
+Newton is installed from revision
+[`1e5036c48ec92d44782dfe0f448dc25d64984b58`](https://github.com/skulkar22/newton/commit/1e5036c48ec92d44782dfe0f448dc25d64984b58)
+of `skulkar22/newton`; its package metadata declares Apache-2.0.
 
 | Package | Version | License | Usage |
 | --- | --- | --- | --- |
 | absl-py | 2.5.0 | Apache-2.0 | Distributed |
-| addict | 2.4.0 | MIT License | Distributed |
 | aiohappyeyeballs | 2.7.1 | Python Software Foundation License | Distributed |
 | aiohttp | 3.14.3 | Apache-2.0 AND MIT | Distributed |
 | aiosignal | 1.4.0 | Apache Software License | Distributed |
@@ -25,6 +30,7 @@ text, which its distribution includes.
 | annotated-doc | 0.0.5 | MIT | Distributed |
 | annotated-types | 0.8.0 | MIT | Distributed |
 | anyio | 4.14.2 | MIT | Distributed |
+| asttokens | 3.0.2 | Apache 2.0 | Distributed |
 | async-timeout | 5.0.1 | Apache Software License | Distributed |
 | attrs | 26.1.0 | MIT | Distributed |
 | blinker | 1.9.0 | MIT License | Distributed |
@@ -36,7 +42,7 @@ text, which its distribution includes.
 | click-log | 0.4.0 | MIT License | Distributed |
 | cloudpickle | 3.1.2 | BSD License | Distributed |
 | cmaes | 0.13.0 | MIT | Distributed |
-| coacd | 1.0.11 | MIT License | Distributed |
+| coacd | 1.0.14 | MIT License | Distributed |
 | colorama | 0.4.6 | BSD License | Distributed |
 | colorlog | 6.12.0 | MIT License | Distributed |
 | comm | 0.2.3 | BSD License | Distributed |
@@ -51,10 +57,12 @@ text, which its distribution includes.
 | cycler | 0.12.1 | BSD License | Distributed |
 | dash | 4.4.1 | MIT License | Distributed |
 | databricks-sdk | 0.67.0 | Apache Software License | Distributed |
+| decorator | 5.3.1 | BSD-2-Clause | Distributed |
 | docker | 7.2.0 | Apache-2.0 | Distributed |
 | etils | 1.13.0 | Apache Software License | Distributed |
 | etils | 1.14.0 | Apache Software License | Distributed |
 | exceptiongroup | 1.3.1 | MIT License | Distributed |
+| executing | 2.3.0 | MIT License | Distributed |
 | fast-simplification | 0.1.13 | MIT License | Distributed |
 | fastapi | 0.141.1 | MIT | Distributed |
 | fastjsonschema | 2.22.1 | BSD License | Distributed |
@@ -79,35 +87,42 @@ text, which its distribution includes.
 | importlib-metadata | 9.0.0 | Apache-2.0 | Distributed |
 | importlib-resources | 7.1.0 | Apache-2.0 | Distributed |
 | iniconfig | 2.3.0 | MIT | Development only |
+| ipython | 8.39.0 | BSD License | Distributed |
+| ipython | 9.17.1 | BSD-3-Clause | Distributed |
+| ipython-pygments-lexers | 1.1.1 | BSD License | Distributed |
+| ipywidgets | 8.1.9 | BSD License | Distributed |
 | itsdangerous | 2.2.0 | BSD License | Distributed |
 | janus | 2.0.0 | Apache Software License | Distributed |
+| jedi | 0.20.1 | MIT License | Distributed |
 | jinja2 | 3.1.6 | BSD License | Distributed |
 | joblib | 1.5.3 | BSD-3-Clause | Distributed |
 | jsonschema | 4.26.0 | MIT | Distributed |
 | jsonschema-specifications | 2025.9.1 | MIT | Distributed |
 | jupyter-core | 5.9.1 | BSD-3-Clause | Distributed |
+| jupyterlab-widgets | 3.0.17 | BSD License | Distributed |
 | kiwisolver | 1.5.0 | BSD License | Distributed |
 | mako | 1.4.1 | MIT | Distributed |
 | markdown-it-py | 4.2.0 | MIT License | Distributed |
 | markupsafe | 3.0.3 | BSD-3-Clause | Distributed |
 | matplotlib | 3.10.9 | Python Software Foundation License | Distributed |
 | matplotlib | 3.11.1 | Python Software Foundation License | Distributed |
+| matplotlib-inline | 0.2.2 | BSD-3-Clause | Distributed |
 | mdurl | 0.1.2 | MIT License | Distributed |
 | meshio | 5.3.5 | MIT License | Distributed |
 | mlflow | 3.15.2 | Apache Software License | Distributed |
 | mlflow-skinny | 3.15.2 | Apache Software License | Distributed |
 | mlflow-tracing | 3.15.2 | Apache Software License | Distributed |
 | mpmath | 1.3.0 | BSD License | Distributed |
-| mujoco | 3.10.0 | Apache-2.0 | Distributed |
-| mujoco-warp | 3.10.0.3 | Apache-2.0 | Distributed |
+| mujoco | 3.16.0 | Apache-2.0 | Distributed |
+| mujoco-warp | 3.16.0 | Apache-2.0 | Distributed |
 | multidict | 6.7.1 | Apache License 2.0 | Distributed |
 | narwhals | 2.24.0 | MIT | Distributed |
 | nbformat | 5.11.0 | BSD License | Distributed |
 | nest-asyncio | 1.6.0 | BSD License | Distributed |
 | networkx | 3.4.2 | BSD License | Distributed |
 | networkx | 3.6.1 | BSD-3-Clause | Distributed |
-| newton | 1.4.0 | Apache-2.0 | Distributed |
-| newton-usd-schemas | 0.4.1 | Apache-2.0 | Distributed |
+| newton | 1.8.0.dev0 | Apache-2.0 | Distributed |
+| newton-usd-schemas | 0.6.0 | Apache-2.0 | Distributed |
 | nodeenv | 1.10.0 | BSD License | Development only |
 | numpy | 2.2.6 | BSD License | Distributed |
 | numpy | 2.4.6 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | Distributed |
@@ -127,7 +142,7 @@ text, which its distribution includes.
 | nvidia-nvjitlink | 13.3.33 | UNRESOLVED | Distributed |
 | nvidia-nvshmem-cu13 | 3.4.5 | UNRESOLVED | Distributed |
 | nvidia-nvtx | 13.0.85 | Apache 2.0 | Distributed |
-| open3d | 0.19.0 | MIT License | Distributed |
+| open3d | 0.20.0 | MIT License | Distributed |
 | opentelemetry-api | 1.44.0 | Apache-2.0 | Distributed |
 | opentelemetry-proto | 1.44.0 | Apache-2.0 | Distributed |
 | opentelemetry-sdk | 1.44.0 | Apache-2.0 | Distributed |
@@ -135,13 +150,19 @@ text, which its distribution includes.
 | optuna | 4.9.0 | MIT License | Distributed |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | Distributed |
 | pandas | 2.3.3 | BSD License | Distributed |
+| parso | 0.8.7 | MIT License | Distributed |
+| pexpect | 4.9.0 | ISC License (ISCL) | Distributed |
 | pillow | 12.3.0 | MIT-CMU | Distributed |
 | platformdirs | 4.11.0 | MIT | Distributed |
 | plotly | 6.9.0 | MIT | Distributed |
 | pluggy | 1.6.0 | MIT License | Development only |
 | prettytable | 3.18.0 | BSD-3-Clause | Distributed |
+| prompt-toolkit | 3.0.53 | BSD License | Distributed |
 | propcache | 0.5.2 | Apache Software License | Distributed |
 | protobuf | 7.36.0 | 3-Clause BSD License | Distributed |
+| psutil | 7.2.2 | BSD-3-Clause | Distributed |
+| ptyprocess | 0.7.0 | ISC License (ISCL) | Distributed |
+| pure-eval | 0.2.4 | MIT License | Distributed |
 | pyarrow | 25.0.0 | Apache-2.0 | Distributed |
 | pyasn1 | 0.6.4 | BSD-2-Clause | Distributed |
 | pyasn1-modules | 0.4.2 | BSD License | Distributed |
@@ -152,7 +173,6 @@ text, which its distribution includes.
 | pygments | 2.20.0 | BSD-2-Clause | Distributed |
 | pyopengl | 3.1.10 | BSD License | Distributed |
 | pyparsing | 3.3.2 | MIT | Distributed |
-| pyquaternion | 0.9.9 | MIT License | Distributed |
 | pyright | 1.1.411 | MIT | Development only |
 | pytest | 9.1.1 | MIT | Development only |
 | pytest-cov | 7.1.0 | MIT | Development only |
@@ -182,6 +202,7 @@ text, which its distribution includes.
 | smmap | 5.0.3 | BSD License | Distributed |
 | sqlalchemy | 2.0.51 | MIT | Distributed |
 | sqlparse | 0.6.0 | BSD License | Distributed |
+| stack-data | 0.6.3 | MIT License | Distributed |
 | starlette | 1.4.1 | BSD-3-Clause | Distributed |
 | sympy | 1.14.0 | BSD License | Distributed |
 | threadpoolctl | 3.6.0 | BSD License | Distributed |
@@ -200,9 +221,12 @@ text, which its distribution includes.
 | usd-exchange | 2.3.0 | Apache-2.0 | Distributed |
 | uvicorn | 0.52.1 | BSD-3-Clause | Distributed |
 | waitress | 3.0.2 | Zope Public License | Distributed |
-| warp-lang | 1.16.0 | Apache-2.0 | Distributed |
+| warp-lang | 1.18.0 | Apache-2.0 | Distributed |
 | wcwidth | 0.8.2 | MIT | Distributed |
+| websockets | 16.1.1 | BSD-3-Clause | Distributed |
+| websockets | 17.3 | BSD-3-Clause | Distributed |
 | werkzeug | 3.1.8 | BSD-3-Clause | Distributed |
+| widgetsnbextension | 4.0.16 | BSD License | Distributed |
 | yarl | 1.24.5 | Apache-2.0 | Distributed |
 | zipp | 4.1.0 | MIT | Distributed |
 

@@ -8,6 +8,12 @@ recorded state.
 Newton's simulation components are included in the default Anchor Bench
 installation.
 
+The Newton dependency is pinned to revision
+[`1e5036c48ec92d44782dfe0f448dc25d64984b58`](https://github.com/skulkar22/newton/commit/1e5036c48ec92d44782dfe0f448dc25d64984b58)
+of the `dev/rigid-vbd-integration` branch in `skulkar22/newton`. Installing
+Anchor Bench resolves that exact revision rather than the moving branch head.
+The current sysID configuration continues to use MuJoCo.
+
 ## Run the included example
 
 The maintained SO-101 example includes its source USD and three recorded

@@ -16,7 +16,6 @@ class FakeModel:
     def __init__(self) -> None:
         self.states = []
         self.control_buffer = object()
-        self.contacts_buffer = object()
 
     def state(self):
         """Return a new fake state."""
@@ -31,7 +30,24 @@ class FakeModel:
         return self.control_buffer
 
     def contacts(self):
-        """Return the model contacts buffer."""
+        """Reject Newton's deprecated model-level contacts factory."""
+
+        raise AssertionError("Construct contacts through CollisionPipeline.contacts().")
+
+
+class FakeCollisionPipeline:
+    """Own contacts independently of Newton's deprecated model factory."""
+
+    instances: ClassVar[list["FakeCollisionPipeline"]] = []
+
+    def __init__(self, model: FakeModel, *, broad_phase: str) -> None:
+        self.model = model
+        self.broad_phase = broad_phase
+        self.contacts_buffer = object()
+        self.instances.append(self)
+
+    def contacts(self):
+        """Return this pipeline's shared contacts buffer."""
 
         return self.contacts_buffer
 
@@ -61,7 +77,8 @@ class FakeModelBuilder:
     def __init__(self) -> None:
         self.usd_source = None
         self.replicated_template = None
-        self.world_count = 1
+        self.copy_count = 1
+        self.custom_attributes_registered = False
         self.world_gravity = []
         self.floating = None
         self.options = {}
@@ -78,6 +95,7 @@ class FakeModelBuilder:
     ) -> None:
         """Record the USD source passed to Newton."""
 
+        assert self.custom_attributes_registered
         self.usd_source = source
         self.floating = floating
         self.options = options
@@ -85,18 +103,19 @@ class FakeModelBuilder:
     def finalize(self) -> FakeModel:
         """Return the finalized fake model."""
 
+        assert self.custom_attributes_registered
         return self.model
 
     def replicate(
         self,
         template: "FakeModelBuilder",
         *,
-        world_count: int,
+        copy_count: int,
     ) -> None:
         """Record a replicated model request."""
 
         self.replicated_template = template
-        self.world_count = world_count
+        self.copy_count = copy_count
 
 
 class FakeSolver:
@@ -107,6 +126,7 @@ class FakeSolver:
 
     @classmethod
     def register_custom_attributes(cls, builder: FakeModelBuilder) -> None:
+        builder.custom_attributes_registered = True
         cls.registered_builders.append(builder)
 
     def __init__(self, model: FakeModel, **options: Any) -> None:
@@ -144,6 +164,7 @@ def _install_fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
 
     fake_newton = SimpleNamespace(
         ModelBuilder=FakeModelBuilder,
+        CollisionPipeline=FakeCollisionPipeline,
         solvers=SimpleNamespace(SolverMuJoCo=FakeSolver),
     )
     monkeypatch.setattr(
@@ -152,6 +173,7 @@ def _install_fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     FakeModelBuilder.instance_count = 0
     FakeModelBuilder.instances = []
+    FakeCollisionPipeline.instances = []
     FakeSolver.registered_builders = []
     FakeSolver.instances = []
 
@@ -192,7 +214,8 @@ def test_lazily_builds_one_newton_model_and_state(
     assert template.options == {}
     assert template.world_gravity == []
     assert population.replicated_template is template
-    assert population.world_count == 1
+    assert population.copy_count == 1
+    assert FakeSolver.registered_builders == [template, population]
     assert model is fake_model
     assert state is fake_model.states[0]
     assert loaded_model is model
@@ -200,10 +223,16 @@ def test_lazily_builds_one_newton_model_and_state(
     assert context.state is fake_model.states[0]
     assert context.state_next is fake_model.states[1]
     assert context.control is fake_model.control_buffer
-    assert context.contacts is fake_model.contacts_buffer
+    pipeline = FakeCollisionPipeline.instances[0]
+    assert pipeline.model is fake_model
+    assert pipeline.broad_phase == "explicit"
+    assert context._collision_pipeline is pipeline
+    assert context.contacts is pipeline.contacts_buffer
     assert context.solver is FakeSolver.instances[0]
+    assert FakeSolver.instances[0].options == {}
     assert context.world_count == 1
     assert FakeModelBuilder.instance_count == 2
+    assert len(FakeCollisionPipeline.instances) == 1
 
 
 def test_initializes_one_configurable_replicated_simulation(
@@ -234,14 +263,20 @@ def test_initializes_one_configurable_replicated_simulation(
     assert template.usd_source == str(source)
     assert configured == [template]
     assert population.replicated_template is template
-    assert population.world_count == 4
+    assert population.copy_count == 4
     assert context.model is population.model
     fake_solver = FakeSolver.instances[0]
     assert context.solver is fake_solver
     assert fake_solver.model is population.model
     assert fake_solver.options == {"iterations": 5}
+    pipeline = FakeCollisionPipeline.instances[0]
+    assert pipeline.model is population.model
+    assert pipeline.broad_phase == "explicit"
+    assert context._collision_pipeline is pipeline
+    assert context.contacts is pipeline.contacts_buffer
     assert FakeModelBuilder.instance_count == 2
     assert len(FakeSolver.instances) == 1
+    assert len(FakeCollisionPipeline.instances) == 1
 
 
 def test_rejects_conflicting_reinitialization(
