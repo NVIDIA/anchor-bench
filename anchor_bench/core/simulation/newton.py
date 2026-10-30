@@ -19,7 +19,10 @@ from anchor_bench.core.simulation.newton_solvers import (
     NewtonSolverAdapter,
     get_solver_adapter,
 )
-from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
+from anchor_bench.core.simulation.newton_stepper import (
+    BeforeSubstep,
+    NewtonStepExecutor,
+)
 
 if TYPE_CHECKING:
     from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -216,6 +219,12 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
 
         self._ensure_initialized()
         self._step_executor.capture_graph(dt=dt, substeps=substeps)
+
+    def set_before_substep(self, callback: BeforeSubstep | None) -> None:
+        """Run a callback before each physics substep, eager or captured."""
+
+        self._ensure_initialized()
+        self._step_executor.set_before_substep(callback)
 
     def step(self, *, dt: float, substeps: int = 1) -> None:
         """Advance every world over one eager or graph-captured interval."""
