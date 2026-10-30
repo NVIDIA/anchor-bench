@@ -63,8 +63,11 @@ simulation:
   render_freq: 60
   solver:
     type: warp_mujoco
-    solver_iterations: 10
-    line_search_iterations: 4
+    settings:
+      solver: newton
+      integrator: implicitfast
+      iterations: 10
+      ls_iterations: 4
 
 dataset:
   type: parquet
@@ -89,6 +92,14 @@ population contains at least two environments; `num_envs` defaults to 64.
 `buffer_time` excludes an aligned prefix of each recorded trajectory from the
 objective while still replaying its commands, allowing the simulated state to
 settle without advancing it ahead of the measurements.
+
+`simulation.solver.type` selects the Newton solver (`warp_mujoco`).
+`simulation.solver.settings` is passed to that solver's constructor. A key
+that is not a constructor parameter is skipped with a warning and recorded in
+`run_summary.yaml` as `"NOT SET: <reason>"`. Solver-specific joint, body, and
+shape attributes are read from the USD (for example
+`newton:mujoco:solreflimit`); author them in the asset or in an override layer
+that sublayers it.
 
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 
@@ -127,6 +138,7 @@ run writes:
 | `best_params.yaml` | Best candidate, position MSE, and result schema metadata. |
 | `optimization_log.csv` | Best and population-mean MSE for each generation. |
 | `run_summary.yaml` | Timestamp, best MSE, metric name, and generation count. |
+| `run_summary.yaml` `solver` | Solver type and the settings applied. |
 | `identified.usda` | USD layer containing the fitted actuator opinions (Newton). |
 
 When MLOps tracking is enabled, the task also reports per-generation metrics

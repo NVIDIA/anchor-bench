@@ -6,9 +6,16 @@
 from __future__ import annotations
 
 from math import isclose
-from typing import Annotated, List, Literal, Optional, Union
+from typing import Annotated, Dict, List, Literal, Optional, Union
 
-from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
+from pydantic import (
+    Field,
+    JsonValue,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import TypeAlias
 
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
@@ -93,11 +100,31 @@ class JointParameterGroup(StrictBaseModel):
         return self
 
 
-class WarpMujocoSolverConfig(StrictBaseModel):
-    type: Literal["warp_mujoco"]
-    integrator: NonEmptyString = "implicitfast"
-    solver_iterations: PositiveInteger
-    line_search_iterations: NonNegativeInteger
+_MOVED_SOLVER_FIELDS = {
+    "integrator": "integrator",
+    "solver_iterations": "iterations",
+    "line_search_iterations": "ls_iterations",
+}
+
+
+class NewtonSolverConfig(StrictBaseModel):
+    type: NonEmptyString
+    settings: Dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_moved_fields(cls, data: object) -> object:
+        if isinstance(data, dict):
+            moved = [name for name in _MOVED_SOLVER_FIELDS if name in data]
+            if moved:
+                hints = ", ".join(
+                    f"{name} -> {_MOVED_SOLVER_FIELDS[name]}" for name in moved
+                )
+                raise ValueError(
+                    "solver constructor options now live under "
+                    f"simulation.solver.settings ({hints})"
+                )
+        return data
 
 
 class NewtonSimulationConfig(StrictBaseModel):
@@ -106,7 +133,7 @@ class NewtonSimulationConfig(StrictBaseModel):
     physics_freq: PositiveInteger
     control_freq: PositiveInteger
     render_freq: PositiveInteger
-    solver: WarpMujocoSolverConfig
+    solver: NewtonSolverConfig
 
     @model_validator(mode="after")
     def validate_frequencies(self) -> NewtonSimulationConfig:

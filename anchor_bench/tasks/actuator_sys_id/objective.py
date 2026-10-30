@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 import numpy as np
+from pydantic import JsonValue
 
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray
@@ -29,6 +30,10 @@ class PopulationEvaluator(ABC):
     def export_model(self, best: Candidate, output_dir: Path) -> Optional[Path]:
         """Write the fitted simulator model, if the simulator supports it."""
         return None
+
+    def run_summary(self) -> Dict[str, JsonValue]:
+        """Return extra run-summary fields describing the simulation used."""
+        return {}
 
 
 class ActuatorSysIdObjective:
