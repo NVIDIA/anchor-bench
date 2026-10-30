@@ -111,17 +111,17 @@ class ToyContext(ResourceOnlyContext):
 
 
 @pytest.fixture
-def register_toy(monkeypatch, tmp_path):
+def use_toy_context(monkeypatch, tmp_path):
     monkeypatch.setattr(SimulationContext, "_instance", None)
     monkeypatch.setattr(
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
 
-    def register(context_type: type[ToyContext]):
+    def select_context(context_type: type[ToyContext]):
         usd = tmp_path / "scene.usda"
         usd.write_text("#usda 1.0\n")
         context = context_type(str(usd), fixed_base=True)
-        registry.register_simulation_backend("task-toy", context_type)
+        registry.SIMULATION_CONTEXTS["task-toy"] = context_type
         config = _config(
             tmp_path,
             simulation={
@@ -135,7 +135,7 @@ def register_toy(monkeypatch, tmp_path):
         )
         return config, context
 
-    return register
+    return select_context
 
 
 def test_sysid_result_preserves_eight_positional_argument_signature(tmp_path):
@@ -317,7 +317,7 @@ def test_load_trajectories_rejects_an_episode_without_a_transition(
 
 
 def test_task_uses_registered_evaluator_and_context(
-    tmp_path, monkeypatch, register_toy
+    tmp_path, monkeypatch, use_toy_context
 ):
     trajectory = Trajectory(
         experiment="wave",
@@ -407,7 +407,7 @@ def test_task_uses_registered_evaluator_and_context(
     )
     monkeypatch.setattr(task_module, "create_optimizer", lambda *args: FakeOptimizer())
     received = {}
-    config, context = register_toy(TaskToyContext)
+    config, context = use_toy_context(TaskToyContext)
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
     mlops_run = Mock(spec=MLOpsRun)
@@ -504,7 +504,7 @@ def test_common_artifacts_allow_missing_or_json_model_export(
         assert not (output_dir / "identified.usda").exists()
 
 
-def test_export_failure_prevents_completion(tmp_path, monkeypatch, register_toy):
+def test_export_failure_prevents_completion(tmp_path, monkeypatch, use_toy_context):
     class Evaluator(PopulationEvaluator):
         def evaluate(
             self,
@@ -524,7 +524,7 @@ def test_export_failure_prevents_completion(tmp_path, monkeypatch, register_toy)
         ) -> PopulationEvaluator:
             return Evaluator()
 
-    config, _ = register_toy(ExportFailureContext)
+    config, _ = use_toy_context(ExportFailureContext)
     config.num_envs = 4
     monkeypatch.setattr(
         task_module,
@@ -547,7 +547,7 @@ def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
     monkeypatch.setattr(
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
-    registry.register_simulation_backend("resource-only", ResourceOnlyContext)
+    registry.SIMULATION_CONTEXTS["resource-only"] = ResourceOnlyContext
     config.simulation = SysIdSimulationConfig(
         usd_path=config.simulation.usd_path,
         type="resource-only",
@@ -568,7 +568,7 @@ def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
 
 
 def test_task_accepts_inherited_optional_evaluator_methods(
-    tmp_path, monkeypatch, register_toy
+    tmp_path, monkeypatch, use_toy_context
 ):
     class Evaluator(PopulationEvaluator):
         def evaluate(
@@ -584,7 +584,7 @@ def test_task_accepts_inherited_optional_evaluator_methods(
         ) -> PopulationEvaluator:
             return Evaluator()
 
-    config, _ = register_toy(EvaluationOnlyContext)
+    config, _ = use_toy_context(EvaluationOnlyContext)
     config.num_envs = 4
     monkeypatch.setattr(
         task_module,

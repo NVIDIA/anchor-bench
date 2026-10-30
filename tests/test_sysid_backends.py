@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Explicit simulator registration and configuration boundaries."""
+"""Simulator selection and configuration boundaries."""
 
 from __future__ import annotations
 
@@ -34,14 +34,12 @@ class ToyContext(ResourceOnlyContext):
     sysid_config_model: ClassVar[type[SysIdSimulationConfig] | None] = ToyConfig
 
 
-def toy_registration(name: str = "toy") -> None:
-    registry.register_simulation_backend(name, ToyContext)
-
-
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
+        registry,
+        "SIMULATION_CONTEXTS",
+        {**registry.SIMULATION_CONTEXTS, "toy": ToyContext},
     )
     monkeypatch.setattr(SimulationContext, "_instance", None)
 
@@ -90,7 +88,6 @@ def toy_task_data(tmp_path):
 
 
 def test_plugin_simulation_roundtrips_without_losing_fields(toy_task_data):
-    toy_registration()
     config = ActuatorSysIdConfig.model_validate(toy_task_data)
     assert isinstance(config.simulation, ToyConfig)
     assert config.simulation.gain == 2
@@ -105,32 +102,22 @@ def test_plugin_simulation_roundtrips_without_losing_fields(toy_task_data):
 
 @pytest.mark.parametrize("patch", [{"gain": "2"}, {"extra": 1}, {"control_freq": 300}])
 def test_plugin_simulation_is_strict(toy_task_data, patch):
-    toy_registration()
     toy_task_data["simulation"].update(patch)
     with pytest.raises(ValidationError):
         ActuatorSysIdConfig.model_validate(toy_task_data)
 
 
-def test_python_registration_rejects_duplicate_names():
-    toy_registration()
-    with pytest.raises(SimulationBackendError, match="already registered"):
-        toy_registration()
-    with pytest.raises(SimulationBackendError, match="already registered"):
-        toy_registration("newton")
-
-
-def test_registered_backend_without_sysid_fails_early(toy_task_data):
-    registry.register_simulation_backend("toy", ResourceOnlyContext)
+def test_context_without_sysid_fails_early(toy_task_data):
+    registry.SIMULATION_CONTEXTS["toy"] = ResourceOnlyContext
     with pytest.raises(SimulationBackendError, match="system identification"):
         ActuatorSysIdConfig.model_validate(toy_task_data)
 
 
-def test_yaml_parser_uses_explicit_registration(toy_task_data, tmp_path):
+def test_yaml_parser_uses_configured_context(toy_task_data, tmp_path):
     import yaml
 
     from anchor_bench.schema.parse import parse
 
-    toy_registration()
     path = tmp_path / "task.yaml"
     path.write_text(yaml.safe_dump(toy_task_data), encoding="utf-8")
     config = parse(path)
@@ -140,7 +127,6 @@ def test_yaml_parser_uses_explicit_registration(toy_task_data, tmp_path):
 
 
 def test_plugin_simulation_requires_usd_input(toy_task_data):
-    toy_registration()
     toy_task_data["simulation"].pop("usd_path", None)
     with pytest.raises(ValidationError, match="usd_path"):
         ActuatorSysIdConfig.model_validate(toy_task_data)

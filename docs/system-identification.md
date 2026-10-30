@@ -104,7 +104,7 @@ The runtime loads the configured trajectories, evaluates optimizer candidates
 with the selected simulator backend, and stops when the optimizer reaches its
 iteration or convergence condition.
 
-## Register another simulator
+## Add another simulator
 
 A backend supplies its own strict simulation configuration, resource context,
 and population evaluator. Its configuration extends
@@ -117,38 +117,28 @@ the resolved USD path and returns the model and initial state.
 
 The context declares its configuration class in `sysid_config_model` and
 implements `create_sysid_evaluator(config, parameter_space)`. The task creates
-the registered context with `fixed_base=True` and calls this method on that
+the selected context with `fixed_base=True` and calls this method on that
 context. The factory returns a `PopulationEvaluator` subclass whose
 `evaluate(population, trajectories)` method produces one finite position-MSE
 score per decoded candidate. The evaluator owns its simulator's candidate
 application, resets, command delay, buffer exclusion, actuation, and stepping.
 The task retains dataset loading and optimization.
 
-Register the context through the Python API before validating a task:
+Add the implementation beside Newton in
+`anchor_bench/core/simulation/registry.py`:
 
 ```python
-from anchor_bench.core.simulation.registry import register_simulation_backend
-from my_package.backend import MySimulationContext
-
-register_simulation_backend("my_simulator", MySimulationContext)
+SIMULATION_CONTEXTS = {
+    "newton": NewtonSimulationContext,
+    "my_simulator": MySimulationContext,
+}
 ```
 
-To run the command-line task with a custom backend, register it in your own
-entry script before invoking the CLI:
-
-```python
-from anchor_bench.cli import main
-from anchor_bench.core.simulation.registry import register_simulation_backend
-from my_package.backend import MySimulationContext
-
-register_simulation_backend("my_simulator", MySimulationContext)
-raise SystemExit(main())
-```
-
-Run this script with the usual `--config` and `--output` arguments. Select the
-backend using `simulation.type: my_simulator`; this value must match the
-registered name and configuration `type`. Plugin fields survive configuration
-serialization and hashing.
+Select it with `simulation.type: my_simulator` in the YAML and run the normal
+CLI. The dictionary key and the configuration's `type` must match. Each
+implementation supplies its context and evaluator methods; no registration
+function or custom entry script is required. Simulator-specific fields survive
+configuration serialization and hashing.
 
 Model export is optional. An evaluator can override
 `export_model(best_parameters, output_directory)` to return an

@@ -108,12 +108,12 @@ def _write_config(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("export_json", [True, False], ids=["json-export", "no-export"])
-def test_cli_uses_explicitly_registered_sysid_backend(
+def test_cli_uses_configured_sysid_context(
     tmp_path: Path,
     custom_backend: Path,
     export_json: bool,
 ) -> None:
-    provider = "provide_json" if export_json else "provide_no_export"
+    context_name = "JsonToyContext" if export_json else "ToyContext"
     config = _write_config(tmp_path)
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -125,7 +125,7 @@ def test_cli_uses_explicitly_registered_sysid_backend(
             [
                 sys.executable,
                 str(FIXTURE / "run_cli.py"),
-                provider,
+                context_name,
                 "--config",
                 str(config),
                 "--output",
