@@ -18,6 +18,10 @@ from pydantic import JsonValue
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
+from anchor_bench.tasks.actuator_sys_id.newton_actuation import (
+    NativePD,
+    NewtonActuation,
+)
 from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -61,9 +65,14 @@ def _accumulate_position_error(
 class NewtonPopulationEvaluator(PopulationEvaluator):
     """Evaluate one candidate per replicated Newton world."""
 
-    _MODEL_ARRAYS: ClassVar[Dict[str, str]] = {
-        "stiffness": "joint_target_ke",
-        "damping": "joint_target_kd",
+    _PARAMETERS: ClassVar[Tuple[str, ...]] = (
+        "stiffness",
+        "damping",
+        "armature",
+        "dry_friction",
+        "viscous_friction",
+    )
+    _PASSIVE_ARRAYS: ClassVar[Dict[str, str]] = {
         "armature": "joint_armature",
         "dry_friction": "joint_friction",
         "viscous_friction": "joint_damping",
@@ -97,10 +106,11 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         )
         self._initialize_simulation(simulation_context)
         self._initialize_score_buffers()
-        self._simulation_context.capture_step_graph(
-            dt=self.physics_dt * self.control_substeps,
-            substeps=self.control_substeps,
-        )
+        if all(actuation.is_graphable() for actuation in self._actuations):
+            self._simulation_context.capture_step_graph(
+                dt=self.physics_dt * self.control_substeps,
+                substeps=self.control_substeps,
+            )
 
     def _initialize_simulation(self, context: NewtonSimulationContext) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
@@ -128,6 +138,37 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             self.joint_names,
             self.num_envs,
         )
+        implementation = {
+            joint: group.controller.implementation
+            for group in self.config.joint_parameters
+            for joint in group.names
+        }
+        native = [
+            column
+            for column, joint in enumerate(self.joint_names)
+            if implementation[joint] == "native"
+        ]
+        self._actuations: List[NewtonActuation] = []
+        if native:
+            self._actuations.append(
+                NativePD(
+                    model,
+                    joint_names=[self.joint_names[column] for column in native],
+                    dof_indices=self._joint_dof_indices[:, native],
+                )
+            )
+        hooks = [
+            actuation for actuation in self._actuations if actuation.runs_before_substep
+        ]
+        if hooks:
+
+            def before_substep(
+                state: newton.State, control: newton.Control | None, dt: float
+            ) -> None:
+                for actuation in hooks:
+                    actuation.before_substep(state, control, dt)
+
+            context.set_before_substep(before_substep)
         model_joint_q = model.joint_q
         model_joint_qd = model.joint_qd
         model_joint_target_q = model.joint_target_q
@@ -142,7 +183,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             dtype=np.float32,
         )
         self._base_model_arrays: Dict[str, np.ndarray] = {}
-        for model_array_name in self._MODEL_ARRAYS.values():
+        for model_array_name in self._PASSIVE_ARRAYS.values():
             model_array = getattr(model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
@@ -181,9 +222,10 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         joint_configuration = tuple(
             (
                 joint,
-                tuple(initial[joint][name] for name in self._MODEL_ARRAYS),
+                tuple(initial[joint][name] for name in self._PARAMETERS),
                 float(groups[joint].controller.clamps.effort_limit),
                 float(groups[joint].controller.clamps.velocity_limit),
+                groups[joint].controller.implementation,
             )
             for joint in self.joint_names
         )
@@ -269,7 +311,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         return path
 
     def _apply_population(self, population: Sequence[Candidate]) -> None:
-        for parameter_name, model_array_name in self._MODEL_ARRAYS.items():
+        for parameter_name, model_array_name in self._PASSIVE_ARRAYS.items():
             model_array = getattr(self._simulation_context.model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
@@ -280,6 +322,8 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                         candidate[joint][parameter_name]
                     )
             model_array.assign(values)
+        for actuation in self._actuations:
+            actuation.apply_population(population)
 
         flags = (
             newton.ModelFlags.JOINT_DOF_PROPERTIES
@@ -353,6 +397,8 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         joint_qd[self._joint_dof_indices] = 0.0
         context = self._simulation_context
         context.solver.reset(context.state)
+        for actuation in self._actuations:
+            actuation.reset(context.control)
         for state in (context.state, context.state_next):
             state_joint_q = state.joint_q
             state_joint_qd = state.joint_qd
