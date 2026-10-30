@@ -11,9 +11,13 @@ import pandas as pd
 import pytest
 from mlflow.data.pandas_dataset import from_pandas
 
+import anchor_bench.data.loader as loader_module
+from anchor_bench.data import DatasetLoader
+from anchor_bench.data.datasets import HuggingFaceDatasetFile
 from anchor_bench.errors import MLOpsTrackingError
 from anchor_bench.mlops.backends import mlflow as mlflow_backend
 from anchor_bench.mlops.backends.mlflow import MLflowBackend
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 
 
 class FakeMlflowException(Exception):
@@ -422,3 +426,55 @@ def test_mlflow_persists_artifacts_and_dataset_input(tmp_path, monkeypatch):
         "Inferred schema contains integer column(s)" in message
         for message in warning_messages
     )
+
+
+def test_structured_huggingface_lineage_with_real_mlflow(tmp_path, monkeypatch):
+    """Persist distinct, resolvable native inputs for same-named Hub files."""
+
+    monkeypatch.chdir(tmp_path)
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    files = []
+    for directory, value in (("left", 1.0), ("right", 2.0)):
+        path = tmp_path / directory / "data.parquet"
+        path.parent.mkdir()
+        pd.DataFrame(
+            {
+                "experiment": [directory],
+                "time_ns": [0],
+                "field": ["actual_q"],
+                "value": [value],
+            }
+        ).to_parquet(path, index=False)
+        files.append(
+            HuggingFaceDatasetFile(path=path, repo_path=f"{directory}/data.parquet")
+        )
+    monkeypatch.setattr(loader_module, "download_huggingface_dataset", lambda _: files)
+    source = HuggingFaceDatasetSource(
+        provider="huggingface",
+        repo_id="nvidia/Anchor-Lab",
+        revision="abc123",
+        paths=["**/*.parquet"],
+    )
+
+    with MLflowBackend(tracking_uri=tracking_uri).start_run("hub-lineage") as run:
+        active_run = mlflow.active_run()
+        assert active_run is not None
+        run_id = active_run.info.run_id
+        aligned = DatasetLoader.load(source, dt=0.02, dataset_tracker=run)
+
+    assert aligned["actual_q"].tolist() == [1.0, 2.0]
+    tracked_run = mlflow.MlflowClient(tracking_uri=tracking_uri).get_run(run_id)
+    inputs = {item.dataset.name: item for item in tracked_run.inputs.dataset_inputs}
+    assert set(inputs) == {"dataset-left/data.parquet", "dataset-right/data.parquet"}
+    for directory in ("left", "right"):
+        name = f"dataset-{directory}/data.parquet"
+        expected_source = (
+            "https://huggingface.co/datasets/nvidia/Anchor-Lab/resolve/abc123/"
+            f"{directory}/data.parquet"
+        )
+        assert tracked_run.data.params[f"datasets/{name}/source"] == expected_source
+        assert inputs[name].dataset.source_type == "http"
+        assert json.loads(inputs[name].dataset.source)["url"] == expected_source
+        tags = {tag.key: tag.value for tag in inputs[name].tags}
+        assert tags["repo_path"] == f"{directory}/data.parquet"
+        assert tags["revision"] == "abc123"

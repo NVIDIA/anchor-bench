@@ -16,8 +16,9 @@ The current sysID configuration continues to use MuJoCo.
 
 ## Run the included example
 
-The maintained SO-101 example includes its source USD and three recorded
-training trajectories. From the repository root, run:
+The maintained SO-101 example includes its source USD and selects three
+revision-pinned training trajectories from Anchor-Lab. From the repository
+root, run:
 
 ```bash
 uv run anchor-bench \
@@ -27,6 +28,8 @@ uv run anchor-bench \
 
 The configuration evaluates up to 100 CMA-ES generations across 64 replicated
 worlds and may stop earlier when it reaches the configured convergence target.
+The first run downloads the trajectories into the Hugging Face cache; later
+runs reuse the cached files.
 
 ## Configuration
 

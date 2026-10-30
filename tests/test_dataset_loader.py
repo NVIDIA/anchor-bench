@@ -10,8 +10,10 @@ import pytest
 
 import anchor_bench.data.loader as loader_module
 from anchor_bench.data import DatasetLoader
+from anchor_bench.data.datasets import HuggingFaceDatasetFile
 from anchor_bench.errors import DatasetAlignmentError, DatasetLoadError
 from anchor_bench.mlops import MLOpsRun
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 
 
 def _rows(field, timestamps, values):
@@ -158,6 +160,77 @@ def test_downloads_huggingface_url_before_loading(monkeypatch) -> None:
     assert seen[0][2] == 2.5
     assert not seen[0][1].exists()
     assert tracker.log_dataset.call_args.kwargs["source"] == source
+
+
+def test_downloads_structured_huggingface_source_and_logs_lineage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep lineage distinct for files with the same basename in different dirs."""
+
+    first = tmp_path / "b" / "data.parquet"
+    second = tmp_path / "a" / "data.parquet"
+    for path, experiment, value in (
+        (first, "episode-b", 2.0),
+        (second, "episode-a", 1.0),
+    ):
+        dataset = pd.DataFrame(_rows("actual_q", [0], [value]))
+        dataset["experiment"] = experiment
+        path.parent.mkdir(parents=True)
+        dataset.to_parquet(path, index=False)
+    source = HuggingFaceDatasetSource(
+        provider="huggingface",
+        repo_id="nvidia/Anchor-Lab",
+        revision="abc123",
+        paths=["data/selected/*/data.parquet"],
+    )
+    tracker = Mock(spec=MLOpsRun)
+
+    monkeypatch.setattr(
+        loader_module,
+        "download_huggingface_dataset",
+        lambda _: [
+            HuggingFaceDatasetFile(
+                path=second,
+                repo_path="data/selected/a/data.parquet",
+            ),
+            HuggingFaceDatasetFile(
+                path=first,
+                repo_path="data/selected/b/data.parquet",
+            ),
+        ],
+    )
+
+    result = DatasetLoader.load(source, dt=0.02, dataset_tracker=tracker)
+
+    assert result.index.get_level_values("experiment").unique().tolist() == [
+        "episode-a",
+        "episode-b",
+    ]
+    calls = tracker.log_dataset.call_args_list
+    assert [call.kwargs["source"] for call in calls] == [
+        (
+            "https://huggingface.co/datasets/nvidia/Anchor-Lab/resolve/abc123/"
+            "data/selected/a/data.parquet"
+        ),
+        (
+            "https://huggingface.co/datasets/nvidia/Anchor-Lab/resolve/abc123/"
+            "data/selected/b/data.parquet"
+        ),
+    ]
+    assert [call.kwargs["metadata"]["repo_path"] for call in calls] == [
+        "data/selected/a/data.parquet",
+        "data/selected/b/data.parquet",
+    ]
+    assert [call.kwargs["name"] for call in calls] == [
+        "dataset-data/selected/a/data.parquet",
+        "dataset-data/selected/b/data.parquet",
+    ]
+    assert [call.kwargs["digest"] for call in calls] == [
+        hashlib.sha256(second.read_bytes()).hexdigest(),
+        hashlib.sha256(first.read_bytes()).hexdigest(),
+    ]
+    assert all(call.kwargs["metadata"]["provider"] == "huggingface" for call in calls)
 
 
 def test_rejects_globbing_huggingface_urls() -> None:
