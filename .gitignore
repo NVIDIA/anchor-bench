@@ -23,7 +23,6 @@ output/
 mlruns/
 /data/
 inputs/datasets/
-examples/training/data/
 *.pt
 *.pth
 *.onnx
@@ -44,5 +43,3 @@ assets/robots/*/files/*
 !assets/robots/g1/files/g1_arm_residual.usda
 !assets/robots/so101/files/
 !assets/robots/so101/files/so101.usd
-!examples/system_identification/data/
-!examples/system_identification/data/train-*.parquet

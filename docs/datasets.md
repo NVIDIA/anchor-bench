@@ -1,7 +1,8 @@
 # Dataset loading
 
-`DatasetLoader` reads a local file, a local glob, or a Hugging Face HTTP(S)
-Parquet URL and linearly resamples each experiment onto a uniform time grid:
+`DatasetLoader` reads a local file, a local glob, a Hugging Face HTTP(S)
+Parquet URL, or a structured Hugging Face source and linearly resamples each
+experiment onto a uniform time grid:
 
 ```python
 from anchor_bench.data import DatasetLoader
@@ -40,6 +41,37 @@ dataset:
 
 Only intersection-based time ranges and linear interpolation are currently
 supported.
+
+## Hugging Face sources
+
+A structured source selects one or more paths from a dataset repository at an
+explicit revision:
+
+```yaml
+dataset:
+  type: parquet
+  source:
+    provider: huggingface
+    repo_id: nvidia/Anchor-Lab
+    revision: be6010113e7b769e68f2779fbdf321908725f929
+    paths:
+      - data/g1_arm_multijoint/*.parquet
+  resampling:
+    type: uniform
+    dt: 0.002
+```
+
+`paths` accepts repository-relative file paths and glob patterns. `*` matches
+within one directory; `**` matches zero or more directories. For example,
+`data/*.parquet` excludes nested directories, while `data/**/*.parquet` includes
+them. The loader lists repository paths before downloading only the matching
+files through the Hugging Face cache, orders them by repository path, and reuses
+cached files on later runs. Pin a commit hash when the input data must be
+reproducible.
+
+Selections with no matching files raise `DatasetLoadError`. Dataset tracking
+records a revision-specific HTTPS file URL along with the repository ID,
+revision, and repository-relative path.
 
 ## Joint-name mapping
 
