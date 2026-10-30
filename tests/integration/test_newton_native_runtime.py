@@ -84,6 +84,7 @@ def _config(
     buffer_time: float = 0.0,
     solver_type: str = "warp_mujoco",
     settings: dict | None = None,
+    implementation: str = "native",
 ) -> ActuatorSysIdConfig:
     return ActuatorSysIdConfig.model_validate(
         {
@@ -93,6 +94,7 @@ def _config(
                     "names": ["slide"],
                     "controller": {
                         "type": "pd",
+                        "implementation": implementation,
                         "delay_duration_ms": delay_ms,
                         "clamps": {"effort_limit": 1000.0, "velocity_limit": 100.0},
                         "stiffness": {"lower": 1.0, "upper": 100.0, "initial": 40.0},
@@ -145,6 +147,9 @@ def _config(
     )
 
 
+RUNTIMES = [("warp_mujoco", "native")]
+
+
 def _candidate(*, stiffness: float = 40.0, armature: float = 0.1) -> Candidate:
     return {
         "slide": {
@@ -166,17 +171,20 @@ def _trajectory(command: float, initial: float, *, samples: int = 25) -> Traject
     )
 
 
+@pytest.mark.parametrize(("solver_type", "implementation"), RUNTIMES)
 @pytest.mark.parametrize(
     "alternative",
     [_candidate(stiffness=80.0), _candidate(armature=0.8)],
     ids=["gain", "armature"],
 )
-def test_native_mujoco_candidate_updates_change_each_world_response(
-    scalar_asset: Path, alternative: Candidate
+def test_candidate_updates_change_each_world_response(
+    scalar_asset: Path, alternative: Candidate, solver_type: str, implementation: str
 ) -> None:
     # Dropping notify_model_changed, broadcasting world zero, or caching the
     # first population must change these physical scores and final positions.
-    config = _config(scalar_asset)
+    config = _config(
+        scalar_asset, solver_type=solver_type, implementation=implementation
+    )
     with wp.ScopedDevice("cpu"):
         evaluator = _evaluator(config)
         episode = _trajectory(0.6, 0.0)
@@ -199,12 +207,19 @@ def test_native_mujoco_candidate_updates_change_each_world_response(
     )
 
 
-def test_native_mujoco_repeated_trajectory_reset_is_deterministic(
-    scalar_asset: Path,
+@pytest.mark.parametrize(("solver_type", "implementation"), RUNTIMES)
+def test_repeated_trajectory_reset_is_deterministic(
+    scalar_asset: Path, solver_type: str, implementation: str
 ) -> None:
     # Resetting after restoring the measured pose, retaining velocity, or
     # leaking solver state across episodes breaks A/B/A repeatability.
-    config = _config(scalar_asset, delay_ms=20, buffer_time=0.02)
+    config = _config(
+        scalar_asset,
+        delay_ms=20,
+        buffer_time=0.02,
+        solver_type=solver_type,
+        implementation=implementation,
+    )
     with wp.ScopedDevice("cpu"):
         evaluator = _evaluator(config)
         population = [_candidate(), _candidate(stiffness=80.0, armature=0.4)]

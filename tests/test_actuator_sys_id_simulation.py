@@ -17,6 +17,7 @@ from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import simulation as simulation_module
 from anchor_bench.tasks.actuator_sys_id import usd as usd_module
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
+from anchor_bench.tasks.actuator_sys_id.newton_actuation import NativePD
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import (
     NewtonPopulationEvaluator,
@@ -216,6 +217,9 @@ def test_newton_evaluator_uses_shared_simulation_context(
             self.solver_settings = solver_settings
             configure_builder(self.template)
 
+        def set_before_substep(self, callback):
+            self.before_substep = callback
+
         def capture_step_graph(self, *, dt, substeps):
             self.captured_step = (dt, substeps)
             return True
@@ -408,6 +412,7 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
     evaluator._base_qd = np.asarray([0.0, 0.0], dtype=np.float32)
     evaluator._joint_q_indices = np.asarray([[0], [1]])
     evaluator._joint_dof_indices = np.asarray([[0], [1]])
+    evaluator._actuations = []
     fk_calls = []
     monkeypatch.setattr(
         simulation_module.newton,
@@ -518,8 +523,15 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     evaluator._base_targets = np.full(6, -9.0, dtype=np.float32)
     evaluator._base_model_arrays = {
         model_array_name: np.zeros(4, dtype=np.float32)
-        for model_array_name in evaluator._MODEL_ARRAYS.values()
+        for model_array_name in evaluator._PASSIVE_ARRAYS.values()
     }
+    evaluator._actuations = [
+        NativePD(
+            cast(Any, context.model),
+            joint_names=evaluator.joint_names,
+            dof_indices=evaluator._joint_dof_indices,
+        )
+    ]
     evaluator._device = cast(Any, "cpu")
     evaluator._joint_q_indices_device = cast(Any, object())
     score_sums = FakeScoreArray([0.0, 0.0])
