@@ -20,9 +20,6 @@ from anchor_bench.tasks.actuator_sys_id.model import Candidate
 class NewtonActuation(ABC):
     """Apply candidate PD gains for a subset of joints across all worlds."""
 
-    # True when before_substep must run inside the physics substep loop.
-    runs_before_substep: ClassVar[bool] = False
-
     @abstractmethod
     def apply_population(self, population: Sequence[Candidate]) -> None:
         """Write each world's candidate stiffness and damping."""
@@ -93,8 +90,6 @@ class ExternalImplicitPD(NewtonActuation):
     physics substep. Velocity limits are not applied.
     """
 
-    runs_before_substep = True
-
     def __init__(
         self,
         model: newton.Model,
@@ -159,8 +154,6 @@ class ExternalImplicitPD(NewtonActuation):
     def before_substep(
         self, state: newton.State, control: newton.Control | None, dt: float
     ) -> None:
-        if control is None or control.joint_f is None:
-            raise RuntimeError("external implicit PD requires a joint effort buffer")
         self._response.refresh(state)
         # Evaluate bias on a scratch state so solver-owned body poses are untouched.
         # Finalized models always provide joint coordinates and velocities.
@@ -181,9 +174,10 @@ class ExternalImplicitPD(NewtonActuation):
             inputs=[self._gravity, self._coriolis, self._bias],
             device=self._model.device,
         )
-        # The actuator accumulates into joint_f, so start each substep from zero.
-        control.joint_f.zero_()
-        self._actuator.step(state, control, dt=dt, bias_force=self._bias)
+        # The stepper always provides a control with joint efforts.
+        self._actuator.step(
+            state, cast("newton.Control", control), dt=dt, bias_force=self._bias
+        )
 
     def reset(self, control: newton.Control) -> None:
         if control.joint_f is not None:
