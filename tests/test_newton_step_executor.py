@@ -293,3 +293,87 @@ def test_rejects_invalid_interval_parameters_without_solver_calls(
         method(dt=dt, substeps=substeps)
 
     assert solver.steps == []
+
+
+def test_before_substep_runs_before_every_solver_step() -> None:
+    """Run the callback with each substep's input state and timestep."""
+
+    recorder = GraphRecorder()
+    state = FakeState(recorder)
+    state_next = FakeState(recorder)
+    control = SimpleNamespace(increment=1.0)
+    solver = FakeSolver(recorder)
+    executor = _fake_executor(
+        state=state,
+        state_next=state_next,
+        solver=solver,
+        control=control,
+    )
+    calls: list[tuple[object, object, float, int]] = []
+
+    def before(s: newton.State, c: newton.Control | None, dt: float) -> None:
+        calls.append((s, c, dt, len(solver.steps)))
+
+    executor.set_before_substep(before)
+    executor.step(dt=0.3, substeps=3)
+
+    assert [call[0] for call in calls] == [state, state_next, state]
+    assert all(call[1] is control for call in calls)
+    assert [call[2] for call in calls] == pytest.approx([0.1] * 3)
+    # The callback sees the solver having completed exactly the prior substeps.
+    assert [call[3] for call in calls] == [0, 1, 2]
+    assert solver.steps == pytest.approx([0.1] * 3)
+
+
+def test_before_substep_is_recorded_into_captured_graphs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the callback's recorded work on every graph launch."""
+
+    recorder = GraphRecorder()
+    monkeypatch.setattr(
+        newton_stepper.wp,
+        "ScopedCapture",
+        lambda *, device: FakeCapture(recorder),
+    )
+    monkeypatch.setattr(newton_stepper.wp, "capture_launch", recorder.launch)
+    state = FakeState(recorder)
+    executor = _fake_executor(
+        state=state,
+        state_next=FakeState(recorder),
+        solver=FakeSolver(recorder),
+        control=SimpleNamespace(increment=1.0),
+    )
+    ran: list[float] = []
+
+    def before(s: newton.State, c: newton.Control | None, dt: float) -> None:
+        recorder.record(lambda: ran.append(dt))
+
+    executor.capture_graph(dt=0.2, substeps=2)
+    executor.set_before_substep(before)
+    executor.capture_graph(dt=0.2, substeps=2)
+    assert recorder.capture_count == 2
+    assert ran == []
+
+    executor.step(dt=0.2, substeps=2)
+    executor.step(dt=0.2, substeps=2)
+
+    assert ran == pytest.approx([0.1] * 4)
+
+
+def test_setting_a_callback_drops_a_captured_graph() -> None:
+    """Invalidate captured graphs so the next capture includes the callback."""
+
+    recorder = GraphRecorder()
+    executor = _fake_executor(
+        state=FakeState(recorder),
+        state_next=FakeState(recorder),
+        solver=FakeSolver(recorder),
+        control=None,
+    )
+    executor._graph = cast(Any, object())
+    executor._graph_key = (0.1, 1)
+
+    executor.set_before_substep(None)
+
+    assert executor._graph is None and executor._graph_key is None
