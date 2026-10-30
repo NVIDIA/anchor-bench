@@ -73,7 +73,7 @@ def test_managed_arguments_are_never_taken_from_settings():
 
     assert isinstance(solver, FakeSolver)
     assert solver.model == "model"
-    assert recorded == {"model": "NOT SET: not a FakeSolver parameter"}
+    assert recorded == {"model": "NOT SET: set by the simulation context"}
 
 
 def test_register_attributes_delegates_to_the_solver_class():
