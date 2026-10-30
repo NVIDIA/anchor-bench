@@ -46,7 +46,6 @@ def test_native_pd_writes_each_world_gains_and_keeps_other_dofs():
     np.testing.assert_allclose(model.joint_target_ke.values, [9.0, 10.0, 9.0, 20.0])
     np.testing.assert_allclose(model.joint_target_kd.values, [8.0, 1.0, 8.0, 2.0])
     assert actuation.is_graphable()
-    assert NativePD.runs_before_substep is False
 
 
 def _pendulum_model(worlds: int = 2) -> newton.Model:

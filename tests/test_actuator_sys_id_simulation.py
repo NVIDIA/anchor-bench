@@ -248,6 +248,29 @@ def test_newton_evaluator_uses_shared_simulation_context(
 
     assert evaluator._simulation_context is context
     assert evaluator._simulation_context.control is context.control
+
+    calls: list[object] = []
+
+    class Effort:
+        def __init__(self) -> None:
+            self.value = 1.0
+
+        def zero_(self) -> None:
+            self.value = 0.0
+            calls.append("zero")
+
+    class RecordingActuation:
+        def before_substep(self, state, control, dt):
+            calls.append((state, control.joint_f.value, dt))
+
+    effort = Effort()
+    control = SimpleNamespace(joint_f=effort)
+    evaluator._actuations.extend(
+        cast(Any, [RecordingActuation(), RecordingActuation()])
+    )
+    context.before_substep("state", control, 0.005)
+    # Joint efforts are zeroed once, before any actuation accumulates into them.
+    assert calls == ["zero", ("state", 0.0, 0.005), ("state", 0.0, 0.005)]
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
