@@ -13,11 +13,11 @@ import yaml
 from anchor_bench.errors import DatasetAlignmentError
 from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
-from anchor_bench.tasks.actuator_sys_id import artifacts as artifacts_module
 from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord, Trajectory
+from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
 from anchor_bench.tasks.actuator_sys_id.optimizer import OptimizationStep
 from anchor_bench.tasks.actuator_sys_id.task import ActuatorSysIdTask
 
@@ -247,7 +247,7 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
         measured_position=np.asarray([[0.1], [0.8]]),
     )
 
-    class FakeEvaluator:
+    class FakeEvaluator(PopulationEvaluator):
         def evaluate(self, population, trajectories):
             assert len(population) == config.num_envs
             assert trajectories == (trajectory,)
@@ -290,11 +290,20 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
         task_module, "load_trajectories", lambda *args, **kwargs: [trajectory]
     )
     monkeypatch.setattr(task_module, "create_optimizer", lambda *args: FakeOptimizer())
-    monkeypatch.setattr(
-        task_module,
-        "NewtonPopulationEvaluator",
-        lambda *args: FakeEvaluator(),
-    )
+    requested_context = {}
+
+    class FakeContext:
+        def create_sysid_evaluator(self, task_config, parameter_space):
+            assert task_config is config
+            return FakeEvaluator()
+
+    def create_context(backend, usd_path, *, fixed_base):
+        requested_context.update(
+            backend=backend, usd_path=usd_path, fixed_base=fixed_base
+        )
+        return FakeContext()
+
+    monkeypatch.setattr(task_module, "create_simulation_context", create_context)
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
     mlops_run = Mock(spec=MLOpsRun)
@@ -303,8 +312,13 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
-    assert written["source_usd_path"] == config.simulation.usd_path
-    assert written["config"] is config
+    assert requested_context == {
+        "backend": "newton",
+        "usd_path": config.simulation.usd_path,
+        "fixed_base": True,
+    }
+    # The base evaluator exports no model unless the simulator overrides it.
+    assert written["identified_usd_path"] is None
     assert written["best_parameters"]["hip"]["stiffness"] == pytest.approx(20.0)
     assert written["history"] == [
         GenerationRecord(generation=0, best_mse=0.25, population_mean_mse=0.625)
@@ -324,7 +338,7 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     )
 
 
-def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
+def test_writes_fitted_parameters_and_generation_history(tmp_path):
     candidate = {
         "hip": {
             "stiffness": 20.0,
@@ -337,31 +351,13 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()
-    source_usd_path = tmp_path / "robot.usd"
-    config = _config(tmp_path)
-
-    def write_usd(source, output, parameters, controller_clamps, config_metadata):
-        assert source == source_usd_path
-        assert parameters == candidate
-        assert controller_clamps == {
-            "hip": config.joint_parameters[0].controller.clamps
-        }
-        assert config_metadata == config.model_dump_json()
-        output.write_text("#usda 1.0\n", encoding="utf-8")
-        return output
-
-    monkeypatch.setattr(
-        artifacts_module,
-        "write_identified_usd_layer",
-        write_usd,
-    )
+    identified_usd_path = output_dir / "identified.usda"
     result = write_artifacts(
         output_dir,
         best_parameters=candidate,
         best_mse=0.125,
         history=[GenerationRecord(0, 0.125, 0.5)],
-        source_usd_path=source_usd_path,
-        config=config,
+        identified_usd_path=identified_usd_path,
     )
 
     document = yaml.safe_load(result.best_parameters_path.read_text())
@@ -369,5 +365,4 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path, monkeypatch):
     assert document["parameters"] == candidate
     assert "0,0.125,0.5" in result.optimization_log_path.read_text()
     assert result.run_summary_path.is_file()
-    assert result.identified_usd_path == output_dir / "identified.usda"
-    assert result.identified_usd_path.is_file()
+    assert result.identified_usd_path == identified_usd_path

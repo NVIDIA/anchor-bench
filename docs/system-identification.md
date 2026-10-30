@@ -104,8 +104,21 @@ uv run anchor-bench \
 ```
 
 The runtime loads the configured trajectories, evaluates optimizer candidates
-in Newton, and stops when the optimizer reaches its iteration or convergence
-condition.
+in the simulator selected by `simulation.type`, and stops when the optimizer
+reaches its iteration or convergence condition.
+
+## Add another simulator
+
+System identification creates the `SimulationContext` registered for
+`simulation.type` in `anchor_bench.core.simulation.registry.SIMULATION_CONTEXTS`
+and asks it for an evaluator. To support another simulator:
+
+1. Subclass `SimulationContext` and override `create_sysid_evaluator()` to
+   return a `PopulationEvaluator` that scores candidates in that simulator.
+2. Optionally override `PopulationEvaluator.export_model()` to write the fitted
+   model; the default writes nothing.
+3. Add the context class to `SIMULATION_CONTEXTS` and its configuration to the
+   `simulation` field of `ActuatorSysIdConfig`.
 
 ## Artifacts
 
@@ -117,7 +130,7 @@ run writes:
 | `best_params.yaml` | Best candidate, position MSE, and result schema metadata. |
 | `optimization_log.csv` | Best and population-mean MSE for each generation. |
 | `run_summary.yaml` | Timestamp, best MSE, metric name, and generation count. |
-| `identified.usda` | USD layer containing the fitted actuator opinions. |
+| `identified.usda` | USD layer containing the fitted actuator opinions (Newton). |
 
 When MLOps tracking is enabled, the task also reports per-generation metrics
 and uploads the finalized directory as the `sysid-output` artifact collection.

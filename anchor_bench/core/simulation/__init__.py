@@ -7,9 +7,23 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, ClassVar, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from typing_extensions import Self
+
+if TYPE_CHECKING:
+    from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+    from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
+    from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
 ModelT = TypeVar("ModelT")
 StateT = TypeVar("StateT")
@@ -111,6 +125,14 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
 
         _, state = self.load()
         return state
+
+    def create_sysid_evaluator(
+        self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+    ) -> PopulationEvaluator:
+        """Create the population evaluator used by actuator system identification."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support system identification."
+        )
 
     @abstractmethod
     def _load(self, usd_path: Path) -> Tuple[ModelT, StateT]:
