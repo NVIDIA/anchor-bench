@@ -14,7 +14,6 @@ import numpy as np
 
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
-from anchor_bench.schema.simulation import NewtonSimulationConfig
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import Trajectory
 
@@ -95,13 +94,10 @@ class _NewtonTrajectoryRunner:
     """Replay measured commands using actuator properties authored in one USD."""
 
     def __init__(self, config: ActuatorSysIdConfig) -> None:
-        simulation = config.simulation
-        if not isinstance(simulation, NewtonSimulationConfig):
-            raise TypeError("USD trajectory replay requires NewtonSimulationConfig")
         builder = newton.ModelBuilder()
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
         builder.add_usd(
-            source=str(Path(simulation.usd_path).resolve()),
+            source=str(Path(config.simulation.usd_path).resolve()),
             floating=False,
         )
         self._model = builder.finalize()
@@ -111,9 +107,9 @@ class _NewtonTrajectoryRunner:
         self._solver = newton.solvers.SolverMuJoCo(
             self._model,
             solver="newton",
-            iterations=simulation.solver.solver_iterations,
-            ls_iterations=simulation.solver.line_search_iterations,
-            integrator=simulation.solver.integrator,
+            iterations=config.simulation.solver.solver_iterations,
+            ls_iterations=config.simulation.solver.line_search_iterations,
+            integrator=config.simulation.solver.integrator,
         )
         self._newton = newton
         self._contacts = self._collision_pipeline.contacts()
