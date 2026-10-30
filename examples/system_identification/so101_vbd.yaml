@@ -1,0 +1,52 @@
+type: actuator_sys_id
+joint_parameters:
+  - names: [Rotation, Pitch, Elbow, Wrist_Pitch, Wrist_Roll, Jaw]
+    controller:
+      type: pd
+      implementation: external_implicit
+      delay_duration_ms: 0
+      clamps:
+        effort_limit: 3.35
+        velocity_limit: 30.0
+      stiffness: {lower: 1.0, upper: 80.0, initial: 40.0}
+      damping: {lower: 0.01, upper: 5.0, initial: 2.0}
+    parameters:
+      dry_friction: {lower: 0.0, upper: 1.0, initial: 0.25}
+      viscous_friction: {lower: 0.0, upper: 2.0, initial: 0.75}
+      armature: {lower: 0.0, upper: 0.1, initial: 0.05}
+optimizer:
+  type: python-cmaes
+  sigma: 0.25
+  max_iterations: 100
+  epsilon: 0.001
+simulation:
+  type: newton
+  usd_path: assets/robots/so101/files/so101.usd
+  physics_freq: 250
+  control_freq: 50
+  render_freq: 25
+  solver:
+    type: vbd
+    settings:
+      iterations: 10
+      # The default local solve diverges on this articulated arm and ignores
+      # revolute armature; the coupled articulation solve handles both.
+      rigid_articulation_solve: block_sparse_joints
+num_envs: 64
+buffer_time: 0.2
+seed: 42
+dataset:
+  type: parquet
+  source: examples/system_identification/data/train-*.parquet
+  # Map source Parquet joint prefixes to canonical USD joint names.
+  # These identity entries demonstrate the syntax and may be omitted.
+  joint_name_mapping:
+    Rotation: Rotation
+    Pitch: Pitch
+    Elbow: Elbow
+    Wrist_Pitch: Wrist_Pitch
+    Wrist_Roll: Wrist_Roll
+    Jaw: Jaw
+  resampling:
+    type: uniform
+    dt: 0.02

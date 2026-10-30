@@ -78,6 +78,17 @@ def _evaluator(config: ActuatorSysIdConfig) -> NewtonPopulationEvaluator:
     return evaluator
 
 
+SOLVER_SETTINGS: dict[str, dict] = {
+    "warp_mujoco": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "iterations": 10,
+        "ls_iterations": 4,
+    },
+    "vbd": {"iterations": 10},
+}
+
+
 def _config(
     asset: Path,
     *,
@@ -128,12 +139,7 @@ def _config(
                     "type": solver_type,
                     "settings": settings
                     if settings is not None
-                    else {
-                        "solver": "newton",
-                        "integrator": "implicitfast",
-                        "iterations": 10,
-                        "ls_iterations": 4,
-                    },
+                    else SOLVER_SETTINGS[solver_type],
                 },
             },
             "num_envs": 2,
@@ -148,7 +154,11 @@ def _config(
     )
 
 
-RUNTIMES = [("warp_mujoco", "native"), ("warp_mujoco", "external_implicit")]
+RUNTIMES = [
+    ("warp_mujoco", "native"),
+    ("warp_mujoco", "external_implicit"),
+    ("vbd", "external_implicit"),
+]
 
 
 def _candidate(*, stiffness: float = 40.0, armature: float = 0.1) -> Candidate:
@@ -287,6 +297,8 @@ def test_external_pd_runs_with_cuda_graph_capture(scalar_asset: Path) -> None:
 def test_candidate_updates_change_each_world_response(
     scalar_asset: Path, alternative: Candidate, solver_type: str, implementation: str
 ) -> None:
+    if solver_type == "vbd" and alternative == _candidate(armature=0.8):
+        pytest.skip("VBD supports armature on revolute joints only")
     # Dropping notify_model_changed, broadcasting world zero, or caching the
     # first population must change these physical scores and final positions.
     config = _config(
