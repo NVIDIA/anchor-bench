@@ -9,7 +9,7 @@ import json
 from collections.abc import Sequence
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal
+from typing import ClassVar, Literal
 
 import numpy as np
 
@@ -22,6 +22,7 @@ from anchor_bench.tasks.actuator_sys_id.model import (
     IdentifiedModelArtifact,
     Trajectory,
 )
+from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
 from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -35,6 +36,15 @@ class ToyConfig(SysIdSimulationConfig):
 class ToyContext(SimulationContext[float, float]):
     """Load the scalar response scale from the shared USD input."""
 
+    sysid_config_model: ClassVar[type[SysIdSimulationConfig] | None] = ToyConfig
+
+    def create_sysid_evaluator(
+        self,
+        config: ActuatorSysIdConfig,
+        parameter_space: ParameterSpace,
+    ) -> PopulationEvaluator:
+        return ToyEvaluator(self, config)
+
     def _load(self, usd_path: Path) -> tuple[float, float]:
         usd = import_module("pxr.Usd")
         stage = usd.Stage.Open(str(usd_path))
@@ -44,9 +54,13 @@ class ToyContext(SimulationContext[float, float]):
         return float(scale), 0.0
 
 
-class ToyEvaluator:
-    def __init__(self, context: ToyContext, gain: float) -> None:
-        self._gain = context.model * gain
+class ToyEvaluator(PopulationEvaluator):
+    def __init__(self, context: ToyContext, config: ActuatorSysIdConfig) -> None:
+        if not isinstance(config.simulation, ToyConfig):
+            raise TypeError("toy evaluator requires its registered config model")
+        self._context = context
+        self._config = config
+        self._gain = context.model * config.simulation.gain
 
     def evaluate(
         self,
@@ -66,62 +80,39 @@ class ToyEvaluator:
         return np.asarray(scores, dtype=np.float64)
 
 
-def create_context(config: ActuatorSysIdConfig) -> ToyContext:
-    simulation = config.simulation
-    if not isinstance(simulation, ToyConfig):
-        raise TypeError("toy backend requires its registered config model")
-    return ToyContext(simulation.usd_path)
+class JsonToyEvaluator(ToyEvaluator):
+    def export_model(
+        self,
+        best: Candidate,
+        output: Path,
+    ) -> IdentifiedModelArtifact:
+        path = output / "identified.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "parameters": best,
+                    "simulation": self._config.simulation.model_dump(mode="json"),
+                    "gain_scale": self._context.model,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return IdentifiedModelArtifact(path=path, format="json")
 
 
-def create_evaluator(
-    config: ActuatorSysIdConfig,
-    space: ParameterSpace,
-    context: SimulationContext[Any, Any],
-) -> ToyEvaluator:
-    if not isinstance(context, ToyContext):
-        raise TypeError("toy evaluator requires its registered context")
-    if not isinstance(config.simulation, ToyConfig):
-        raise TypeError("toy evaluator requires its registered config model")
-    return ToyEvaluator(context, config.simulation.gain)
-
-
-def export_model(
-    config: ActuatorSysIdConfig,
-    best: Candidate,
-    context: SimulationContext[Any, Any],
-    output: Path,
-) -> IdentifiedModelArtifact:
-    path = output / "identified.json"
-    path.write_text(
-        json.dumps(
-            {
-                "parameters": best,
-                "simulation": config.simulation.model_dump(mode="json"),
-                "gain_scale": context.model,
-            },
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    return IdentifiedModelArtifact(path=path, format="json")
+class JsonToyContext(ToyContext):
+    def create_sysid_evaluator(
+        self,
+        config: ActuatorSysIdConfig,
+        parameter_space: ParameterSpace,
+    ) -> PopulationEvaluator:
+        return JsonToyEvaluator(self, config)
 
 
 def provide_json() -> None:
-    register_simulation_backend(
-        "toy-sysid",
-        ToyContext,
-        config_model=ToyConfig,
-        create_context=create_context,
-        create_evaluator=create_evaluator,
-        export_model=export_model,
-    )
+    register_simulation_backend("toy-sysid", JsonToyContext)
 
 
 def provide_no_export() -> None:
-    register_simulation_backend(
-        "toy-sysid",
-        ToyContext,
-        config_model=ToyConfig,
-        create_context=create_context,
-        create_evaluator=create_evaluator,
-    )
+    register_simulation_backend("toy-sysid", ToyContext)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 import pytest
 from pydantic import StrictInt, ValidationError
@@ -25,28 +25,24 @@ class ToyConfig(SysIdSimulationConfig):
     gain: StrictInt
 
 
-class ToyContext(SimulationContext[object, object]):
+class ResourceOnlyContext(SimulationContext[object, object]):
     def _load(self, usd_path: Path) -> tuple[object, object]:
         return object(), object()
 
 
+class ToyContext(ResourceOnlyContext):
+    sysid_config_model: ClassVar[type[SysIdSimulationConfig] | None] = ToyConfig
+
+
 def toy_registration(name: str = "toy") -> None:
-    registry.register_simulation_backend(
-        name,
-        ToyContext,
-        config_model=ToyConfig,
-        create_context=lambda config: ToyContext(usd_path=config.simulation.usd_path),
-        create_evaluator=lambda config, space, context: None,  # type: ignore[arg-type]
-    )
+    registry.register_simulation_backend(name, ToyContext)
 
 
 @pytest.fixture(autouse=True)
 def isolated_registry(monkeypatch: pytest.MonkeyPatch):
-    registry.get_sysid_callbacks("newton")
     monkeypatch.setattr(
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
-    monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
     monkeypatch.setattr(SimulationContext, "_instance", None)
 
 
@@ -124,7 +120,7 @@ def test_python_registration_rejects_duplicate_names():
 
 
 def test_registered_backend_without_sysid_fails_early(toy_task_data):
-    registry.SIMULATION_CONTEXTS["toy"] = ToyContext
+    registry.register_simulation_backend("toy", ResourceOnlyContext)
     with pytest.raises(SimulationBackendError, match="system identification"):
         ActuatorSysIdConfig.model_validate(toy_task_data)
 
@@ -148,3 +144,8 @@ def test_plugin_simulation_requires_usd_input(toy_task_data):
     toy_task_data["simulation"].pop("usd_path", None)
     with pytest.raises(ValidationError, match="usd_path"):
         ActuatorSysIdConfig.model_validate(toy_task_data)
+
+
+def test_unknown_backend_fails_at_context_lookup():
+    with pytest.raises(ValueError, match="Unknown simulation backend"):
+        registry.get_simulation_context_type("missing-backend")

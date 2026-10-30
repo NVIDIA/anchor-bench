@@ -8,12 +8,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Hashable
 from pathlib import Path
-from typing import Any, Callable, Mapping, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Tuple
 
 import newton
 
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
+from anchor_bench.schema.simulation import NewtonSimulationConfig
+
+if TYPE_CHECKING:
+    from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+    from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
+    from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +32,8 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     single-world simulation and prevents later initialization with another world
     count.
     """
+
+    sysid_config_model = NewtonSimulationConfig
 
     _initialized: bool
     _world_count: int
@@ -48,6 +56,17 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         super().__init__(usd_path, fixed_base=fixed_base)
         if not hasattr(self, "_initialized"):
             self._initialized = False
+
+    def create_sysid_evaluator(
+        self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+    ) -> PopulationEvaluator:
+        from anchor_bench.tasks.actuator_sys_id.simulation import (
+            NewtonPopulationEvaluator,
+        )
+
+        return NewtonPopulationEvaluator(
+            config, parameter_space, simulation_context=self
+        )
 
     def initialize(
         self,

@@ -5,23 +5,43 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
-from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
+from anchor_bench.schema.simulation import JsonValue
+from anchor_bench.tasks.actuator_sys_id.model import (
+    Candidate,
+    IdentifiedModelArtifact,
+    Trajectory,
+)
 from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
 
-class PopulationEvaluator(Protocol):
+class PopulationEvaluator(ABC):
     """Score decoded actuator candidates against recorded trajectories."""
 
+    @abstractmethod
     def evaluate(
         self,
         population: Sequence[Candidate],
         trajectories: Sequence[Trajectory],
-    ) -> FloatArray: ...
+    ) -> FloatArray:
+        raise NotImplementedError
+
+    def export_model(
+        self, best: Candidate, output: Path
+    ) -> IdentifiedModelArtifact | None:
+        """Optionally export the fitted simulator model."""
+        return None
+
+    def describe_runtime(self) -> Mapping[str, JsonValue] | None:
+        """Optionally report the simulation settings used for evaluation."""
+        return None
 
 
 class ActuatorSysIdObjective:

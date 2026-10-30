@@ -8,7 +8,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from anchor_bench.core.simulation.registry import get_sysid_callbacks
+from anchor_bench.core.simulation.registry import (
+    get_simulation_context_type,
+)
+from anchor_bench.errors import SimulationBackendError
 from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -27,7 +30,11 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
     """Fit actuator parameters with the configured simulation backend."""
 
     def run(self, output_directory: Path) -> Path:
-        callbacks = get_sysid_callbacks(self.config.simulation.type)
+        context_type = get_simulation_context_type(self.config.simulation.type)
+        if context_type.sysid_config_model is None:
+            raise SimulationBackendError(
+                f"Simulation backend {self.config.simulation.type!r} does not support system identification."
+            )
         mlops_run = get_active_run()
         joint_names = [
             joint for group in self.config.joint_parameters for joint in group.names
@@ -42,8 +49,8 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
-        context = callbacks["create_context"](self.config)
-        evaluator = callbacks["create_evaluator"](self.config, parameter_space, context)
+        context = context_type(self.config.simulation.usd_path, fixed_base=True)
+        evaluator = context.create_sysid_evaluator(self.config, parameter_space)
         objective = ActuatorSysIdObjective(
             parameter_space,
             evaluator,
@@ -80,18 +87,8 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             )
 
         best_parameters = parameter_space.decode(optimizer.best_candidate)
-        model_artifact = (
-            callbacks["export_model"](
-                self.config, best_parameters, context, output_directory
-            )
-            if callbacks["export_model"] is not None
-            else None
-        )
-        runtime_simulation = (
-            callbacks["describe_runtime"](evaluator)
-            if callbacks["describe_runtime"] is not None
-            else None
-        )
+        model_artifact = evaluator.export_model(best_parameters, output_directory)
+        runtime_simulation = evaluator.describe_runtime()
         write_artifacts(
             output_directory,
             best_parameters=best_parameters,

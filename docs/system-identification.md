@@ -115,28 +115,23 @@ The shared context resolves and validates the USD path and protects reuse by
 backend class, resolved path, and base mode. Its `_load(usd_path)` receives
 the resolved USD path and returns the model and initial state.
 
-Register these components through the Python API before validating a task:
+The context declares its configuration class in `sysid_config_model` and
+implements `create_sysid_evaluator(config, parameter_space)`. The task creates
+the registered context with `fixed_base=True` and calls this method on that
+context. The factory returns a `PopulationEvaluator` subclass whose
+`evaluate(population, trajectories)` method produces one finite position-MSE
+score per decoded candidate. The evaluator owns its simulator's candidate
+application, resets, command delay, buffer exclusion, actuation, and stepping.
+The task retains dataset loading and optimization.
+
+Register the context through the Python API before validating a task:
 
 ```python
 from anchor_bench.core.simulation.registry import register_simulation_backend
+from my_package.backend import MySimulationContext
 
-register_simulation_backend(
-    "my_simulator",
-    MySimulationContext,
-    config_model=MySimulationConfig,
-    create_context=create_context,
-    create_evaluator=create_evaluator,
-    export_model=export_model,
-)
+register_simulation_backend("my_simulator", MySimulationContext)
 ```
-
-The classes and callbacks in this example are supplied by the plugin.
-`create_context(config)` returns the registered context type.
-`create_evaluator(config, parameter_space, context)` receives that same context
-and returns an object implementing `evaluate(population, trajectories)`: one
-finite position-MSE score per decoded candidate. The evaluator owns its
-simulator's candidate application, resets, command delay, buffer exclusion,
-actuation, and stepping. The task retains dataset loading and optimization.
 
 To run the command-line task with a custom backend, register it in your own
 entry script before invoking the CLI:
@@ -144,23 +139,9 @@ entry script before invoking the CLI:
 ```python
 from anchor_bench.cli import main
 from anchor_bench.core.simulation.registry import register_simulation_backend
+from my_package.backend import MySimulationContext
 
-from my_package.backend import (
-    MySimulationConfig,
-    MySimulationContext,
-    create_context,
-    create_evaluator,
-    export_model,
-)
-
-register_simulation_backend(
-    "my_simulator",
-    MySimulationContext,
-    config_model=MySimulationConfig,
-    create_context=create_context,
-    create_evaluator=create_evaluator,
-    export_model=export_model,
-)
+register_simulation_backend("my_simulator", MySimulationContext)
 raise SystemExit(main())
 ```
 
@@ -169,13 +150,14 @@ backend using `simulation.type: my_simulator`; this value must match the
 registered name and configuration `type`. Plugin fields survive configuration
 serialization and hashing.
 
-Model export is optional. An exporter receives `(config, best_parameters,
-context, output_directory)` and returns an `IdentifiedModelArtifact(path,
-format)` or `None`. The result exposes the returned path through
+Model export is optional. An evaluator can override
+`export_model(best_parameters, output_directory)` to return an
+`IdentifiedModelArtifact(path, format)`. The default implementation returns
+`None`. The result exposes the returned path through
 `SysIdResult.identified_model_path`; only an explicit `format="usd"` also
-supplies the compatibility `identified_usd_path`. An optional
-`describe_runtime(evaluator)` callback returns
-JSON-compatible runtime settings for `run_summary.yaml`.
+supplies the compatibility `identified_usd_path`. An evaluator can also override
+`describe_runtime()` to return JSON-compatible runtime settings for
+`run_summary.yaml`; its default implementation returns `None`.
 
 ## Artifacts
 

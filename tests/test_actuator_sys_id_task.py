@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import builtins
 import importlib
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 from unittest.mock import Mock
 
 import numpy as np
@@ -19,18 +20,21 @@ from anchor_bench.core.task_runner import TaskRunner
 from anchor_bench.errors import DatasetAlignmentError, SimulationBackendError
 from anchor_bench.mlops import MLOpsRun, bind_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
-from anchor_bench.schema.simulation import SysIdSimulationConfig
+from anchor_bench.schema.simulation import JsonValue, SysIdSimulationConfig
 from anchor_bench.tasks.actuator_sys_id import artifacts as artifacts_module
 from anchor_bench.tasks.actuator_sys_id import task as task_module
 from anchor_bench.tasks.actuator_sys_id.artifacts import write_artifacts
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from anchor_bench.tasks.actuator_sys_id.model import (
+    Candidate,
     GenerationRecord,
     IdentifiedModelArtifact,
     SysIdResult,
     Trajectory,
 )
-from anchor_bench.tasks.actuator_sys_id.optimizer import OptimizationStep
+from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
+from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray, OptimizationStep
+from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 from anchor_bench.tasks.actuator_sys_id.task import ActuatorSysIdTask
 
 
@@ -95,9 +99,15 @@ class ToySimulationConfig(SysIdSimulationConfig):
     gain: float = 2.0
 
 
-class ToyContext(SimulationContext[object, object]):
+class ResourceOnlyContext(SimulationContext[object, object]):
     def _load(self, usd_path: Path):
         return object(), object()
+
+
+class ToyContext(ResourceOnlyContext):
+    sysid_config_model: ClassVar[type[SysIdSimulationConfig] | None] = (
+        ToySimulationConfig
+    )
 
 
 @pytest.fixture
@@ -106,27 +116,12 @@ def register_toy(monkeypatch, tmp_path):
     monkeypatch.setattr(
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
-    monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
 
-    def register(create_evaluator, *, export_model=None, describe_runtime=None):
+    def register(context_type: type[ToyContext]):
         usd = tmp_path / "scene.usda"
         usd.write_text("#usda 1.0\n")
-        context = ToyContext(str(usd))
-
-        def create_context(config):
-            assert isinstance(config.simulation, ToySimulationConfig)
-            assert config.simulation.gain == 2.0
-            return context
-
-        registry.register_simulation_backend(
-            "task-toy",
-            ToyContext,
-            config_model=ToySimulationConfig,
-            create_context=create_context,
-            create_evaluator=create_evaluator,
-            export_model=export_model,
-            describe_runtime=describe_runtime,
-        )
+        context = context_type(str(usd), fixed_base=True)
+        registry.register_simulation_backend("task-toy", context_type)
         config = _config(
             tmp_path,
             simulation={
@@ -331,11 +326,48 @@ def test_task_uses_registered_evaluator_and_context(
         measured_position=np.asarray([[0.1], [0.8]]),
     )
 
-    class FakeEvaluator:
-        def evaluate(self, population, trajectories):
+    class FakeEvaluator(PopulationEvaluator):
+        def __init__(self, selected_context: ToyContext) -> None:
+            self.context = selected_context
+
+        def evaluate(
+            self,
+            population: Sequence[Candidate],
+            trajectories: Sequence[Trajectory],
+        ) -> FloatArray:
+            assert received["evaluator"] is self
+            assert self.context is context
             assert len(population) == config.num_envs
             assert trajectories == (trajectory,)
             return np.asarray([1.0, 0.25])
+
+        def export_model(
+            self, best: Candidate, output: Path
+        ) -> IdentifiedModelArtifact:
+            assert received["evaluator"] is self
+            assert self.context is context
+            assert output == output_directory
+            assert best["hip"]["stiffness"] == pytest.approx(20.0)
+            path = output / "identified.json"
+            path.write_text('{"model": "toy"}')
+            return IdentifiedModelArtifact(path, "json")
+
+        def describe_runtime(self) -> Mapping[str, JsonValue]:
+            assert received["evaluator"] is self
+            assert self.context is context
+            return {"type": "task-toy", "effective_gain": 2.0}
+
+    class TaskToyContext(ToyContext):
+        def create_sysid_evaluator(
+            self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+        ) -> PopulationEvaluator:
+            assert isinstance(config.simulation, ToySimulationConfig)
+            assert config.simulation.gain == 2.0
+            evaluator = FakeEvaluator(self)
+            received.update(
+                config=config, context=self, space=parameter_space, evaluator=evaluator
+            )
+            return evaluator
 
     class FakeOptimizer:
         def __init__(self):
@@ -374,31 +406,8 @@ def test_task_uses_registered_evaluator_and_context(
         task_module, "load_trajectories", lambda *args, **kwargs: [trajectory]
     )
     monkeypatch.setattr(task_module, "create_optimizer", lambda *args: FakeOptimizer())
-    evaluator = FakeEvaluator()
     received = {}
-
-    def create_evaluator(selected_config, space, selected_context):
-        received.update(config=selected_config, context=selected_context, space=space)
-        return evaluator
-
-    def export_model(selected_config, best, selected_context, output):
-        assert selected_config is config
-        assert selected_context is context
-        assert output == output_directory
-        assert best["hip"]["stiffness"] == pytest.approx(20.0)
-        path = output / "identified.json"
-        path.write_text('{"model": "toy"}')
-        return IdentifiedModelArtifact(path, "json")
-
-    def describe_runtime(selected_evaluator):
-        assert selected_evaluator is evaluator
-        return {"type": "task-toy", "effective_gain": 2.0}
-
-    config, context = register_toy(
-        create_evaluator,
-        export_model=export_model,
-        describe_runtime=describe_runtime,
-    )
+    config, context = register_toy(TaskToyContext)
     monkeypatch.setattr(task_module, "write_artifacts", write)
 
     mlops_run = Mock(spec=MLOpsRun)
@@ -409,6 +418,8 @@ def test_task_uses_registered_evaluator_and_context(
     assert written["best_mse"] == pytest.approx(0.25)
     assert received["config"] is config
     assert received["context"] is context
+    assert context.fixed_base is True
+    assert received["space"].dimension == 5
     assert written["model_artifact"] == IdentifiedModelArtifact(
         output_directory / "identified.json",
         "json",
@@ -494,14 +505,26 @@ def test_common_artifacts_allow_missing_or_json_model_export(
 
 
 def test_export_failure_prevents_completion(tmp_path, monkeypatch, register_toy):
-    class Evaluator:
-        def evaluate(self, population, trajectories):
+    class Evaluator(PopulationEvaluator):
+        def evaluate(
+            self,
+            population: Sequence[Candidate],
+            trajectories: Sequence[Trajectory],
+        ) -> FloatArray:
             return np.asarray([1.0] * len(population))
 
-    def export_model(*args):
-        raise RuntimeError("toy export failed")
+        def export_model(
+            self, best: Candidate, output: Path
+        ) -> IdentifiedModelArtifact | None:
+            raise RuntimeError("toy export failed")
 
-    config, _ = register_toy(lambda *args: Evaluator(), export_model=export_model)
+    class ExportFailureContext(ToyContext):
+        def create_sysid_evaluator(
+            self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+        ) -> PopulationEvaluator:
+            return Evaluator()
+
+    config, _ = register_toy(ExportFailureContext)
     config.num_envs = 4
     monkeypatch.setattr(
         task_module,
@@ -524,8 +547,7 @@ def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
     monkeypatch.setattr(
         registry, "SIMULATION_CONTEXTS", registry.SIMULATION_CONTEXTS.copy()
     )
-    monkeypatch.setattr(registry, "_SYSID_CALLBACKS", registry._SYSID_CALLBACKS.copy())
-    registry.SIMULATION_CONTEXTS["resource-only"] = ToyContext
+    registry.register_simulation_backend("resource-only", ResourceOnlyContext)
     config.simulation = SysIdSimulationConfig(
         usd_path=config.simulation.usd_path,
         type="resource-only",
@@ -543,3 +565,41 @@ def test_missing_sysid_capability_fails_before_optimizer(tmp_path, monkeypatch):
         SimulationBackendError, match="does not support system identification"
     ):
         ActuatorSysIdTask(config).run(tmp_path)
+
+
+def test_task_accepts_inherited_optional_evaluator_methods(
+    tmp_path, monkeypatch, register_toy
+):
+    class Evaluator(PopulationEvaluator):
+        def evaluate(
+            self,
+            population: Sequence[Candidate],
+            trajectories: Sequence[Trajectory],
+        ) -> FloatArray:
+            return np.ones(len(population), dtype=np.float64)
+
+    class EvaluationOnlyContext(ToyContext):
+        def create_sysid_evaluator(
+            self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+        ) -> PopulationEvaluator:
+            return Evaluator()
+
+    config, _ = register_toy(EvaluationOnlyContext)
+    config.num_envs = 4
+    monkeypatch.setattr(
+        task_module,
+        "load_trajectories",
+        lambda *args, **kwargs: [
+            Trajectory("wave", ["hip"], np.zeros((2, 1)), np.zeros((2, 1)))
+        ],
+    )
+    output = tmp_path / "evaluation-only"
+    output.mkdir()
+
+    assert ActuatorSysIdTask(config).run(output) == output
+
+    summary = yaml.safe_load((output / "run_summary.yaml").read_text())
+    assert summary["best_mse"] == pytest.approx(1.0)
+    assert "runtime_simulation" not in summary
+    assert (output / "best_params.yaml").is_file()
+    assert not (output / "identified.usda").exists()

@@ -137,21 +137,27 @@ class ActuatorSysIdConfig(BaseConfig):
     @field_validator("simulation", mode="before")
     @classmethod
     def dispatch_simulation(cls, value: object) -> SysIdSimulationConfig:
-        from anchor_bench.core.simulation.registry import get_sysid_callbacks
+        from anchor_bench.core.simulation.registry import get_simulation_context_type
+        from anchor_bench.errors import SimulationBackendError
 
         if isinstance(value, SysIdSimulationConfig):
-            callbacks = get_sysid_callbacks(value.type)
-            if type(value) is not callbacks["config_model"]:
+            backend_name = value.type
+        elif isinstance(value, dict) and isinstance(value.get("type"), str):
+            backend_name = value["type"]
+        else:
+            raise ValueError("simulation must define a string type")  # noqa: TRY004 - Pydantic validation errors require ValueError
+        config_model = get_simulation_context_type(backend_name).sysid_config_model
+        if config_model is None:
+            raise SimulationBackendError(
+                f"Simulation backend {backend_name!r} does not support system identification."
+            )
+        if isinstance(value, SysIdSimulationConfig):
+            if type(value) is not config_model:
                 raise ValueError(
                     "simulation config must use the registered config model"
                 )
-            return callbacks["config_model"].model_validate(value.model_dump())
-        if not isinstance(value, dict):
-            raise ValueError("simulation must be a configuration object")  # noqa: TRY004 - Pydantic validation errors require ValueError
-        backend_name = value.get("type")
-        if not isinstance(backend_name, str):
-            raise ValueError("simulation must define a string type")  # noqa: TRY004 - Pydantic validation errors require ValueError
-        return get_sysid_callbacks(backend_name)["config_model"].model_validate(value)
+            value = value.model_dump()
+        return config_model.model_validate(value)
 
     @model_validator(mode="after")
     def validate_task_invariants(self) -> ActuatorSysIdConfig:
