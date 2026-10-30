@@ -84,8 +84,31 @@ class MuJoCoAdapter(NewtonSolverAdapter):
     solver_class = newton.solvers.SolverMuJoCo
 
 
+class VBDAdapter(NewtonSolverAdapter):
+    solver_class = newton.solvers.SolverVBD
+    managed_arguments = NewtonSolverAdapter.managed_arguments | {"collision_pipeline"}
+
+    def prepare_builder(self, builder: newton.ModelBuilder) -> None:
+        # VBD solves bodies in parallel by graph color.
+        builder.color()
+
+    def create_solver(
+        self, model: newton.Model, settings: Mapping[str, JsonValue]
+    ) -> tuple[newton.solvers.SolverBase, dict[str, JsonValue]]:
+        kwargs, recorded = self.match_settings(settings)
+        # VBD runs collision detection itself; its contact history needs matching.
+        pipeline = newton.CollisionPipeline(
+            model, broad_phase="explicit", contact_matching="latest"
+        )
+        return self.solver_class(model, collision_pipeline=pipeline, **kwargs), recorded
+
+    def step_contacts(self, model: newton.Model) -> newton.Contacts | None:
+        return None
+
+
 NEWTON_SOLVERS: dict[str, type[NewtonSolverAdapter]] = {
     "warp_mujoco": MuJoCoAdapter,
+    "vbd": VBDAdapter,
 }
 
 

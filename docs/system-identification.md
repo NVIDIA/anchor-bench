@@ -96,7 +96,7 @@ population contains at least two environments; `num_envs` defaults to 64.
 objective while still replaying its commands, allowing the simulated state to
 settle without advancing it ahead of the measurements.
 
-`simulation.solver.type` selects the Newton solver (`warp_mujoco`).
+`simulation.solver.type` selects the Newton solver (`warp_mujoco` or `vbd`).
 `simulation.solver.settings` is passed to that solver's constructor. A key
 that is not a constructor parameter is skipped with a warning and recorded in
 `run_summary.yaml` as `"NOT SET: <reason>"`. Solver-specific joint, body, and
@@ -117,6 +117,16 @@ class to `NEWTON_SOLVERS`.
   `clamps.effort_limit`. `clamps.velocity_limit` is not applied. Fitted gains
   are exported to the same USD drive attributes; consumers that use a native
   drive may behave slightly differently.
+
+VBD's native joint drive enforces neither `joint_effort_limit` nor
+`joint_velocity_limit`. Use `controller.implementation: external_implicit` to
+clamp effort on VBD.
+
+`examples/system_identification/so101_vbd.yaml` fits the SO-101 with VBD and
+`external_implicit` actuators. It sets `rigid_articulation_solve:
+block_sparse_joints`: VBD's default per-body solve diverges on this articulated
+arm and ignores revolute armature, which the coupled articulation solve
+simulates.
 
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 

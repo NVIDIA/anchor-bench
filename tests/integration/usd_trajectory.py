@@ -107,7 +107,13 @@ class _NewtonTrajectoryRunner:
         self._collision_pipeline = newton.CollisionPipeline(
             self._model, broad_phase="explicit"
         )
-        solver_settings: Dict[str, Any] = dict(config.simulation.solver.settings)
+        # Exported USD drives are replayed with MuJoCo, the reference consumer of
+        # native USD drives; another solver's settings do not apply to it.
+        solver_settings: Dict[str, Any] = (
+            dict(config.simulation.solver.settings)
+            if config.simulation.solver.type == "warp_mujoco"
+            else {}
+        )
         self._solver = newton.solvers.SolverMuJoCo(self._model, **solver_settings)
         self._newton = newton
         self._contacts = self._collision_pipeline.contacts()

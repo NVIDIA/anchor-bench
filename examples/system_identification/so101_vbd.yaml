@@ -1,0 +1,58 @@
+type: actuator_sys_id
+joint_parameters:
+  - names: [Rotation, Pitch, Elbow, Wrist_Pitch, Wrist_Roll, Jaw]
+    controller:
+      type: pd
+      implementation: external_implicit
+      delay_duration_ms: 0
+      clamps:
+        effort_limit: 3.35
+        velocity_limit: 30.0
+      stiffness: {lower: 1.0, upper: 80.0, initial: 40.0}
+      damping: {lower: 0.01, upper: 5.0, initial: 2.0}
+    parameters:
+      dry_friction: {lower: 0.0, upper: 1.0, initial: 0.25}
+      viscous_friction: {lower: 0.0, upper: 2.0, initial: 0.75}
+      armature: {lower: 0.0, upper: 0.1, initial: 0.05}
+optimizer:
+  type: python-cmaes
+  sigma: 0.25
+  max_iterations: 100
+  epsilon: 0.001
+simulation:
+  type: newton
+  usd_path: assets/robots/so101/files/so101.usd
+  physics_freq: 250
+  control_freq: 50
+  render_freq: 25
+  solver:
+    type: vbd
+    settings:
+      iterations: 10
+      # The default local solve diverges on this articulated arm and ignores
+      # revolute armature; the coupled articulation solve handles both.
+      rigid_articulation_solve: block_sparse_joints
+num_envs: 64
+buffer_time: 0.2
+seed: 42
+dataset:
+  type: parquet
+  source:
+    provider: huggingface
+    repo_id: nvidia/Anchor-Lab
+    revision: be6010113e7b769e68f2779fbdf321908725f929
+    paths:
+      - data/so101_arm_50motion/so101-sysid-50motion-train-random-waypoints.parquet
+      - data/so101_arm_50motion/so101-sysid-50motion-train-staircase-motion.parquet
+      - data/so101_arm_50motion/so101-sysid-50motion-train-wave-motion.parquet
+  # Map Anchor-Lab Parquet joint prefixes to canonical USD joint names.
+  joint_name_mapping:
+    rotation: Rotation
+    pitch: Pitch
+    elbow: Elbow
+    wrist_pitch: Wrist_Pitch
+    wrist_roll: Wrist_Roll
+    jaw: Jaw
+  resampling:
+    type: uniform
+    dt: 0.02

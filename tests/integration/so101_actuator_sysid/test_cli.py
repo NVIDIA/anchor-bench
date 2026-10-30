@@ -14,6 +14,7 @@ import pytest
 import yaml
 from pxr import Usd, UsdPhysics
 
+from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 from anchor_bench.schema.parse import parse
@@ -30,7 +31,7 @@ pytestmark = pytest.mark.integration
 
 TEST_DIRECTORY = Path(__file__).parent
 REPOSITORY = TEST_DIRECTORY.parents[2]
-CONFIG_PATH = REPOSITORY / "examples" / "system_identification" / "so101.yaml"
+CONFIG_DIRECTORY = REPOSITORY / "examples" / "system_identification"
 SOURCE_USD_PATH = REPOSITORY / "assets" / "robots" / "so101" / "files" / "so101.usd"
 EVALUATION_DATASET_PATH = (
     "data/so101_arm_50motion/so101-sysid-50motion-heldout-square-pattern.parquet"
@@ -44,16 +45,24 @@ EXPECTED_ARTIFACTS = (
 )
 
 
+@pytest.mark.parametrize("config_name", ["so101.yaml", "so101_vbd.yaml"])
 def test_runs_actuator_sysid_config(
     run_cli: Callable[[Sequence[str]], CliResult],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_name: str,
 ) -> None:
     """Identify SO-101 and evaluate held-out data from the training revision."""
 
-    raw_config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    # The simulation context is a process-wide singleton, so each config needs
+    # a fresh one to build its own solver.
+    monkeypatch.setattr(SimulationContext, "_instance", None)
+    raw_config = yaml.safe_load(
+        (CONFIG_DIRECTORY / config_name).read_text(encoding="utf-8")
+    )
     raw_config["optimizer"]["max_iterations"] = 2
     raw_config["num_envs"] = 6
-    smoke_config_path = tmp_path / "so101.yaml"
+    smoke_config_path = tmp_path / config_name
     smoke_config_path.write_text(
         yaml.safe_dump(raw_config, sort_keys=False),
         encoding="utf-8",
@@ -88,6 +97,8 @@ def test_runs_actuator_sysid_config(
     assert all(
         (output_directory / artifact).is_file() for artifact in EXPECTED_ARTIFACTS
     )
+    summary = yaml.safe_load((output_directory / "run_summary.yaml").read_text())
+    assert summary["solver"]["type"] == raw_config["simulation"]["solver"]["type"]
     identified_stage = Usd.Stage.Open(str(output_directory / "identified.usda"))
     assert identified_stage is not None
     identified_joints = {
@@ -119,7 +130,12 @@ def test_runs_actuator_sysid_config(
         config.dataset.source,
         config,
     )
-    assert exported_mse == pytest.approx(best_scores[-1], rel=1.0e-4, abs=1.0e-7)
+    # The USD is replayed with MuJoCo: it reproduces a MuJoCo fit exactly, and
+    # a fit from another solver to within that solver's modeling difference.
+    same_solver = raw_config["simulation"]["solver"]["type"] == "warp_mujoco"
+    assert exported_mse == pytest.approx(
+        best_scores[-1], rel=1.0e-4 if same_solver else 0.5, abs=1.0e-7
+    )
 
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,

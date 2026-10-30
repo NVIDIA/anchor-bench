@@ -13,6 +13,7 @@ from anchor_bench.core.simulation.newton_solvers import (
     NEWTON_SOLVERS,
     MuJoCoAdapter,
     NewtonSolverAdapter,
+    VBDAdapter,
     get_solver_adapter,
 )
 
@@ -106,3 +107,42 @@ def test_mujoco_is_the_registered_default_solver():
 def test_unknown_solver_type_lists_available_solvers():
     with pytest.raises(ValueError, match=r"'featherstone'.*warp_mujoco"):
         get_solver_adapter("featherstone")
+
+
+def test_vbd_is_registered():
+    assert NEWTON_SOLVERS["vbd"] is VBDAdapter
+    assert VBDAdapter.solver_class is newton.solvers.SolverVBD
+
+
+def test_vbd_colors_the_builder_before_finalize():
+    calls = []
+    builder: Any = type("B", (), {"color": lambda self: calls.append(1)})()
+    VBDAdapter().prepare_builder(builder)
+    assert calls == [1]
+
+
+def test_vbd_owns_its_collision_pipeline_and_steps_without_contacts(monkeypatch):
+    class FakePipeline:
+        def __init__(self, model, *, broad_phase, contact_matching):
+            self.args = (model, broad_phase, contact_matching)
+
+    class FakeVBD:
+        def __init__(self, model, *, iterations=10, collision_pipeline=None):
+            self.model = model
+            self.iterations = iterations
+            self.collision_pipeline = collision_pipeline
+
+    monkeypatch.setattr(newton_solvers.newton, "CollisionPipeline", FakePipeline)
+    monkeypatch.setattr(VBDAdapter, "solver_class", FakeVBD)
+
+    with pytest.warns(UserWarning, match="settings.collision_pipeline"):
+        solver, recorded = VBDAdapter().create_solver(
+            MODEL, {"iterations": 4, "collision_pipeline": "mine"}
+        )
+
+    assert isinstance(solver, FakeVBD)
+    assert solver.iterations == 4
+    pipeline: Any = solver.collision_pipeline
+    assert pipeline.args == ("model", "explicit", "latest")
+    assert str(recorded["collision_pipeline"]).startswith("NOT SET: ")
+    assert VBDAdapter().step_contacts(MODEL) is None
