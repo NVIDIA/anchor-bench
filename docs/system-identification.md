@@ -101,53 +101,21 @@ uv run anchor-bench \
 ```
 
 The runtime loads the configured trajectories, evaluates optimizer candidates
-with the selected simulator backend, and stops when the optimizer reaches its
-iteration or convergence condition.
+in the simulator selected by `simulation.type`, and stops when the optimizer
+reaches its iteration or convergence condition.
 
 ## Add another simulator
 
-A backend supplies its own strict simulation configuration, resource context,
-and population evaluator. Its configuration extends
-`anchor_bench.schema.simulation.SysIdSimulationConfig`, retaining the shared
-required `usd_path` and timing fields, and declaring its own `type` and simulator
-settings. Its context extends `SimulationContext(usd_path, *, fixed_base=False)`.
-The shared context resolves and validates the USD path and protects reuse by
-backend class, resolved path, and base mode. Its `_load(usd_path)` receives
-the resolved USD path and returns the model and initial state.
+System identification creates the `SimulationContext` registered for
+`simulation.type` in `anchor_bench.core.simulation.registry.SIMULATION_CONTEXTS`
+and asks it for an evaluator. To support another simulator:
 
-The context declares its configuration class in `sysid_config_model` and
-implements `create_sysid_evaluator(config, parameter_space)`. The task creates
-the selected context with `fixed_base=True` and calls this method on that
-context. The factory returns a `PopulationEvaluator` subclass whose
-`evaluate(population, trajectories)` method produces one finite position-MSE
-score per decoded candidate. The evaluator owns its simulator's candidate
-application, resets, command delay, buffer exclusion, actuation, and stepping.
-The task retains dataset loading and optimization.
-
-Add the implementation beside Newton in
-`anchor_bench/core/simulation/registry.py`:
-
-```python
-SIMULATION_CONTEXTS = {
-    "newton": NewtonSimulationContext,
-    "my_simulator": MySimulationContext,
-}
-```
-
-Select it with `simulation.type: my_simulator` in the YAML and run the normal
-CLI. The dictionary key and the configuration's `type` must match. Each
-implementation supplies its context and evaluator methods; no registration
-function or custom entry script is required. Simulator-specific fields survive
-configuration serialization and hashing.
-
-Model export is optional. An evaluator can override
-`export_model(best_parameters, output_directory)` to return an
-`IdentifiedModelArtifact(path, format)`. The default implementation returns
-`None`. The result exposes the returned path through
-`SysIdResult.identified_model_path`; only an explicit `format="usd"` also
-supplies the compatibility `identified_usd_path`. An evaluator can also override
-`describe_runtime()` to return JSON-compatible runtime settings for
-`run_summary.yaml`; its default implementation returns `None`.
+1. Subclass `SimulationContext` and override `create_sysid_evaluator()` to
+   return a `PopulationEvaluator` that scores candidates in that simulator.
+2. Optionally override `PopulationEvaluator.export_model()` to write the fitted
+   model; the default writes nothing.
+3. Add the context class to `SIMULATION_CONTEXTS` and its configuration to the
+   `simulation` field of `ActuatorSysIdConfig`.
 
 ## Artifacts
 
@@ -159,7 +127,7 @@ run writes:
 | `best_params.yaml` | Best candidate, position MSE, and result schema metadata. |
 | `optimization_log.csv` | Best and population-mean MSE for each generation. |
 | `run_summary.yaml` | Timestamp, best MSE, metric name, and generation count. |
-| `identified.usda` | Newton's USD layer containing the fitted actuator opinions. Other backends can export a different format or omit model export. |
+| `identified.usda` | USD layer containing the fitted actuator opinions (Newton). |
 
 When MLOps tracking is enabled, the task also reports per-generation metrics
 and uploads the finalized directory as the `sysid-output` artifact collection.

@@ -94,14 +94,14 @@ class RunnerSimulationContext(SimulationContext):
 
 @pytest.fixture(autouse=True)
 def simulation_context(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> RunnerSimulationContext:
     """Create the shared simulation context before running data processors."""
 
     monkeypatch.setattr(SimulationContext, "_instance", None)
-    source = tmp_path / "scene.usda"
-    source.write_text("#usda 1.0\n")
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
     return RunnerSimulationContext(str(source))
 
 

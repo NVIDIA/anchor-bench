@@ -7,19 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
 Candidate = Dict[str, Dict[str, float]]
-
-
-@dataclass(frozen=True)
-class IdentifiedModelArtifact:
-    """A backend-native model exported after identification."""
-
-    path: Path
-    format: str
 
 
 @dataclass(frozen=True)
@@ -77,5 +69,4 @@ class SysIdResult:
     best_parameters_path: Path
     optimization_log_path: Path
     run_summary_path: Path
-    identified_usd_path: Path | None = None
-    identified_model_path: Path | None = None
+    identified_usd_path: Optional[Path] = None

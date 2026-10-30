@@ -7,15 +7,21 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, Tuple, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    Optional,
+    Tuple,
+    TypeVar,
+    cast,
+)
 
 from typing_extensions import Self
 
-from anchor_bench.errors import SimulationBackendError
-
 if TYPE_CHECKING:
     from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
-    from anchor_bench.schema.simulation import SysIdSimulationConfig
     from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
     from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -25,8 +31,6 @@ StateT = TypeVar("StateT")
 
 class SimulationContext(ABC, Generic[ModelT, StateT]):
     """Own the single lazily loaded simulation model and state."""
-
-    sysid_config_model: ClassVar[type[SysIdSimulationConfig] | None] = None
 
     _instance: ClassVar[Optional[SimulationContext[Any, Any]]] = None
     _usd_path: Path
@@ -125,8 +129,8 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
     def create_sysid_evaluator(
         self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
     ) -> PopulationEvaluator:
-        """Create an evaluator when this simulator supports system identification."""
-        raise SimulationBackendError(
+        """Create the population evaluator used by actuator system identification."""
+        raise NotImplementedError(
             f"{type(self).__name__} does not support system identification."
         )
 

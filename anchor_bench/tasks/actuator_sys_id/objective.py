@@ -6,18 +6,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 
-from anchor_bench.schema.simulation import JsonValue
-from anchor_bench.tasks.actuator_sys_id.model import (
-    Candidate,
-    IdentifiedModelArtifact,
-    Trajectory,
-)
+from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -30,17 +24,10 @@ class PopulationEvaluator(ABC):
         self,
         population: Sequence[Candidate],
         trajectories: Sequence[Trajectory],
-    ) -> FloatArray:
-        raise NotImplementedError
+    ) -> FloatArray: ...
 
-    def export_model(
-        self, best: Candidate, output: Path
-    ) -> IdentifiedModelArtifact | None:
-        """Optionally export the fitted simulator model."""
-        return None
-
-    def describe_runtime(self) -> Mapping[str, JsonValue] | None:
-        """Optionally report the simulation settings used for evaluation."""
+    def export_model(self, best: Candidate, output_dir: Path) -> Optional[Path]:
+        """Write the fitted simulator model, if the simulator supports it."""
         return None
 
 

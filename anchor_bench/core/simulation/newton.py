@@ -14,7 +14,6 @@ import newton
 
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
-from anchor_bench.schema.simulation import NewtonSimulationConfig
 
 if TYPE_CHECKING:
     from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -32,8 +31,6 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     single-world simulation and prevents later initialization with another world
     count.
     """
-
-    sysid_config_model = NewtonSimulationConfig
 
     _initialized: bool
     _world_count: int
@@ -60,13 +57,12 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
     def create_sysid_evaluator(
         self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
     ) -> PopulationEvaluator:
+        # Imported here because the evaluator module depends on this one.
         from anchor_bench.tasks.actuator_sys_id.simulation import (
             NewtonPopulationEvaluator,
         )
 
-        return NewtonPopulationEvaluator(
-            config, parameter_space, simulation_context=self
-        )
+        return NewtonPopulationEvaluator(config, parameter_space, self)
 
     def initialize(
         self,

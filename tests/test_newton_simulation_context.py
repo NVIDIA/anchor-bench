@@ -438,25 +438,3 @@ def test_rejects_different_import_configuration(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="different base mode"):
         NewtonSimulationContext(str(source), fixed_base=False)
-
-
-def test_resolved_usd_alias_reuses_newton_resources(
-    fake_newton_usd: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Canonicalize backend-owned paths before assigning resource identity."""
-
-    monkeypatch.chdir(fake_newton_usd.parent)
-    alias = fake_newton_usd.parent / "alias.usda"
-    alias.symlink_to(fake_newton_usd)
-    context = NewtonSimulationContext("robot.usda", fixed_base=True)
-    model, state = context.load()
-
-    repeated = NewtonSimulationContext(str(alias), fixed_base=True)
-
-    assert repeated is context
-    assert context.usd_path == fake_newton_usd.resolve()
-    assert context.fixed_base is True
-    assert repeated.model is model
-    assert repeated.state is state
-    assert FakeModelBuilder.instance_count == 2

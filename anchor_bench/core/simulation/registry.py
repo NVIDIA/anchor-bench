@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Supported simulation context implementations."""
+"""Simulation backend registry."""
+
+from __future__ import annotations
 
 from typing import Any
 
@@ -13,16 +15,16 @@ SIMULATION_CONTEXTS: dict[str, type[SimulationContext[Any, Any]]] = {
 }
 
 
-def get_simulation_context_type(name: str) -> type[SimulationContext[Any, Any]]:
-    """Return the context class configured for a simulator."""
-    try:
-        return SIMULATION_CONTEXTS[name]
-    except KeyError as error:
-        raise ValueError(f"Unknown simulation backend {name!r}.") from error
-
-
 def create_simulation_context(
-    backend: str, usd_path: str, *, fixed_base: bool = False
+    backend: str,
+    usd_path: str,
+    *,
+    fixed_base: bool = False,
 ) -> SimulationContext[Any, Any]:
-    """Create the context selected for a configured simulator."""
-    return get_simulation_context_type(backend)(usd_path, fixed_base=fixed_base)
+    """Create the simulation context registered for a configured backend."""
+
+    try:
+        context_type = SIMULATION_CONTEXTS[backend]
+    except KeyError as error:
+        raise ValueError(f"Unknown simulation backend {backend!r}.") from error
+    return context_type(usd_path, fixed_base=fixed_base)

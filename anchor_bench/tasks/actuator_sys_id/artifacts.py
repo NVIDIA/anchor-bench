@@ -6,17 +6,15 @@
 from __future__ import annotations
 
 import csv
-from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional, Sequence
 
 import yaml
 
-from anchor_bench.schema.simulation import JsonValue
 from anchor_bench.tasks.actuator_sys_id.model import (
     Candidate,
     GenerationRecord,
-    IdentifiedModelArtifact,
     SysIdResult,
 )
 
@@ -27,10 +25,9 @@ def write_artifacts(
     best_parameters: Candidate,
     best_mse: float,
     history: Sequence[GenerationRecord],
-    model_artifact: IdentifiedModelArtifact | None = None,
-    runtime_simulation: Mapping[str, JsonValue] | None = None,
+    identified_usd_path: Optional[Path] = None,
 ) -> SysIdResult:
-    """Write common results and record an optional backend-native model export."""
+    """Write the fitted parameters, log, and resolved run summary."""
 
     best_parameters_path = output_dir / "best_params.yaml"
     optimization_log_path = output_dir / "optimization_log.csv"
@@ -66,8 +63,6 @@ def write_artifacts(
         "best_mse": best_mse,
         "generations": len(history),
     }
-    if runtime_simulation is not None:
-        summary["runtime_simulation"] = dict(runtime_simulation)
     run_summary_path.write_text(
         yaml.safe_dump(summary, sort_keys=False),
         encoding="utf-8",
@@ -80,10 +75,5 @@ def write_artifacts(
         best_parameters_path=best_parameters_path,
         optimization_log_path=optimization_log_path,
         run_summary_path=run_summary_path,
-        identified_model_path=model_artifact.path if model_artifact else None,
-        identified_usd_path=(
-            model_artifact.path
-            if model_artifact is not None and model_artifact.format == "usd"
-            else None
-        ),
+        identified_usd_path=identified_usd_path,
     )

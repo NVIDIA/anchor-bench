@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from math import isclose
 from pathlib import Path
 from typing import ClassVar, Dict, List, Sequence, Tuple
@@ -16,14 +15,8 @@ import numpy as np
 import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
-from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
-from anchor_bench.schema.simulation import JsonValue, NewtonSimulationConfig
-from anchor_bench.tasks.actuator_sys_id.model import (
-    Candidate,
-    IdentifiedModelArtifact,
-    Trajectory,
-)
+from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -79,12 +72,8 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         self,
         config: ActuatorSysIdConfig,
         parameter_space: ParameterSpace,
-        *,
-        simulation_context: NewtonSimulationContext | None = None,
+        simulation_context: NewtonSimulationContext,
     ) -> None:
-        if not isinstance(config.simulation, NewtonSimulationConfig):
-            raise TypeError("Newton evaluator requires NewtonSimulationConfig")
-        self.simulation_config = config.simulation
         self.config = config
         self.parameter_space = parameter_space
         self.joint_names = _joint_names(config)
@@ -112,27 +101,15 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             substeps=self.control_substeps,
         )
 
-    def _initialize_simulation(
-        self,
-        simulation_context: NewtonSimulationContext | None = None,
-    ) -> None:
+    def _initialize_simulation(self, context: NewtonSimulationContext) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
-        context = simulation_context
-        if context is None:
-            context = create_simulation_context(
-                self.simulation_config.type,
-                self.simulation_config.usd_path,
-                fixed_base=True,
-            )
-        if not isinstance(context, NewtonSimulationContext):
-            raise TypeError("actuator_sys_id requires a Newton simulation context")
         self._simulation_context = context
 
         def configure_template(template: newton.ModelBuilder) -> None:
             template_indices = _builder_joint_indices(template, self.joint_names)
             self._configure_template(template, template_indices, initial)
 
-        solver_config = self.simulation_config.solver
+        solver_config = self.config.simulation.solver
         context.initialize(
             world_count=self.num_envs,
             configure_builder=configure_template,
@@ -268,25 +245,22 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             raise RuntimeError("Newton produced non-finite position error")
         return scores
 
-    def export_model(self, best: Candidate, output: Path) -> IdentifiedModelArtifact:
+    def export_model(self, best: Candidate, output_dir: Path) -> Path:
         from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer
 
-        path = output / "identified.usda"
+        path = output_dir / "identified.usda"
         write_identified_usd_layer(
-            self.simulation_config.usd_path,
+            self.config.simulation.usd_path,
             path,
             best,
             {
-                joint: group.controller.clamps
+                joint_name: group.controller.clamps
                 for group in self.config.joint_parameters
-                for joint in group.names
+                for joint_name in group.names
             },
             self.config.model_dump_json(),
         )
-        return IdentifiedModelArtifact(path, "usd")
-
-    def describe_runtime(self) -> Mapping[str, JsonValue]:
-        return self.simulation_config.model_dump(mode="json")
+        return path
 
     def _apply_population(self, population: Sequence[Candidate]) -> None:
         for parameter_name, model_array_name in self._MODEL_ARRAYS.items():

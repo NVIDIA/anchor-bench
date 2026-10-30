@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -44,9 +44,12 @@ class DifferenceDataProcessor(BaseDataProcessor):
 
 
 class RecordingSimulationContext(SimulationContext):
-    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
-        """Provide the model consumed through the current shared context."""
+    loaded_path: Optional[str] = None
 
+    def _load(self, usd_path: Path) -> Tuple[Any, Any]:
+        """Record the USD selected by the current context."""
+
+        self.loaded_path = str(usd_path)
         return SimpleNamespace(
             joint_label=["shoulder", "elbow"],
             joint_qd_start=FakeNewtonArray([0, 1, 2]),
@@ -59,8 +62,8 @@ class RecordingSimulationContext(SimulationContext):
 
 @pytest.fixture(autouse=True)
 def simulation_context(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> RecordingSimulationContext:
     """Create one process-wide context for every data processor test."""
 
@@ -69,8 +72,8 @@ def simulation_context(
         "_instance",
         None,
     )
-    source = tmp_path / "scene.usda"
-    source.write_text("#usda 1.0\n")
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
     return RecordingSimulationContext(str(source))
 
 
@@ -107,10 +110,10 @@ def test_simulation_context_cannot_be_instantiated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    source = tmp_path / "robot.usda"
+    source.write_text("#usda 1.0", encoding="utf-8")
     monkeypatch.setattr(SimulationContext, "_instance", None)
 
-    source = tmp_path / "scene.usda"
-    source.write_text("#usda 1.0\n")
     with pytest.raises(TypeError):
         SimulationContext(str(source))  # pyright: ignore[reportAbstractUsage]
 

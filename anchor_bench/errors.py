@@ -38,7 +38,3 @@ class MLOpsBackendNotFoundError(MLOpsError):
 
 class MLOpsTrackingError(MLOpsError):
     """Raised when an MLOps backend cannot create or update a tracked run."""
-
-
-class SimulationBackendError(AnchorBenchError):
-    """Raised when simulation backend registration or selection fails."""

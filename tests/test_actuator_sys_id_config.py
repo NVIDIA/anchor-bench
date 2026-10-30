@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from anchor_bench.schema.actuator_sys_id import (
     ActuatorSysIdConfig,
-    NewtonSimulationConfig,
     PdControllerConfig,
 )
 from anchor_bench.schema.dataset import ParquetDatasetConfig
@@ -79,7 +78,6 @@ def test_model_matches_schema_and_applies_defaults(valid_config_data):
     assert config.dataset.resampling.dt == 0.005
     assert isinstance(config.joint_parameters[0].controller, PdControllerConfig)
     assert config.joint_parameters[0].controller.delay_duration_ms == 0
-    assert isinstance(config.simulation, NewtonSimulationConfig)
     assert config.simulation.solver.integrator == "implicitfast"
     assert config.mlops is None
 
@@ -191,16 +189,3 @@ def test_model_rejects_non_finite_numbers(valid_config_data):
 
     with pytest.raises(ValidationError):
         ActuatorSysIdConfig.model_validate(data)
-
-
-def test_legacy_newton_config_names_reexport_neutral_models():
-    from anchor_bench.schema.actuator_sys_id import WarpMujocoSolverConfig
-    from anchor_bench.schema.simulation import (
-        NewtonSimulationConfig as NeutralNewtonConfig,
-    )
-    from anchor_bench.schema.simulation import (
-        WarpMujocoSolverConfig as NeutralSolverConfig,
-    )
-
-    assert NewtonSimulationConfig is NeutralNewtonConfig
-    assert WarpMujocoSolverConfig is NeutralSolverConfig

@@ -8,36 +8,12 @@ from __future__ import annotations
 from math import isclose
 from typing import Annotated, List, Literal, Optional, Union
 
-from pydantic import (
-    Field,
-    SerializeAsAny,
-    StrictFloat,
-    StrictInt,
-    field_validator,
-    model_validator,
-)
+from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
 from typing_extensions import TypeAlias
 
 from anchor_bench.schema.base import BaseConfig, StrictBaseModel
 from anchor_bench.schema.dataset import ParquetDatasetConfig
 from anchor_bench.schema.mlops import MLOpsConfig
-from anchor_bench.schema.simulation import (
-    NewtonSimulationConfig,
-    SysIdSimulationConfig,
-    WarpMujocoSolverConfig,
-)
-
-__all__ = [
-    "ActuatorSysIdConfig",
-    "Bound",
-    "CmaesOptimizerConfig",
-    "ControllerClamps",
-    "JointParameterGroup",
-    "JointParameters",
-    "NewtonSimulationConfig",
-    "PdControllerConfig",
-    "WarpMujocoSolverConfig",
-]
 
 JsonNumber: TypeAlias = Union[StrictInt, StrictFloat]
 NonEmptyString: TypeAlias = Annotated[str, Field(min_length=1)]
@@ -117,6 +93,28 @@ class JointParameterGroup(StrictBaseModel):
         return self
 
 
+class WarpMujocoSolverConfig(StrictBaseModel):
+    type: Literal["warp_mujoco"]
+    integrator: NonEmptyString = "implicitfast"
+    solver_iterations: PositiveInteger
+    line_search_iterations: NonNegativeInteger
+
+
+class NewtonSimulationConfig(StrictBaseModel):
+    type: Literal["newton"]
+    usd_path: NonEmptyString
+    physics_freq: PositiveInteger
+    control_freq: PositiveInteger
+    render_freq: PositiveInteger
+    solver: WarpMujocoSolverConfig
+
+    @model_validator(mode="after")
+    def validate_frequencies(self) -> NewtonSimulationConfig:
+        if self.physics_freq % self.control_freq != 0:
+            raise ValueError("physics_freq must be divisible by control_freq")
+        return self
+
+
 class ActuatorSysIdConfig(BaseConfig):
     type: Literal["actuator_sys_id"]  # pyright: ignore[reportIncompatibleVariableOverride]
     description: Optional[str] = None
@@ -127,37 +125,12 @@ class ActuatorSysIdConfig(BaseConfig):
     )
     joint_parameters: Annotated[List[JointParameterGroup], Field(min_length=1)]
     optimizer: CmaesOptimizerConfig
-    simulation: SerializeAsAny[SysIdSimulationConfig]
+    simulation: NewtonSimulationConfig
     num_envs: CmaesPopulationSize = 64
     buffer_time: NonNegativeNumber = 0.0
     seed: NonNegativeInteger = 0
     output_dir: NonEmptyString = "outputs/actuator_sys_id"
     dataset: ParquetDatasetConfig
-
-    @field_validator("simulation", mode="before")
-    @classmethod
-    def dispatch_simulation(cls, value: object) -> SysIdSimulationConfig:
-        from anchor_bench.core.simulation.registry import get_simulation_context_type
-        from anchor_bench.errors import SimulationBackendError
-
-        if isinstance(value, SysIdSimulationConfig):
-            backend_name = value.type
-        elif isinstance(value, dict) and isinstance(value.get("type"), str):
-            backend_name = value["type"]
-        else:
-            raise ValueError("simulation must define a string type")  # noqa: TRY004 - Pydantic validation errors require ValueError
-        config_model = get_simulation_context_type(backend_name).sysid_config_model
-        if config_model is None:
-            raise SimulationBackendError(
-                f"Simulation backend {backend_name!r} does not support system identification."
-            )
-        if isinstance(value, SysIdSimulationConfig):
-            if type(value) is not config_model:
-                raise ValueError(
-                    "simulation config must use the registered config model"
-                )
-            value = value.model_dump()
-        return config_model.model_validate(value)
 
     @model_validator(mode="after")
     def validate_task_invariants(self) -> ActuatorSysIdConfig:
