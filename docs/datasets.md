@@ -69,6 +69,10 @@ files through the Hugging Face cache, orders them by repository path, and reuses
 cached files on later runs. Pin a commit hash when the input data must be
 reproducible.
 
+Selections with no matching files raise `DatasetLoadError`. Dataset tracking
+records a revision-specific HTTPS file URL along with the repository ID,
+revision, and repository-relative path.
+
 ## Joint-name mapping
 
 When Parquet and USD joint names differ, map each source field prefix to its USD

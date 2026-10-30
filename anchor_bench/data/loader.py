@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
+from huggingface_hub import hf_hub_url
 
 from anchor_bench.data.datasets import (
     download_from_huggingface,
@@ -141,9 +142,11 @@ class DatasetLoader:
             yield [
                 _MaterializedDatasetFile(
                     path=file.path,
-                    source=(
-                        f"hf://datasets/{source.repo_id}@{source.revision}/"
-                        f"{file.repo_path}"
+                    source=hf_hub_url(
+                        repo_id=source.repo_id,
+                        filename=file.repo_path,
+                        repo_type="dataset",
+                        revision=source.revision,
                     ),
                     metadata={
                         "provider": source.provider,

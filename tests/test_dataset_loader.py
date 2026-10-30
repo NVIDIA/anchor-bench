@@ -209,8 +209,14 @@ def test_downloads_structured_huggingface_source_and_logs_lineage(
     ]
     calls = tracker.log_dataset.call_args_list
     assert [call.kwargs["source"] for call in calls] == [
-        "hf://datasets/nvidia/Anchor-Lab@abc123/data/selected/a/data.parquet",
-        "hf://datasets/nvidia/Anchor-Lab@abc123/data/selected/b/data.parquet",
+        (
+            "https://huggingface.co/datasets/nvidia/Anchor-Lab/resolve/abc123/"
+            "data/selected/a/data.parquet"
+        ),
+        (
+            "https://huggingface.co/datasets/nvidia/Anchor-Lab/resolve/abc123/"
+            "data/selected/b/data.parquet"
+        ),
     ]
     assert [call.kwargs["metadata"]["repo_path"] for call in calls] == [
         "data/selected/a/data.parquet",

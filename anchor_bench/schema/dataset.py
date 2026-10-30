@@ -37,6 +37,8 @@ class HuggingFaceDatasetSource(StrictBaseModel):
     @field_validator("paths")
     @classmethod
     def paths_must_be_relative_and_unique(cls, paths: List[str]) -> List[str]:
+        """Reject duplicate, absolute, and parent-traversing repository paths."""
+
         if len(paths) != len(set(paths)):
             raise ValueError("Hugging Face dataset paths must be unique")
         invalid = [
