@@ -16,8 +16,9 @@ The current task types are:
 | `actuator_sys_id` | Fit actuator parameters by replaying recorded data in replicated Newton worlds. |
 | `training` | Prepare mapped trajectories and train recurrent actuator models. |
 
-Anchor Bench also provides a Parquet dataset loader, a Newton USD adapter, and
-optional run tracking through the bundled MLflow backend.
+Anchor Bench also provides a Parquet dataset loader with revision-pinned
+Hugging Face sources, a Newton USD adapter, and optional run tracking through
+the bundled MLflow backend.
 
 ## Quick start
 

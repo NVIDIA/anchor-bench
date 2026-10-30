@@ -4,7 +4,12 @@ tags: [g1, right-arm, gru, residual-torque]
 
 dataset:
   type: parquet
-  source: examples/training/data/g1-arm-multijoint-*.parquet
+  source:
+    provider: huggingface
+    repo_id: nvidia/Anchor-Lab
+    revision: be6010113e7b769e68f2779fbdf321908725f929
+    paths:
+      - data/g1_arm_multijoint/*.parquet
   joint_name_mapping:
     right_shoulder_pitch: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_pitch_joint
     right_shoulder_roll: /g1_29dof_rev_1_0_tri_hand/joints/right_shoulder_roll_joint
