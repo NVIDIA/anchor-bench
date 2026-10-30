@@ -76,10 +76,10 @@ class Simulation:
             if not np.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
                 raise ValueError(f"{name} must be positive and finite")
         if args.outlet_diameter >= 2 * args.bucket_radius:
-            raise ValueError("outlet-diameter must be smaller than the bucket diameter")
+            raise ValueError("outlet_diameter must be smaller than the bucket diameter")
         if args.outlet_diameter < 4 * args.voxel_size:
             raise ValueError(
-                "Resolve the outlet with at least four voxels; reduce --voxel-size"
+                "Resolve the outlet with at least four voxels; reduce voxel_size"
             )
         for name in ("friction", "dilatancy", "ground_friction", "funnel_friction"):
             if not np.isfinite(getattr(args, name)) or getattr(args, name) < 0:
@@ -137,7 +137,7 @@ class Simulation:
         )
         points = points[np.linalg.norm(points[:, :2], axis=1) < local_radius - spacing]
         if not len(points):
-            raise ValueError("voxel-size is too large for the sand volume")
+            raise ValueError("voxel_size is too large for the sand volume")
         rng = np.random.default_rng(42)
         points += rng.uniform(-0.2 * spacing, 0.2 * spacing, points.shape)
         points[:, 2] += args.drop_height_m

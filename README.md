@@ -62,6 +62,7 @@ reference guides:
 | [Running tasks](docs/running-tasks.md) | CLI usage, output directories, completion markers, and logging. |
 | [Trajectory generation](docs/trajectory.md) | Hold, transition, sine, and chirp command trajectories. |
 | [Actuator system identification](docs/system-identification.md) | Newton replay and actuator parameter fitting. |
+| [MPM material system identification](docs/mpm-sys-id.md) | Fit shared sand material across pour and bottle-drop experiments. |
 | [Training actuator models](docs/training.md) | Recurrent model training and validation. |
 | [Dataset loading](docs/datasets.md) | Parquet input, resampling, and name mapping. |
 | [MLOps backends](docs/mlops.md) | MLflow tracking and custom tracking backends. |

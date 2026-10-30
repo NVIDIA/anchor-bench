@@ -35,6 +35,18 @@ def surface_grid(positions, radii, *, extent, cell_size):
     return heights.reshape(count, count), spacing
 
 
+def _box_mean3(field):
+    """Average each cell's 3x3 neighborhood with edge padding."""
+    padded = np.pad(field, 1, mode="edge")
+    rows, cols = field.shape
+    return (
+        np.asarray(
+            sum(padded[i : i + rows, j : j + cols] for i in range(3) for j in range(3))
+        )
+        / 9
+    )
+
+
 def measure_crater(reference, current, *, cell_size, threshold):
     """Measure the central crater's footprint and post-removal rim-to-floor depth.
 
@@ -54,17 +66,7 @@ def measure_crater(reference, current, *, cell_size, threshold):
     if cell_size <= 0 or threshold <= 0:
         raise ValueError("Cell size and crater threshold must be positive")
     delta = reference - current
-    padded = np.pad(delta, 1, mode="edge")
-    smooth = (
-        np.asarray(
-            sum(
-                padded[i : i + delta.shape[0], j : j + delta.shape[1]]
-                for i in range(3)
-                for j in range(3)
-            )
-        )
-        / 9
-    )
+    smooth = _box_mean3(delta)
     mask = smooth >= threshold
     # Select the deepest central depression; ignore detached peripheral sampling artifacts.
     center = np.array(delta.shape) // 2
@@ -113,17 +115,7 @@ def measure_crater(reference, current, *, cell_size, threshold):
         raise ValueError(
             "Crater occupies the whole measurement region; enlarge the region"
         )
-    padding = np.pad(current, 1, mode="edge")
-    surface = (
-        np.asarray(
-            sum(
-                padding[i : i + mask.shape[0], j : j + mask.shape[1]]
-                for i in range(3)
-                for j in range(3)
-            )
-        )
-        / 9
-    )
+    surface = _box_mean3(current)
     rim_height = float(np.max(surface[rim]))
     floor_height = float(np.min(surface[component]))
     return {

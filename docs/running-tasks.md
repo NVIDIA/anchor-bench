@@ -7,11 +7,25 @@ uv run anchor-bench --config path/to/config.yaml
 ```
 
 The top-level `type` selects the implementation. The registered types are
-`actuator_sys_id`, `training`, and `trajectory_v1`. Configuration models are
-strict: unknown fields, coerced values, invalid references, and unsupported
-type values are rejected before the task starts.
+`actuator_sys_id`, `training`, `trajectory_v1`, and `mpm_sys_id`.
+Configuration models are strict: unknown fields, coerced values, invalid
+references, and unsupported type values are rejected before the task starts.
 
 Use `uv run anchor-bench --help` to inspect the CLI options.
+
+MPM material system identification also supports the positional `mpm_sys_id`
+subcommand, which requires the configuration's `type` to be `mpm_sys_id`:
+
+```bash
+uv run anchor-bench mpm_sys_id \
+  --config examples/mpm_sys_id/sand.yaml --output outputs/sand-fit
+```
+
+Add `--resume` to continue an interrupted MPM run from its checkpoint in the
+same output directory. Keep the configuration and input data unchanged, and do
+not combine `--resume` with `--force`. See the
+[MPM material system identification guide](mpm-sys-id.md) for setup and resume
+details.
 
 ## Logging
 

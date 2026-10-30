@@ -109,6 +109,7 @@ def test_objective_requires_all_enabled_experiments():
 
 
 def test_forest_replays_and_preserves_parameter_bounds(config_path):
+    pytest.importorskip("sklearn", reason="Install the mpm extra: uv sync --extra mpm")
     config = parse(config_path)
     assert isinstance(config, MpmSysIdConfig)
     bounds = {
@@ -141,6 +142,7 @@ def test_forest_replays_and_preserves_parameter_bounds(config_path):
 
 
 def test_run_resume_lock_and_data_fingerprint(config_path, tmp_path, monkeypatch):
+    pytest.importorskip("sklearn", reason="Install the mpm extra: uv sync --extra mpm")
     output = tmp_path / "run"
     calls = []
 
@@ -264,6 +266,7 @@ def test_completed_worker_response_is_reused(config_path, tmp_path):
 
 
 def test_mpm_tracking_records_csv_and_scores(config_path, tmp_path, monkeypatch):
+    pytest.importorskip("sklearn", reason="Install the mpm extra: uv sync --extra mpm")
     import mlflow
     from mlflow.tracking import MlflowClient
 

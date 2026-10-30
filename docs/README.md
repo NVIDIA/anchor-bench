@@ -20,6 +20,8 @@ otherwise.
   Newton replay and inspect its fitted parameters and optimization artifacts.
   The maintained SO-101 configuration is
   [`examples/system_identification/so101.yaml`](../examples/system_identification/so101.yaml).
+- [MPM material system identification](mpm-sys-id.md): fit shared sand material
+  across pour and bottle-drop experiments.
 - [Training actuator models](training.md): reproduce the maintained G1 GPU
   training and Newton replay workflows from
   [`examples/training/`](../examples/training/).
