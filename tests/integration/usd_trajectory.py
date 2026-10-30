@@ -107,13 +107,8 @@ class _NewtonTrajectoryRunner:
         self._collision_pipeline = newton.CollisionPipeline(
             self._model, broad_phase="explicit"
         )
-        self._solver = newton.solvers.SolverMuJoCo(
-            self._model,
-            solver="newton",
-            iterations=config.simulation.solver.solver_iterations,
-            ls_iterations=config.simulation.solver.line_search_iterations,
-            integrator=config.simulation.solver.integrator,
-        )
+        solver_settings: Dict[str, Any] = dict(config.simulation.solver.settings)
+        self._solver = newton.solvers.SolverMuJoCo(self._model, **solver_settings)
         self._newton = newton
         self._contacts = self._collision_pipeline.contacts()
         self._control_dt = 1.0 / config.simulation.control_freq

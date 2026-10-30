@@ -91,6 +91,7 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             identified_usd_path=evaluator.export_model(
                 best_parameters, output_directory
             ),
+            summary_fields=evaluator.run_summary(),
         )
         # Upload only after every SysID output file is finalized. TaskRunner
         # separately owns the completion marker and tracked-run status.

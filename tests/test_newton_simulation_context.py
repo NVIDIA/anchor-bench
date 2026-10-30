@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Tuple
 import pytest
 
 from anchor_bench.core import NewtonSimulationContext, SimulationContext
+from anchor_bench.core.simulation.newton_solvers import MuJoCoAdapter
 
 
 class FakeModel:
@@ -129,9 +130,13 @@ class FakeSolver:
         builder.custom_attributes_registered = True
         cls.registered_builders.append(builder)
 
-    def __init__(self, model: FakeModel, **options: Any) -> None:
+    def __init__(self, model: FakeModel, *, iterations: int | None = None) -> None:
         self.model = model
-        self.options = options
+        self.options = {
+            key: value
+            for key, value in {"iterations": iterations}.items()
+            if value is not None
+        }
         self.steps = []
         self.instances.append(self)
 
@@ -171,6 +176,11 @@ def _install_fake_newton(monkeypatch: pytest.MonkeyPatch) -> None:
         "anchor_bench.core.simulation.newton.newton",
         fake_newton,
     )
+    monkeypatch.setattr(
+        "anchor_bench.core.simulation.newton_solvers.newton",
+        fake_newton,
+    )
+    monkeypatch.setattr(MuJoCoAdapter, "solver_class", FakeSolver)
     FakeModelBuilder.instance_count = 0
     FakeModelBuilder.instances = []
     FakeCollisionPipeline.instances = []
@@ -226,7 +236,6 @@ def test_lazily_builds_one_newton_model_and_state(
     pipeline = FakeCollisionPipeline.instances[0]
     assert pipeline.model is fake_model
     assert pipeline.broad_phase == "explicit"
-    assert context._collision_pipeline is pipeline
     assert context.contacts is pipeline.contacts_buffer
     assert context.solver is FakeSolver.instances[0]
     assert FakeSolver.instances[0].options == {}
@@ -249,13 +258,13 @@ def test_initializes_one_configurable_replicated_simulation(
         world_count=4,
         configure_builder=configure,
         configuration_key=("actuators", 1),
-        solver_options={"iterations": 5},
+        solver_settings={"iterations": 5},
     )
     context.initialize(
         world_count=4,
         configure_builder=configure,
         configuration_key=("actuators", 1),
-        solver_options={"iterations": 5},
+        solver_settings={"iterations": 5},
     )
 
     template, population = FakeModelBuilder.instances
@@ -272,7 +281,6 @@ def test_initializes_one_configurable_replicated_simulation(
     pipeline = FakeCollisionPipeline.instances[0]
     assert pipeline.model is population.model
     assert pipeline.broad_phase == "explicit"
-    assert context._collision_pipeline is pipeline
     assert context.contacts is pipeline.contacts_buffer
     assert FakeModelBuilder.instance_count == 2
     assert len(FakeSolver.instances) == 1
@@ -289,7 +297,7 @@ def test_rejects_conflicting_reinitialization(
         world_count=4,
         configure_builder=configure,
         configuration_key=("actuators", 1),
-        solver_options={"iterations": 5},
+        solver_settings={"iterations": 5},
     )
 
     with pytest.raises(RuntimeError, match="different world count or configuration"):
@@ -297,28 +305,58 @@ def test_rejects_conflicting_reinitialization(
             world_count=8,
             configure_builder=configure,
             configuration_key=("actuators", 1),
-            solver_options={"iterations": 5},
+            solver_settings={"iterations": 5},
         )
     context.initialize(
         world_count=4,
         configure_builder=lambda builder: None,
         configuration_key=("actuators", 1),
-        solver_options={"iterations": 5},
+        solver_settings={"iterations": 5},
     )
     with pytest.raises(RuntimeError, match="different world count or configuration"):
         context.initialize(
             world_count=4,
             configure_builder=configure,
             configuration_key=("actuators", 2),
-            solver_options={"iterations": 5},
+            solver_settings={"iterations": 5},
         )
     with pytest.raises(RuntimeError, match="different world count or configuration"):
         context.initialize(
             world_count=4,
             configure_builder=configure,
             configuration_key=("actuators", 1),
-            solver_options={"iterations": 6},
+            solver_settings={"iterations": 6},
         )
+
+
+def test_initialize_records_solver_type_and_settings(
+    fake_newton_usd: Path,
+) -> None:
+    context = NewtonSimulationContext(str(fake_newton_usd))
+    context.initialize(solver_settings={"iterations": 5})
+
+    assert context.solver_type == "warp_mujoco"
+    assert dict(context.solver_settings) == {"iterations": 5}
+
+
+def test_reinitializing_with_different_solver_settings_raises(
+    fake_newton_usd: Path,
+) -> None:
+    context = NewtonSimulationContext(str(fake_newton_usd))
+    context.initialize(solver_settings={"iterations": 5})
+
+    with pytest.raises(RuntimeError, match="different world count or configuration"):
+        context.initialize(solver_settings={"iterations": 6})
+
+
+def test_unknown_solver_type_fails_before_loading_usd(
+    fake_newton_usd: Path,
+) -> None:
+    context = NewtonSimulationContext(str(fake_newton_usd))
+
+    with pytest.raises(ValueError, match="Unknown Newton solver 'nope'"):
+        context.initialize(solver_type="nope")
+    assert FakeModelBuilder.instance_count == 0
 
 
 def test_rejects_invalid_world_count(

@@ -50,8 +50,12 @@ def valid_config_data():
             "render_freq": 60,
             "solver": {
                 "type": "warp_mujoco",
-                "solver_iterations": 10,
-                "line_search_iterations": 4,
+                "settings": {
+                    "solver": "newton",
+                    "integrator": "implicitfast",
+                    "iterations": 10,
+                    "ls_iterations": 4,
+                },
             },
         },
         "dataset": {
@@ -78,7 +82,7 @@ def test_model_matches_schema_and_applies_defaults(valid_config_data):
     assert config.dataset.resampling.dt == 0.005
     assert isinstance(config.joint_parameters[0].controller, PdControllerConfig)
     assert config.joint_parameters[0].controller.delay_duration_ms == 0
-    assert config.simulation.solver.integrator == "implicitfast"
+    assert config.simulation.solver.settings["integrator"] == "implicitfast"
     assert config.mlops is None
 
 
@@ -189,3 +193,19 @@ def test_model_rejects_non_finite_numbers(valid_config_data):
 
     with pytest.raises(ValidationError):
         ActuatorSysIdConfig.model_validate(data)
+
+
+def test_solver_settings_default_to_empty(valid_config_data):
+    valid_config_data["simulation"]["solver"] = {"type": "vbd"}
+    config = ActuatorSysIdConfig.model_validate(valid_config_data)
+    assert config.simulation.solver.type == "vbd"
+    assert config.simulation.solver.settings == {}
+
+
+@pytest.mark.parametrize(
+    "field", ["integrator", "solver_iterations", "line_search_iterations"]
+)
+def test_old_mujoco_solver_fields_point_to_settings(valid_config_data, field):
+    valid_config_data["simulation"]["solver"] = {"type": "warp_mujoco", field: 5}
+    with pytest.raises(ValidationError, match="simulation.solver.settings"):
+        ActuatorSysIdConfig.model_validate(valid_config_data)
