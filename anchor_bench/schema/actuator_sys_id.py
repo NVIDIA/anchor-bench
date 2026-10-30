@@ -100,6 +100,10 @@ class JointParameterGroup(StrictBaseModel):
         return self
 
 
+# Backward compatibility: configs written before solver settings existed put
+# MuJoCo options directly under ``simulation.solver``. Reject them with a hint
+# naming their key under ``settings`` instead of a generic extra-field error.
+# Remove this map and ``reject_moved_fields`` once no such configs remain.
 _MOVED_SOLVER_FIELDS = {
     "integrator": "integrator",
     "solver_iterations": "iterations",
