@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from math import isclose
 from pathlib import Path
-from typing import ClassVar, Dict, List, Sequence, Tuple
+from typing import ClassVar, Dict, List, Sequence, Tuple, cast
 
 import newton
 import numpy as np
@@ -88,6 +88,9 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         self.config = config
         self.parameter_space = parameter_space
         self.joint_names = _joint_names(config)
+        self._group_by_joint = {
+            joint: group for group in config.joint_parameters for joint in group.names
+        }
         self.num_envs = config.num_envs
         self.physics_dt = 1.0 / config.simulation.physics_freq
         self.control_dt = 1.0 / config.simulation.control_freq
@@ -141,8 +144,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         )
         implementation = {
             joint: group.controller.implementation
-            for group in self.config.joint_parameters
-            for joint in group.names
+            for joint, group in self._group_by_joint.items()
         }
         native = [
             column
@@ -164,11 +166,6 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             if implementation[joint] == "external_implicit"
         ]
         if external:
-            groups = {
-                joint: group
-                for group in self.config.joint_parameters
-                for joint in group.names
-            }
             names = [self.joint_names[column] for column in external]
             self._actuations.append(
                 ExternalImplicitPD(
@@ -178,23 +175,24 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                     dof_indices=self._joint_dof_indices[:, external],
                     target_indices=self._joint_target_indices[:, external],
                     effort_limits=[
-                        float(groups[name].controller.clamps.effort_limit)
+                        float(self._group_by_joint[name].controller.clamps.effort_limit)
                         for name in names
                     ],
                 )
             )
-        hooks = [
-            actuation for actuation in self._actuations if actuation.runs_before_substep
-        ]
-        if hooks:
+        actuations = self._actuations
 
-            def before_substep(
-                state: newton.State, control: newton.Control | None, dt: float
-            ) -> None:
-                for actuation in hooks:
-                    actuation.before_substep(state, control, dt)
+        def before_substep(
+            state: newton.State, control: newton.Control | None, dt: float
+        ) -> None:
+            # Actuators accumulate into joint_f, so zero it once per substep
+            # before any of them runs. The stepper always supplies a control.
+            joint_f = cast("wp.array", cast("newton.Control", control).joint_f)
+            joint_f.zero_()
+            for actuation in actuations:
+                actuation.before_substep(state, control, dt)
 
-            context.set_before_substep(before_substep)
+        context.set_before_substep(before_substep)
         model_joint_q = model.joint_q
         model_joint_qd = model.joint_qd
         model_joint_target_q = model.joint_target_q
@@ -240,18 +238,13 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         )
 
     def _builder_configuration_key(self, initial: Candidate) -> tuple[object, ...]:
-        groups = {
-            joint: group
-            for group in self.config.joint_parameters
-            for joint in group.names
-        }
         joint_configuration = tuple(
             (
                 joint,
                 tuple(initial[joint][name] for name in self._PARAMETERS),
-                float(groups[joint].controller.clamps.effort_limit),
-                float(groups[joint].controller.clamps.velocity_limit),
-                groups[joint].controller.implementation,
+                float(self._group_by_joint[joint].controller.clamps.effort_limit),
+                float(self._group_by_joint[joint].controller.clamps.velocity_limit),
+                self._group_by_joint[joint].controller.implementation,
             )
             for joint in self.joint_names
         )
@@ -265,14 +258,9 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
     ) -> None:
         position_mode = int(newton.JointTargetMode.POSITION)
         effort_mode = int(newton.JointTargetMode.EFFORT)
-        group_by_joint = {
-            joint: group
-            for group in self.config.joint_parameters
-            for joint in group.names
-        }
         for joint in self.joint_names:
             _, dof_index = indices[joint]
-            group = group_by_joint[joint]
+            group = self._group_by_joint[joint]
             values = initial[joint]
             if group.controller.implementation == "external_implicit":
                 # Newton's external actuator supplies effort; disable the native
@@ -280,22 +268,20 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                 template.joint_target_mode[dof_index] = effort_mode
                 template.joint_target_ke[dof_index] = 0.0
                 template.joint_target_kd[dof_index] = 0.0
+                template.joint_velocity_limit[dof_index] = float("inf")
             else:
                 template.joint_target_mode[dof_index] = position_mode
                 template.joint_target_ke[dof_index] = values["stiffness"]
                 template.joint_target_kd[dof_index] = values["damping"]
+                template.joint_velocity_limit[dof_index] = float(
+                    group.controller.clamps.velocity_limit
+                )
             template.joint_armature[dof_index] = values["armature"]
             template.joint_friction[dof_index] = values["dry_friction"]
             template.joint_damping[dof_index] = values["viscous_friction"]
             template.joint_effort_limit[dof_index] = float(
                 group.controller.clamps.effort_limit
             )
-            if group.controller.implementation == "external_implicit":
-                template.joint_velocity_limit[dof_index] = float("inf")
-            else:
-                template.joint_velocity_limit[dof_index] = float(
-                    group.controller.clamps.velocity_limit
-                )
 
     def evaluate(
         self,

@@ -99,7 +99,10 @@ that is not a constructor parameter is skipped with a warning and recorded in
 `run_summary.yaml` as `"NOT SET: <reason>"`. Solver-specific joint, body, and
 shape attributes are read from the USD (for example
 `newton:mujoco:solreflimit`); author them in the asset or in an override layer
-that sublayers it.
+that sublayers it. To support another Newton solver, subclass
+`NewtonSolverAdapter` (in `anchor_bench/core/simulation/newton_solvers.py`),
+override only the lifecycle steps that differ from the defaults, and add the
+class to `NEWTON_SOLVERS`.
 
 `controller.implementation` selects how candidate gains are applied:
 
@@ -146,7 +149,9 @@ and asks it for an evaluator. To support another simulator:
    return a `PopulationEvaluator` that scores candidates in that simulator.
 2. Optionally override `PopulationEvaluator.export_model()` to write the fitted
    model; the default writes nothing.
-3. Add the context class to `SIMULATION_CONTEXTS` and its configuration to the
+3. Optionally override `PopulationEvaluator.run_summary()` to add fields to
+   `run_summary.yaml`; the default adds nothing.
+4. Add the context class to `SIMULATION_CONTEXTS` and its configuration to the
    `simulation` field of `ActuatorSysIdConfig`.
 
 ## Artifacts

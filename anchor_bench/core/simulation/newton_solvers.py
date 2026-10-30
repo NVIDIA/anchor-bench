@@ -67,7 +67,10 @@ class NewtonSolverAdapter:
                 kwargs[name] = value
                 recorded[name] = value
                 continue
-            reason = f"not a {self.solver_class.__name__} parameter"
+            if name in self.managed_arguments:
+                reason = "set by the simulation context"
+            else:
+                reason = f"not a {self.solver_class.__name__} parameter"
             warnings.warn(
                 f"simulation.solver.settings.{name}: {reason}; it was not set",
                 UserWarning,
