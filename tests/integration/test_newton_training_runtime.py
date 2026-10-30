@@ -17,6 +17,7 @@ import warp as wp
 from newton.solvers import SolverMuJoCo
 
 from anchor_bench.core.simulation import SimulationContext
+from anchor_bench.core.simulation.newton_solvers import MuJoCoAdapter
 from anchor_bench.tasks.train.data_processors.gru import DynamicBiasDataProcessor
 from anchor_bench.tasks.train.validators.newton_replay_adapter import (
     _NewtonReplayAdapter,
@@ -96,7 +97,7 @@ def test_native_replay_direct_and_residual_reset(
     if backend == "cuda" and not wp.is_cuda_available():
         pytest.skip("Native MuJoCo Warp replay requires an available CUDA device.")
     if backend == "cpu":
-        monkeypatch.setattr(newton.solvers, "SolverMuJoCo", _CPUMuJoCo)
+        monkeypatch.setattr(MuJoCoAdapter, "solver_class", _CPUMuJoCo)
     context = _context(device="cpu" if backend == "cpu" else "cuda:0")
     original_mode = context.model.joint_target_mode.numpy().copy()
     original_ke = context.model.joint_target_ke.numpy().copy()
@@ -160,7 +161,7 @@ def test_offline_bias_matches_live_replay_bias(
     """Catch missing dof_ref, velocity, joint mapping, or stale bias caching."""
 
     mujoco = import_module("mujoco")
-    monkeypatch.setattr(newton.solvers, "SolverMuJoCo", _CPUMuJoCo)
+    monkeypatch.setattr(MuJoCoAdapter, "solver_class", _CPUMuJoCo)
     context = _context(device="cpu", coupled=True)
     monkeypatch.setattr(SimulationContext, "current", classmethod(lambda cls: context))
     # Reverse dataset order relative to model order to expose mapping mistakes.
