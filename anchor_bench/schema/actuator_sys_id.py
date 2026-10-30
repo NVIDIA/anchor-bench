@@ -59,6 +59,7 @@ class Bound(StrictBaseModel):
 
 class PdControllerConfig(StrictBaseModel):
     type: Literal["pd"]
+    implementation: Literal["native", "external_implicit"] = "native"
     delay_duration_ms: NonNegativeInteger = 0
     clamps: ControllerClamps
     stiffness: Bound
