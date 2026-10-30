@@ -16,7 +16,7 @@ dependencies = [
   "GitPython==3.1.60",
   "huggingface-hub>=1,<2",
   "mlflow>=3.15.2,<4",
-  "newton[importers,sim]==1.4.0",
+  "newton[importers,sim] @ git+https://github.com/skulkar22/newton.git@1e5036c48ec92d44782dfe0f448dc25d64984b58",
   "numpy>=1.23,<3",
   "optuna>=4.9,<5",
   "pandas>=2.1,<3",
