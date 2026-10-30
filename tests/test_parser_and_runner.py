@@ -40,8 +40,11 @@ simulation:
   render_freq: 60
   solver:
     type: warp_mujoco
-    solver_iterations: 10
-    line_search_iterations: 4
+    settings:
+      solver: newton
+      integrator: implicitfast
+      iterations: 10
+      ls_iterations: 4
 dataset:
   type: parquet
   source: runs/actuator.parquet
