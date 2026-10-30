@@ -6,9 +6,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, cast
 
+import newton
 import numpy as np
+import warp as wp
 
-from anchor_bench.tasks.actuator_sys_id.newton_actuation import NativePD
+from anchor_bench.tasks.actuator_sys_id.newton_actuation import (
+    ExternalImplicitPD,
+    NativePD,
+)
 
 
 class FakeArray:
@@ -42,3 +47,63 @@ def test_native_pd_writes_each_world_gains_and_keeps_other_dofs():
     np.testing.assert_allclose(model.joint_target_kd.values, [8.0, 1.0, 8.0, 2.0])
     assert actuation.is_graphable()
     assert NativePD.runs_before_substep is False
+
+
+def _pendulum_model(worlds: int = 2) -> newton.Model:
+    template = newton.ModelBuilder()
+    link = template.add_link(
+        mass=1.0, com=(0.0, 0.0, -0.5), inertia=wp.mat33(np.eye(3) * 0.1)
+    )
+    joint = template.add_joint_revolute(parent=-1, child=link, axis=(0.0, 1.0, 0.0))
+    template.add_articulation([joint])
+    builder = newton.ModelBuilder()
+    builder.replicate(template, copy_count=worlds)
+    return builder.finalize(device="cpu")
+
+
+def test_external_pd_writes_candidate_gains_to_the_actuator():
+    with wp.ScopedDevice("cpu"):
+        model = _pendulum_model()
+        indices = np.asarray([[0], [1]])
+        actuation = ExternalImplicitPD(
+            model,
+            joint_names=["hinge"],
+            q_indices=indices,
+            dof_indices=indices,
+            target_indices=indices,
+            effort_limits=[5.0],
+        )
+        actuation.apply_population(
+            [
+                {"hinge": {"stiffness": 10.0, "damping": 1.0}},
+                {"hinge": {"stiffness": 20.0, "damping": 2.0}},
+            ]
+        )
+        np.testing.assert_allclose(actuation._kp.numpy(), [10.0, 20.0])
+        np.testing.assert_allclose(actuation._kd.numpy(), [1.0, 2.0])
+
+
+def test_external_pd_reset_clears_joint_effort_and_substep_writes_it():
+    with wp.ScopedDevice("cpu"):
+        model = _pendulum_model()
+        indices = np.asarray([[0], [1]])
+        actuation = ExternalImplicitPD(
+            model,
+            joint_names=["hinge"],
+            q_indices=indices,
+            dof_indices=indices,
+            target_indices=indices,
+            effort_limits=[5.0],
+        )
+        actuation.apply_population([{"hinge": {"stiffness": 50.0, "damping": 1.0}}] * 2)
+        state, control = model.state(), model.control()
+        assert control.joint_target_q is not None
+        control.joint_target_q.assign(np.asarray([0.5, 0.5], dtype=np.float32))
+        actuation.before_substep(state, control, 0.01)
+        assert control.joint_f is not None
+        effort = control.joint_f.numpy()
+        assert np.all(np.abs(effort) > 0.0)
+        assert np.all(np.abs(effort) <= 5.0 + 1e-5)  # clamped inside the solve
+
+        actuation.reset(control)
+        np.testing.assert_array_equal(control.joint_f.numpy(), [0.0, 0.0])

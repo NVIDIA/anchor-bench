@@ -19,6 +19,7 @@ from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.newton_actuation import (
+    ExternalImplicitPD,
     NativePD,
     NewtonActuation,
 )
@@ -157,6 +158,31 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                     dof_indices=self._joint_dof_indices[:, native],
                 )
             )
+        external = [
+            column
+            for column, joint in enumerate(self.joint_names)
+            if implementation[joint] == "external_implicit"
+        ]
+        if external:
+            groups = {
+                joint: group
+                for group in self.config.joint_parameters
+                for joint in group.names
+            }
+            names = [self.joint_names[column] for column in external]
+            self._actuations.append(
+                ExternalImplicitPD(
+                    model,
+                    joint_names=names,
+                    q_indices=self._joint_q_indices[:, external],
+                    dof_indices=self._joint_dof_indices[:, external],
+                    target_indices=self._joint_target_indices[:, external],
+                    effort_limits=[
+                        float(groups[name].controller.clamps.effort_limit)
+                        for name in names
+                    ],
+                )
+            )
         hooks = [
             actuation for actuation in self._actuations if actuation.runs_before_substep
         ]
@@ -238,6 +264,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         initial: Candidate,
     ) -> None:
         position_mode = int(newton.JointTargetMode.POSITION)
+        effort_mode = int(newton.JointTargetMode.EFFORT)
         group_by_joint = {
             joint: group
             for group in self.config.joint_parameters
@@ -247,18 +274,28 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             _, dof_index = indices[joint]
             group = group_by_joint[joint]
             values = initial[joint]
-            template.joint_target_mode[dof_index] = position_mode
-            template.joint_target_ke[dof_index] = values["stiffness"]
-            template.joint_target_kd[dof_index] = values["damping"]
+            if group.controller.implementation == "external_implicit":
+                # Newton's external actuator supplies effort; disable the native
+                # drive with zero gains (VBD ignores joint_target_mode).
+                template.joint_target_mode[dof_index] = effort_mode
+                template.joint_target_ke[dof_index] = 0.0
+                template.joint_target_kd[dof_index] = 0.0
+            else:
+                template.joint_target_mode[dof_index] = position_mode
+                template.joint_target_ke[dof_index] = values["stiffness"]
+                template.joint_target_kd[dof_index] = values["damping"]
             template.joint_armature[dof_index] = values["armature"]
             template.joint_friction[dof_index] = values["dry_friction"]
             template.joint_damping[dof_index] = values["viscous_friction"]
             template.joint_effort_limit[dof_index] = float(
                 group.controller.clamps.effort_limit
             )
-            template.joint_velocity_limit[dof_index] = float(
-                group.controller.clamps.velocity_limit
-            )
+            if group.controller.implementation == "external_implicit":
+                template.joint_velocity_limit[dof_index] = float("inf")
+            else:
+                template.joint_velocity_limit[dof_index] = float(
+                    group.controller.clamps.velocity_limit
+                )
 
     def evaluate(
         self,
