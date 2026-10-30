@@ -3,5 +3,3 @@ best_params.yaml
 optimization_log.csv
 run_summary.yaml
 identified.usda
-!trajectories/
-!trajectories/heldout-square-pattern.parquet

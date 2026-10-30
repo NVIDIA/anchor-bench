@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Dict, Literal, Union
+from typing import Annotated, Dict, List, Literal, Union
 
-from pydantic import Field, StrictFloat, StrictInt
+from pydantic import Field, StrictFloat, StrictInt, field_validator
 from typing_extensions import TypeAlias
 
 from anchor_bench.schema.base import StrictBaseModel
@@ -26,11 +26,39 @@ class ResamplingConfig(StrictBaseModel):
     interpolation: Literal["linear"] = "linear"
 
 
+class HuggingFaceDatasetSource(StrictBaseModel):
+    """Select revision-pinned files from a Hugging Face dataset repository."""
+
+    provider: Literal["huggingface"]
+    repo_id: NonEmptyString
+    revision: NonEmptyString
+    paths: Annotated[List[NonEmptyString], Field(min_length=1)]
+
+    @field_validator("paths")
+    @classmethod
+    def paths_must_be_relative_and_unique(cls, paths: List[str]) -> List[str]:
+        """Reject duplicate, absolute, and parent-traversing repository paths."""
+
+        if len(paths) != len(set(paths)):
+            raise ValueError("Hugging Face dataset paths must be unique")
+        invalid = [
+            path
+            for path in paths
+            if path.startswith("/") or "\\" in path or ".." in path.split("/")
+        ]
+        if invalid:
+            raise ValueError("Hugging Face dataset paths must be relative POSIX paths")
+        return paths
+
+
+DatasetSource: TypeAlias = Union[NonEmptyString, HuggingFaceDatasetSource]
+
+
 class ParquetDatasetConfig(StrictBaseModel):
     """Locate and resample long-form Parquet time-series datasets."""
 
     type: Literal["parquet"]
-    source: NonEmptyString
+    source: DatasetSource
     joint_name_mapping: Dict[NonEmptyString, NonEmptyString] = Field(
         default_factory=dict,
         description=(

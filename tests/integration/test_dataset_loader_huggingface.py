@@ -4,13 +4,15 @@
 import numpy as np
 import pytest
 
-from anchor_bench.data import DatasetLoader, download_from_huggingface
+from anchor_bench.data import DatasetLoader
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 
 ANCHOR_LAB_REVISION = "be6010113e7b769e68f2779fbdf321908725f929"
-ANCHOR_LAB_PARQUET_URL = (
-    "https://huggingface.co/datasets/nvidia/Anchor-Lab/resolve/"
-    f"{ANCHOR_LAB_REVISION}/data/so101_arm_50motion/"
-    "so101-sysid-50motion-train-wave-motion.parquet"
+ANCHOR_LAB_SOURCE = HuggingFaceDatasetSource(
+    provider="huggingface",
+    repo_id="nvidia/Anchor-Lab",
+    revision=ANCHOR_LAB_REVISION,
+    paths=["data/so101_arm_50motion/so101-sysid-50motion-train-wave-motion.parquet"],
 )
 EXPECTED_EXPERIMENT = "so101-sysid-50motion-train-wave-motion"
 EXPECTED_JOINTS = {
@@ -24,18 +26,11 @@ EXPECTED_JOINTS = {
 
 
 @pytest.mark.integration
-def test_downloads_loads_and_resamples_real_anchor_lab_parquet(tmp_path) -> None:
+def test_downloads_loads_and_resamples_real_anchor_lab_parquet() -> None:
     """Download and resample one pinned real SO-101 recording from Hugging Face."""
 
-    downloaded = download_from_huggingface(
-        ANCHOR_LAB_PARQUET_URL,
-        tmp_path / "downloads",
-    )
-    assert downloaded.is_file()
-    assert downloaded.name == "so101-sysid-50motion-train-wave-motion.parquet"
-
     aligned = DatasetLoader.load(
-        str(downloaded),
+        ANCHOR_LAB_SOURCE,
         dt=0.02,
     )
 

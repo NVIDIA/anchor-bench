@@ -16,6 +16,7 @@ from pxr import Usd, UsdPhysics
 
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
+from anchor_bench.schema.dataset import HuggingFaceDatasetSource
 from anchor_bench.schema.parse import parse
 from anchor_bench.tasks.actuator_sys_id.dataset import load_trajectories
 from tests.integration.cli_runner import CliResult
@@ -32,8 +33,8 @@ TEST_DIRECTORY = Path(__file__).parent
 REPOSITORY = TEST_DIRECTORY.parents[2]
 CONFIG_DIRECTORY = REPOSITORY / "examples" / "system_identification"
 SOURCE_USD_PATH = REPOSITORY / "assets" / "robots" / "so101" / "files" / "so101.usd"
-EVALUATION_TRAJECTORY_PATH = (
-    TEST_DIRECTORY / "trajectories" / "heldout-square-pattern.parquet"
+EVALUATION_DATASET_PATH = (
+    "data/so101_arm_50motion/so101-sysid-50motion-heldout-square-pattern.parquet"
 )
 EXPECTED_ARTIFACTS = (
     ".completed",
@@ -51,6 +52,8 @@ def test_runs_actuator_sysid_config(
     monkeypatch: pytest.MonkeyPatch,
     config_name: str,
 ) -> None:
+    """Identify SO-101 and evaluate held-out data from the training revision."""
+
     # The simulation context is a process-wide singleton, so each config needs
     # a fresh one to build its own solver.
     monkeypatch.setattr(SimulationContext, "_instance", None)
@@ -67,6 +70,10 @@ def test_runs_actuator_sysid_config(
 
     config = parse(smoke_config_path)
     assert isinstance(config, ActuatorSysIdConfig)
+    assert isinstance(config.dataset.source, HuggingFaceDatasetSource)
+    evaluation_source = config.dataset.source.model_copy(
+        update={"paths": [EVALUATION_DATASET_PATH]}
+    )
     output_directory = tmp_path / "output"
     joint_names = [joint for group in config.joint_parameters for joint in group.names]
     trajectories = load_trajectories(config.dataset, joint_names=joint_names)
@@ -132,12 +139,12 @@ def test_runs_actuator_sysid_config(
 
     source_accuracy = usd_trajectory_accuracy(
         SOURCE_USD_PATH,
-        EVALUATION_TRAJECTORY_PATH,
+        evaluation_source,
         config,
     )
     identified_accuracy = usd_trajectory_accuracy(
         output_directory / "identified.usda",
-        EVALUATION_TRAJECTORY_PATH,
+        evaluation_source,
         config,
     )
 
