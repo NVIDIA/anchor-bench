@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import newton
 import numpy as np
+import warp as wp
+from newton.actuators import Actuator, ClampingMaxEffort, DrivePD, JointSpaceResponse
 
 from anchor_bench.tasks.actuator_sys_id.model import Candidate
 
@@ -70,3 +72,122 @@ class NativePD(NewtonActuation):
                         parameter
                     ]
             getattr(self._model, array_name).assign(values)
+
+
+@wp.kernel
+# Warp's array subscription is its public kernel annotation syntax.
+def _sum_bias(
+    gravity: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
+    coriolis: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
+    bias: wp.array(dtype=float),  # pyright: ignore[reportInvalidTypeForm]
+):
+    index = wp.tid()
+    bias[index] = gravity[index] + coriolis[index]
+
+
+class ExternalImplicitPD(NewtonActuation):
+    """Newton's implicit PD actuator with effort clamping and bias feedback.
+
+    The PD law is solved against the coupled joint-space response, with the
+    passive gravity and Coriolis bias at the current state, before every
+    physics substep. Velocity limits are not applied.
+    """
+
+    runs_before_substep = True
+
+    def __init__(
+        self,
+        model: newton.Model,
+        *,
+        joint_names: Sequence[str],
+        q_indices: np.ndarray,
+        dof_indices: np.ndarray,
+        target_indices: np.ndarray,
+        effort_limits: Sequence[float],
+    ) -> None:
+        device = model.device
+        count = dof_indices.size
+        world_count = dof_indices.shape[0]
+        drive = DrivePD(
+            kp=wp.zeros(count, dtype=float, device=device),
+            kd=wp.zeros(count, dtype=float, device=device),
+        )
+        clamp = ClampingMaxEffort(
+            max_effort=wp.array(
+                np.tile(np.asarray(effort_limits, dtype=np.float32), world_count),
+                dtype=float,
+                device=device,
+            )
+        )
+        response = JointSpaceResponse(model)
+        actuator = Actuator(
+            indices=wp.array(dof_indices.ravel(), dtype=wp.uint32, device=device),
+            drive=drive,
+            clamping=[clamp],
+            pos_indices=wp.array(q_indices.ravel(), dtype=wp.uint32, device=device),
+            target_pos_indices=wp.array(
+                target_indices.ravel(), dtype=wp.uint32, device=device
+            ),
+            control_feedforward_attr=None,
+        )
+        actuator.set_effort_mode_implicit(response)
+        self._model = model
+        self._joint_names = tuple(joint_names)
+        self._response = response
+        self._actuator = actuator
+        # Binding replaces the constructor arrays with live views; keep those.
+        self._kp = drive.kp
+        self._kd = drive.kd
+        self._bias_state = model.state()
+        self._gravity = wp.zeros(model.joint_dof_count, dtype=float, device=device)
+        self._coriolis = wp.zeros_like(self._gravity)
+        self._bias = wp.zeros_like(self._gravity)
+
+    def apply_population(self, population: Sequence[Candidate]) -> None:
+        for parameter, target in (("stiffness", self._kp), ("damping", self._kd)):
+            target.assign(
+                np.asarray(
+                    [
+                        candidate[joint][parameter]
+                        for candidate in population
+                        for joint in self._joint_names
+                    ],
+                    dtype=np.float32,
+                )
+            )
+
+    def before_substep(
+        self, state: newton.State, control: newton.Control | None, dt: float
+    ) -> None:
+        if control is None or control.joint_f is None:
+            raise RuntimeError("external implicit PD requires a joint effort buffer")
+        self._response.refresh(state)
+        # Evaluate bias on a scratch state so solver-owned body poses are untouched.
+        # Finalized models always provide joint coordinates and velocities.
+        joint_q = cast("wp.array", state.joint_q)
+        joint_qd = cast("wp.array", state.joint_qd)
+        self._bias_state.joint_q = joint_q
+        self._bias_state.joint_qd = joint_qd
+        newton.eval_fk(self._model, joint_q, joint_qd, self._bias_state)
+        newton.eval_inverse_dynamics_passive(
+            self._model,
+            self._bias_state,
+            gravity_force=self._gravity,
+            coriolis_force=self._coriolis,
+        )
+        wp.launch(
+            _sum_bias,
+            dim=self._model.joint_dof_count,
+            inputs=[self._gravity, self._coriolis, self._bias],
+            device=self._model.device,
+        )
+        # The actuator accumulates into joint_f, so start each substep from zero.
+        control.joint_f.zero_()
+        self._actuator.step(state, control, dt=dt, bias_force=self._bias)
+
+    def reset(self, control: newton.Control) -> None:
+        if control.joint_f is not None:
+            control.joint_f.zero_()
+
+    def is_graphable(self) -> bool:
+        return self._actuator.is_graphable()

@@ -101,6 +101,17 @@ shape attributes are read from the USD (for example
 `newton:mujoco:solreflimit`); author them in the asset or in an override layer
 that sublayers it.
 
+`controller.implementation` selects how candidate gains are applied:
+
+- `native` (default): the solver's joint position drive, with the configured
+  effort and velocity limits.
+- `external_implicit`: Newton's implicit external PD actuator. The PD law is
+  solved against the coupled joint-space response with the gravity and
+  Coriolis bias at the current state, and effort is clamped to
+  `clamps.effort_limit`. `clamps.velocity_limit` is not applied. Fitted gains
+  are exported to the same USD drive attributes; consumers that use a native
+  drive may behave slightly differently.
+
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 
 ## Run a custom task
