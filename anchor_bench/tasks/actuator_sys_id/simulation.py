@@ -29,42 +29,79 @@ from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 logger = logging.getLogger(__name__)
 
 
+# Warp kernels require array constructors in annotations; these are DSL
+# declarations rather than Python typing expressions.
 @wp.kernel
-def _accumulate_position_error(
-    # Warp kernels require array constructors in annotations; these are DSL
-    # declarations rather than Python typing expressions.
-    joint_q: wp.array(dtype=wp.float32),  # pyright: ignore[reportInvalidTypeForm]
-    joint_q_indices: wp.array(  # pyright: ignore[reportInvalidTypeForm]
+def _write_targets(
+    commands: wp.array3d(dtype=wp.float32),  # pyright: ignore[reportInvalidTypeForm]
+    last_step: wp.array(dtype=wp.int32),  # pyright: ignore[reportInvalidTypeForm]
+    step: wp.array(dtype=wp.int32),  # pyright: ignore[reportInvalidTypeForm]
+    population_size: int,
+    joint_target_indices: wp.array2d(  # pyright: ignore[reportInvalidTypeForm]
         dtype=wp.int32
     ),
-    measured_positions: wp.array(  # pyright: ignore[reportInvalidTypeForm]
+    joint_target_q: wp.array(dtype=wp.float32),  # pyright: ignore[reportInvalidTypeForm]
+) -> None:
+    """Write each world's current delayed command, holding a slot's last one."""
+
+    world = wp.tid()
+    slot = world // population_size  # pyright: ignore[reportOperatorIssue]
+    sample = wp.min(step[0], last_step[slot])
+    for joint in range(joint_target_indices.shape[1]):
+        joint_target_q[joint_target_indices[world, joint]] = commands[
+            slot, sample, joint
+        ]
+
+
+@wp.kernel
+def _accumulate_position_error(
+    joint_q: wp.array(dtype=wp.float32),  # pyright: ignore[reportInvalidTypeForm]
+    joint_q_indices: wp.array2d(  # pyright: ignore[reportInvalidTypeForm]
+        dtype=wp.int32
+    ),
+    measured_positions: wp.array3d(  # pyright: ignore[reportInvalidTypeForm]
         dtype=wp.float64
     ),
-    sample_index: int,
-    joint_count: int,
+    score_end: wp.array(dtype=wp.int32),  # pyright: ignore[reportInvalidTypeForm]
+    step: wp.array(dtype=wp.int32),  # pyright: ignore[reportInvalidTypeForm]
+    buffer_steps: int,
+    population_size: int,
     score_sums: wp.array(  # pyright: ignore[reportInvalidTypeForm]
         dtype=wp.float64
     ),
 ) -> None:
-    """Accumulate one sample's squared position error for each world."""
+    """Accumulate the current step's squared position error for each world."""
 
-    world_index = wp.tid()
+    world = wp.tid()
+    slot = world // population_size  # pyright: ignore[reportOperatorIssue]
+    sample = step[0]
+    if sample < buffer_steps or sample >= score_end[slot]:
+        return
     error_sum = wp.float64(0.0)
-    for joint_index in range(joint_count):
-        simulated_index = joint_q_indices[
-            world_index * joint_count  # pyright: ignore[reportOperatorIssue]
-            + joint_index
-        ]
-        measured_index = sample_index * joint_count + joint_index
-        error = wp.float64(joint_q[simulated_index]) - wp.float64(
-            measured_positions[measured_index]
+    for joint in range(joint_q_indices.shape[1]):
+        error = (
+            wp.float64(joint_q[joint_q_indices[world, joint]])
+            - (measured_positions[slot, sample, joint])
         )
         error_sum += error * error
-    score_sums[world_index] += error_sum
+    score_sums[world] += error_sum
+
+
+@wp.kernel
+def _advance_step(
+    step: wp.array(dtype=wp.int32),  # pyright: ignore[reportInvalidTypeForm]
+) -> None:
+    step[0] = step[0] + 1
 
 
 class NewtonPopulationEvaluator(PopulationEvaluator):
-    """Evaluate one candidate per replicated Newton world."""
+    """Evaluate every candidate against a batch of trajectories in parallel.
+
+    Worlds are laid out slot-major: world ``slot * num_envs + candidate``
+    replays the batch's ``slot``-th trajectory with that candidate's
+    parameters. Delayed commands and measurements live on the device, so each
+    control interval needs no host work beyond its (captured) launch.
+    """
 
     _PARAMETERS: ClassVar[Tuple[str, ...]] = (
         "stiffness",
@@ -84,7 +121,11 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         config: ActuatorSysIdConfig,
         parameter_space: ParameterSpace,
         simulation_context: NewtonSimulationContext,
+        *,
+        trajectory_count: int = 1,
     ) -> None:
+        if trajectory_count < 1:
+            raise ValueError("trajectory_count must be positive")
         self.config = config
         self.parameter_space = parameter_space
         self.joint_names = _joint_names(config)
@@ -92,6 +133,10 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             joint: group for group in config.joint_parameters for joint in group.names
         }
         self.num_envs = config.num_envs
+        self.trajectory_slots = min(
+            config.trajectory_batch_size or trajectory_count, trajectory_count
+        )
+        self.world_count = self.num_envs * self.trajectory_slots
         self.physics_dt = 1.0 / config.simulation.physics_freq
         self.control_dt = 1.0 / config.simulation.control_freq
         dataset_dt = float(config.dataset.resampling.dt)
@@ -109,12 +154,8 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             dtype=np.int64,
         )
         self._initialize_simulation(simulation_context)
-        self._initialize_score_buffers()
-        if all(actuation.is_graphable() for actuation in self._actuations):
-            self._simulation_context.capture_step_graph(
-                dt=self.physics_dt * self.control_substeps,
-                substeps=self.control_substeps,
-            )
+        self._initialize_device_buffers()
+        self._capture_step_graph()
 
     def _initialize_simulation(self, context: NewtonSimulationContext) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
@@ -126,7 +167,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
 
         solver = self.config.simulation.solver
         context.initialize(
-            world_count=self.num_envs,
+            world_count=self.world_count,
             configure_builder=configure_template,
             configuration_key=self._builder_configuration_key(initial),
             solver_type=solver.type,
@@ -140,7 +181,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         ) = _model_joint_indices(
             model,
             self.joint_names,
-            self.num_envs,
+            self.world_count,
         )
         implementation = {
             joint: group.controller.implementation
@@ -217,25 +258,47 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                 copy=True,
             )
 
-    def _initialize_score_buffers(self) -> None:
+    def _initialize_device_buffers(self) -> None:
         device = self._simulation_context.model.device
         self._device = device
         self._joint_q_indices_device = wp.array(
-            self._joint_q_indices.reshape(-1),
-            dtype=wp.int32,
-            device=device,
+            self._joint_q_indices, dtype=wp.int32, device=device
         )
-        self._score_sums = wp.zeros(
-            self.num_envs,
-            dtype=wp.float64,
-            device=device,
+        self._joint_target_indices_device = wp.array(
+            self._joint_target_indices, dtype=wp.int32, device=device
         )
+        joint_target_q = self._simulation_context.control.joint_target_q
+        if joint_target_q is None:
+            raise RuntimeError("Newton control does not expose joint position targets")
+        self._joint_target_q = joint_target_q
+        self._score_sums = wp.zeros(self.world_count, dtype=wp.float64, device=device)
+        self._step = wp.zeros(1, dtype=wp.int32, device=device)
+        self._last_step = wp.zeros(self.trajectory_slots, dtype=wp.int32, device=device)
+        self._score_end = wp.zeros_like(self._last_step)
+        self._allocate_trajectory_buffers(1)
         logger.debug(
-            "Initialized device score accumulation device=%s worlds=%d joints=%d",
+            "Initialized device score accumulation device=%s worlds=%d "
+            "trajectory_slots=%d joints=%d",
             device,
-            self.num_envs,
+            self.world_count,
+            self.trajectory_slots,
             len(self.joint_names),
         )
+
+    def _allocate_trajectory_buffers(self, step_capacity: int) -> None:
+        shape = (self.trajectory_slots, step_capacity, len(self.joint_names))
+        self._commands = wp.zeros(shape, dtype=wp.float32, device=self._device)
+        self._measured = wp.zeros(shape, dtype=wp.float64, device=self._device)
+        # The interval hook binds these arrays, so re-registering it drops any
+        # graph captured against the previous allocation.
+        self._simulation_context.set_after_interval(self._after_interval)
+
+    def _capture_step_graph(self) -> None:
+        if all(actuation.is_graphable() for actuation in self._actuations):
+            self._simulation_context.capture_step_graph(
+                dt=self.physics_dt * self.control_substeps,
+                substeps=self.control_substeps,
+            )
 
     def _builder_configuration_key(self, initial: Candidate) -> tuple[object, ...]:
         joint_configuration = tuple(
@@ -296,12 +359,18 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             )
         if not trajectories:
             raise ValueError("system identification requires trajectories")
+        steps = [self._trajectory_steps(trajectory) for trajectory in trajectories]
+        if max(steps) > self._commands.shape[1]:
+            self._allocate_trajectory_buffers(max(steps))
+            self._capture_step_graph()
         self._apply_population(population)
         self._score_sums.zero_()
-        transition_count = sum(
-            self._evaluate_trajectory(trajectory) for trajectory in trajectories
-        )
-        scores = np.asarray(self._score_sums.numpy(), dtype=np.float64)
+        for start in range(0, len(trajectories), self.trajectory_slots):
+            stop = start + self.trajectory_slots
+            self._evaluate_batch(trajectories[start:stop], steps[start:stop])
+        transition_count = sum(steps) - self.buffer_steps * len(trajectories)
+        world_sums = np.asarray(self._score_sums.numpy(), dtype=np.float64)
+        scores = world_sums.reshape(self.trajectory_slots, self.num_envs).sum(axis=0)
         scores /= transition_count * len(self.joint_names)
         if not np.isfinite(scores).all():
             raise RuntimeError("Newton produced non-finite position error")
@@ -334,19 +403,21 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         return path
 
     def _apply_population(self, population: Sequence[Candidate]) -> None:
+        # Every trajectory slot replays the same candidates.
+        world_population = list(population) * self.trajectory_slots
         for parameter_name, model_array_name in self._PASSIVE_ARRAYS.items():
             model_array = getattr(self._simulation_context.model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
             values = np.array(self._base_model_arrays[model_array_name], copy=True)
-            for world_index, candidate in enumerate(population):
+            for world_index, candidate in enumerate(world_population):
                 for joint_index, joint in enumerate(self.joint_names):
                     values[self._joint_dof_indices[world_index, joint_index]] = (
                         candidate[joint][parameter_name]
                     )
             model_array.assign(values)
         for actuation in self._actuations:
-            actuation.apply_population(population)
+            actuation.apply_population(world_population)
 
         flags = (
             newton.ModelFlags.JOINT_DOF_PROPERTIES
@@ -354,7 +425,9 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         )
         self._simulation_context.solver.notify_model_changed(flags)
 
-    def _evaluate_trajectory(self, trajectory: Trajectory) -> int:
+    def _trajectory_steps(self, trajectory: Trajectory) -> int:
+        """Validate a trajectory and return its control-step count."""
+
         if trajectory.joint_names != self.joint_names:
             raise ValueError("trajectory joints do not match the Newton evaluator")
         if trajectory.measured_position.shape[0] < 2:
@@ -365,58 +438,94 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                 "trajectory must contain at least one scored transition after "
                 f"the {self.buffer_steps}-step buffer"
             )
-        self._reset(trajectory.measured_position[0])
+        return transition_count
 
+    def _evaluate_batch(
+        self, batch: Sequence[Trajectory], steps: Sequence[int]
+    ) -> None:
+        """Replay up to one trajectory per slot, accumulating world errors."""
+
+        shape = self._commands.shape
+        commands = np.zeros(shape, dtype=np.float32)
+        measured = np.zeros(shape, dtype=np.float64)
+        last_step = np.zeros(self.trajectory_slots, dtype=np.int32)
+        score_end = np.zeros(self.trajectory_slots, dtype=np.int32)
+        initial = np.empty((self.trajectory_slots, shape[2]), dtype=np.float32)
+        for slot in range(self.trajectory_slots):
+            # Unused slots in a final partial batch replay a real trajectory
+            # but score nothing.
+            index = slot if slot < len(batch) else 0
+            trajectory = batch[index]
+            count = steps[index]
+            commands[slot, :count] = self._delayed_commands(trajectory)[:count]
+            measured[slot, :count] = trajectory.measured_position[1:]
+            last_step[slot] = count - 1
+            score_end[slot] = count if slot < len(batch) else 0
+            initial[slot] = trajectory.measured_position[0]
+        self._commands.assign(commands)
+        self._measured.assign(measured)
+        self._last_step.assign(last_step)
+        self._score_end.assign(score_end)
+        self._reset(initial)
+        for _ in range(max(steps)):
+            self._step_control_interval()
+
+    def _delayed_commands(self, trajectory: Trajectory) -> np.ndarray:
         commanded = np.asarray(trajectory.commanded_position, dtype=np.float32)
         sample_indices = np.arange(commanded.shape[0], dtype=np.int64)[:, np.newaxis]
         source_indices = np.maximum(
             0,
             sample_indices - self.delay_steps[np.newaxis, :],
         )
-        delayed_commands = np.take_along_axis(commanded, source_indices, axis=0)
+        return np.take_along_axis(commanded, source_indices, axis=0)
 
-        measured_positions = np.asarray(
-            trajectory.measured_position[1:],
-            dtype=np.float64,
-        )
-        measured_positions_device = wp.array(
-            measured_positions.reshape(-1),
-            dtype=wp.float64,
-            device=self._device,
-        )
-        for sample_index in range(measured_positions.shape[0]):
-            self._set_targets(delayed_commands[sample_index])
-            self._step_control_interval()
-            if sample_index >= self.buffer_steps:
-                self._launch_position_error(measured_positions_device, sample_index)
-        return measured_positions.shape[0] - self.buffer_steps
+    def _after_interval(self, state: newton.State) -> None:
+        """Score the finished step, then stage the next step's targets."""
 
-    def _launch_position_error(
-        self,
-        measured_positions: wp.array,
-        sample_index: int,
-    ) -> None:
-        state_joint_q = self._simulation_context.state.joint_q
+        state_joint_q = state.joint_q
         if state_joint_q is None:
             raise RuntimeError("Newton state does not expose joint positions")
         wp.launch(
             _accumulate_position_error,
-            dim=self.num_envs,
+            dim=self.world_count,
             inputs=[
                 state_joint_q,
                 self._joint_q_indices_device,
-                measured_positions,
-                sample_index,
-                len(self.joint_names),
+                self._measured,
+                self._score_end,
+                self._step,
+                self.buffer_steps,
+                self.num_envs,
             ],
             outputs=[self._score_sums],
             device=self._device,
         )
+        wp.launch(_advance_step, dim=1, inputs=[self._step], device=self._device)
+        self._launch_write_targets()
 
-    def _reset(self, measured_position: np.ndarray) -> None:
+    def _launch_write_targets(self) -> None:
+        wp.launch(
+            _write_targets,
+            dim=self.world_count,
+            inputs=[
+                self._commands,
+                self._last_step,
+                self._step,
+                self.num_envs,
+                self._joint_target_indices_device,
+            ],
+            outputs=[self._joint_target_q],
+            device=self._device,
+        )
+
+    def _reset(self, initial_positions: np.ndarray) -> None:
+        """Reset every world to its slot's first measured pose at rest."""
+
         joint_q = np.array(self._base_q, copy=True)
         joint_qd = np.array(self._base_qd, copy=True)
-        joint_q[self._joint_q_indices] = measured_position[np.newaxis, :]
+        joint_q[self._joint_q_indices] = np.repeat(
+            initial_positions, self.num_envs, axis=0
+        )
         joint_qd[self._joint_dof_indices] = 0.0
         context = self._simulation_context
         context.solver.reset(context.state)
@@ -435,14 +544,11 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                 state_joint_qd,
                 state,
             )
-
-    def _set_targets(self, command: np.ndarray) -> None:
-        targets = np.array(self._base_targets, copy=True)
-        targets[self._joint_target_indices] = command[np.newaxis, :]
-        joint_target_q = self._simulation_context.control.joint_target_q
-        if joint_target_q is None:
-            raise RuntimeError("Newton control does not expose joint position targets")
-        joint_target_q.assign(targets)
+        # Joints outside the fit keep their model targets; fitted joints are
+        # overwritten from the device command buffer every step.
+        self._joint_target_q.assign(self._base_targets)
+        self._step.zero_()
+        self._launch_write_targets()
 
     def _step_control_interval(self) -> None:
         self._simulation_context.step(

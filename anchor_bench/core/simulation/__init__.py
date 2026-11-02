@@ -127,9 +127,17 @@ class SimulationContext(ABC, Generic[ModelT, StateT]):
         return state
 
     def create_sysid_evaluator(
-        self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+        self,
+        config: ActuatorSysIdConfig,
+        parameter_space: ParameterSpace,
+        *,
+        trajectory_count: int = 1,
     ) -> PopulationEvaluator:
-        """Create the population evaluator used by actuator system identification."""
+        """Create the population evaluator used by actuator system identification.
+
+        ``trajectory_count`` is the number of trajectories each evaluation
+        replays, so a backend can size parallel resources for them.
+        """
         raise NotImplementedError(
             f"{type(self).__name__} does not support system identification."
         )
