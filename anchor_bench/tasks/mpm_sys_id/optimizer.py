@@ -56,6 +56,26 @@ def initial_point(bounds):
     return point
 
 
+def _minimum_squared_distances(pool, history, *, chunk_size=256):
+    """Find each candidate's nearest observation with bounded temporary memory.
+
+    Chunk both axes so the distance workspace is O(chunk_size**2 * dimensions),
+    independent of pool and history length. Retain squared distances to preserve
+    proposal ordering and the existing duplicate-distance threshold.
+    """
+    distances = np.full(len(pool), np.inf)
+    for start in range(0, len(pool), chunk_size):
+        candidates = pool[start : start + chunk_size]
+        nearest = distances[start : start + chunk_size]
+        for offset in range(0, len(history), chunk_size):
+            delta = (
+                candidates[:, None, :] - history[None, offset : offset + chunk_size, :]
+            )
+            np.square(delta, out=delta)
+            np.minimum(nearest, np.sum(delta, axis=2).min(axis=1), out=nearest)
+    return distances
+
+
 def propose(
     history, bounds, *, seed=42, initial_samples=16, pool_size=4096, exploration=1.0
 ):
@@ -83,9 +103,7 @@ def propose(
     valid = [trial for trial in history if trial["valid"]]
     if len(history) < initial_samples or len(valid) < 2 or rng.random() < 0.2:
         # Maximize distance to prior observations during the initial design.
-        distance = np.min(
-            np.sum((pool[:, None, :] - x[None, :, :]) ** 2, axis=2), axis=1
-        )
+        distance = _minimum_squared_distances(pool, x)
         return pool[np.argmax(distance)].tolist(), "space_filling"
     if RandomForestRegressor is None:
         raise ImportError("Install the mpm extra: uv sync --extra mpm")
@@ -94,9 +112,7 @@ def propose(
     pool[: pool_size // 2] = np.clip(
         rng.normal(best["point"], 0.15, (pool_size // 2, len(bounds))), 0, 1
     )
-    pool = pool[
-        np.min(np.sum((pool[:, None, :] - x[None, :, :]) ** 2, axis=2), axis=1) > 1e-12
-    ]
+    pool = pool[_minimum_squared_distances(pool, x) > 1e-12]
     if not len(pool):
         raise RuntimeError("No unevaluated candidates remain in the proposal pool")
     losses = [trial["error"] for trial in valid]

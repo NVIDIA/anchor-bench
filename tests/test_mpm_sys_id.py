@@ -589,3 +589,51 @@ def test_mpm_resume_uses_default_output_path(config_path, tmp_path, monkeypatch)
     assert TaskRunner().run(str(config_path), resume=True) == resolved
     assert calls == 2
     assert (resolved / ".completed").is_file()
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 256])
+def test_chunked_distances_match_dense_reference(chunk_size):
+    from anchor_bench.tasks.mpm_sys_id.optimizer import _minimum_squared_distances
+
+    rng = np.random.default_rng(48)
+    history = rng.random((17, 5))
+    pool = rng.random((11, 5))
+    pool[0] = history[-1]
+    pool[1] = history[0] + 1e-7
+    pool[2] = history[0] + 1e-5
+    expected = np.min(
+        np.sum((pool[:, None, :] - history[None, :, :]) ** 2, axis=2), axis=1
+    )
+    actual = _minimum_squared_distances(pool, history, chunk_size=chunk_size)
+    np.testing.assert_array_equal(actual, expected)
+    assert actual[0] == 0
+    np.testing.assert_array_equal(actual > 1e-12, expected > 1e-12)
+    assert np.argmax(actual) == np.argmax(expected)
+
+
+@pytest.mark.parametrize("valid", [False, True])
+def test_chunked_proposals_match_dense_reference(config_path, monkeypatch, valid):
+    from anchor_bench.tasks.mpm_sys_id import optimizer
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    bounds = {
+        k: [b.lower, b.upper, b.scale, b.offset]
+        for k, b in config.material.optimized.items()
+    }
+    rng = np.random.default_rng(48)
+    history = [
+        {"point": p.tolist(), "valid": valid, "error": float(np.sum(p**2))}
+        for p in rng.random((257, 5))
+    ]
+    actual = optimizer.propose(history, bounds, seed=48, pool_size=272)
+
+    def dense_distances(pool, observations):
+        return np.min(
+            np.sum((pool[:, None, :] - observations[None, :, :]) ** 2, axis=2),
+            axis=1,
+        )
+
+    monkeypatch.setattr(optimizer, "_minimum_squared_distances", dense_distances)
+    assert optimizer.propose(history, bounds, seed=48, pool_size=272) == actual
+    assert actual[1] == ("random_forest" if valid else "space_filling")
