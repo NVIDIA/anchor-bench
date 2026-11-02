@@ -826,3 +826,24 @@ def test_factory_and_config_share_geometry_validation(
         with pytest.raises(ValidationError):
             create_simulation(settings, FIXED, True)
         constructor.assert_not_called()
+
+
+def test_mpm_parser_resolves_csv_paths_from_config_directory(
+    config_path, tmp_path, monkeypatch
+):
+    data = yaml.safe_load(config_path.read_text())
+    absolute = tmp_path / "absolute.csv"
+    data["experiments"][1]["input_data"]["source"] = str(absolute)
+    data["experiments"][2]["input_data"]["source"] = "~/home-data.csv"
+    config_path.write_text(yaml.safe_dump(data))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    assert config.experiments[0].input_data.source == str(tmp_path / "measurements.csv")
+    assert config.experiments[1].input_data.source == str(absolute)
+    assert config.experiments[2].input_data.source == str(Path.home() / "home-data.csv")
+    before = config.model_dump()
+    config.resolve_paths(elsewhere)
+    assert config.model_dump() == before

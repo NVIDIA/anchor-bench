@@ -63,6 +63,5 @@ def parse(config_file: Union[str, Path]) -> BaseConfig:
         )
 
     config = data_model.model_validate(raw_config)
-    if isinstance(config, MpmSysIdConfig):
-        config.resolve_sources(config_path.resolve().parent)
+    config.resolve_paths(config_path.resolve().parent)
     return config

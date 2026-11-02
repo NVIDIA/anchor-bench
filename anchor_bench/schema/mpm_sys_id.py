@@ -221,7 +221,8 @@ class MpmSysIdConfig(BaseConfig):
             raise ValueError("Enable at least one experiment")
         return self
 
-    def resolve_sources(self, directory: Path) -> None:
+    def resolve_paths(self, directory: Path) -> None:
+        """Resolve experiment CSV paths relative to the configuration file."""
         for experiment in self.experiments:
             source = Path(experiment.input_data.source).expanduser()
             if not source.is_absolute():

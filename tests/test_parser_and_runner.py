@@ -278,3 +278,35 @@ def test_preflight_runs_before_output_creation(config_path):
             return output_directory
 
     TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))
+
+
+def test_parser_calls_registered_config_path_hook(tmp_path, monkeypatch):
+    from anchor_bench.schema.base import BaseConfig
+    from anchor_bench.schema.parse import DATA_MODELS
+
+    class PathConfig(BaseConfig):
+        source: str
+
+        def resolve_paths(self, directory: Path) -> None:
+            assert directory.is_absolute()
+            self.source = str(directory / self.source)
+
+    monkeypatch.setitem(DATA_MODELS, "path_test", PathConfig)
+    directory = tmp_path / "configs"
+    directory.mkdir()
+    path = directory / "task.yaml"
+    path.write_text("type: path_test\nsource: data.csv\n")
+    monkeypatch.chdir(tmp_path)
+    config = parse("configs/task.yaml")
+    assert isinstance(config, PathConfig)
+    assert config.source == str(directory / "data.csv")
+    assert not (directory / "data.csv").exists()
+
+
+def test_default_config_path_hook_preserves_existing_paths(config_path):
+    config = parse(config_path)
+    assert isinstance(config, ActuatorSysIdConfig)
+    raw = yaml.safe_load(config_path.read_text())
+    assert (
+        config.model_dump(mode="json")["dataset"]["source"] == raw["dataset"]["source"]
+    )

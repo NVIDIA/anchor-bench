@@ -11,7 +11,7 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from anchor_bench.core.task_runner import TaskRunner
+from anchor_bench.core.task_runner import TASKS, TaskRunner
 from anchor_bench.errors import AnchorBenchError
 from anchor_bench.logging_utils import configure_logging
 
@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["mpm_sys_id"],
+        choices=sorted(TASKS),
         help="Optional explicit task subcommand.",
     )
     parser.add_argument(
