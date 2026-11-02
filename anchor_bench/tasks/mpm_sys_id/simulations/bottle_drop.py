@@ -334,7 +334,6 @@ class Simulation:
                 self._substep()
                 self.warmed_phases.add(self.phase)
             self.sim_time += self.sim_dt
-        self.solver.check_sparse_grid_rebuild_status()
         # Preserve frame-end sampling without synchronizing body poses to the host.
         wp.launch(
             track_min_cap_z,
@@ -433,6 +432,8 @@ class Simulation:
 
     def test_final(self):
         """Check finite two-way impact states, floor containment, and sand mass."""
+        # Rebuild failures accumulate until reset; inspect once after all frames.
+        self.solver.check_sparse_grid_rebuild_status()
         assert np.isfinite(require_array(self.state_0.body_q).numpy()).all(), (
             "Bottle pose is non-finite"
         )

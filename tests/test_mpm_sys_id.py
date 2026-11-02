@@ -847,3 +847,23 @@ def test_mpm_parser_resolves_csv_paths_from_config_directory(
     before = config.model_dump()
     config.resolve_paths(elsewhere)
     assert config.model_dump() == before
+
+
+@pytest.mark.parametrize("kind", ["sand_pour", "bottle_drop"])
+def test_final_validation_reports_accumulated_grid_failure(kind):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id.simulations import bottle_drop, sand_pour
+
+    implementation = (
+        sand_pour.Simulation if kind == "sand_pour" else bottle_drop.Simulation
+    )
+    simulation = object.__new__(implementation)
+    simulation.solver = Mock()
+    failure = RuntimeError("Sparse grid capacity exceeded during an earlier frame")
+    simulation.solver.check_sparse_grid_rebuild_status.side_effect = failure
+    # No particle/body state is needed: grid failures must surface before reads.
+    with pytest.raises(RuntimeError) as caught:
+        simulation.test_final()
+    assert caught.value is failure
+    simulation.solver.check_sparse_grid_rebuild_status.assert_called_once()

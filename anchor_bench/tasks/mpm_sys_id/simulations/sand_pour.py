@@ -206,7 +206,6 @@ class Simulation:
                 self._substep()
                 self.warmed = True
             self.state_0, self.state_1 = self.state_1, self.state_0
-        self.solver.check_sparse_grid_rebuild_status()
         self.sim_time += self.frame_dt
 
     def _substep(self):
@@ -226,6 +225,8 @@ class Simulation:
 
     def test_final(self):
         """Verify conservation and finite states without requiring a fixed drain time."""
+        # Rebuild failures accumulate until reset; inspect once after all frames.
+        self.solver.check_sparse_grid_rebuild_status()
         positions = require_array(self.state_0.particle_q).numpy()
         velocities = require_array(self.state_0.particle_qd).numpy()
         assert np.isfinite(positions).all() and np.isfinite(velocities).all()
