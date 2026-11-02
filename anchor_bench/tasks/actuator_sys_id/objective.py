@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Optional, Sequence
 
 import numpy as np
 
@@ -14,14 +16,19 @@ from anchor_bench.tasks.actuator_sys_id.optimizer import FloatArray
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
 
-class PopulationEvaluator(Protocol):
+class PopulationEvaluator(ABC):
     """Score decoded actuator candidates against recorded trajectories."""
 
+    @abstractmethod
     def evaluate(
         self,
         population: Sequence[Candidate],
         trajectories: Sequence[Trajectory],
     ) -> FloatArray: ...
+
+    def export_model(self, best: Candidate, output_dir: Path) -> Optional[Path]:
+        """Write the fitted simulator model, if the simulator supports it."""
+        return None
 
 
 class ActuatorSysIdObjective:

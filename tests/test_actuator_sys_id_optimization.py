@@ -10,7 +10,10 @@ import pytest
 
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
-from anchor_bench.tasks.actuator_sys_id.objective import ActuatorSysIdObjective
+from anchor_bench.tasks.actuator_sys_id.objective import (
+    ActuatorSysIdObjective,
+    PopulationEvaluator,
+)
 from anchor_bench.tasks.actuator_sys_id.optimizer import (
     CmaEsOptimizer,
     FloatArray,
@@ -127,7 +130,7 @@ def test_objective_decodes_population_before_evaluation(tmp_path):
         measured_position=np.asarray([[0.1], [0.8]]),
     )
 
-    class RecordingEvaluator:
+    class RecordingEvaluator(PopulationEvaluator):
         def __init__(self) -> None:
             self.population: Optional[Sequence[Candidate]] = None
             self.trajectories: Optional[Sequence[Trajectory]] = None

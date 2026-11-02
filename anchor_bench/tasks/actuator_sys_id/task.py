@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.logging_utils import should_log_progress
 from anchor_bench.mlops import get_active_run
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -17,14 +18,13 @@ from anchor_bench.tasks.actuator_sys_id.model import GenerationRecord
 from anchor_bench.tasks.actuator_sys_id.objective import ActuatorSysIdObjective
 from anchor_bench.tasks.actuator_sys_id.optimizer import create_optimizer
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
-from anchor_bench.tasks.actuator_sys_id.simulation import NewtonPopulationEvaluator
 from anchor_bench.tasks.base_task import BaseTask
 
 logger = logging.getLogger(__name__)
 
 
 class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
-    """Fit actuator parameters by replaying recorded commands in Newton."""
+    """Fit actuator parameters by replaying recorded commands in simulation."""
 
     def run(self, output_directory: Path) -> Path:
         mlops_run = get_active_run()
@@ -41,7 +41,12 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
         )
         parameter_space = create_parameter_space(self.config)
         optimizer = create_optimizer(self.config, parameter_space)
-        evaluator = NewtonPopulationEvaluator(self.config, parameter_space)
+        context = create_simulation_context(
+            self.config.simulation.type,
+            self.config.simulation.usd_path,
+            fixed_base=True,
+        )
+        evaluator = context.create_sysid_evaluator(self.config, parameter_space)
         objective = ActuatorSysIdObjective(
             parameter_space,
             evaluator,
@@ -83,8 +88,9 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             best_parameters=best_parameters,
             best_mse=optimizer.best_score,
             history=history,
-            source_usd_path=self.config.simulation.usd_path,
-            config=self.config,
+            identified_usd_path=evaluator.export_model(
+                best_parameters, output_directory
+            ),
         )
         # Upload only after every SysID output file is finalized. TaskRunner
         # separately owns the completion marker and tracked-run status.

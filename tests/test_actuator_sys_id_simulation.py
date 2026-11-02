@@ -15,6 +15,7 @@ import warp as wp
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id import simulation as simulation_module
+from anchor_bench.tasks.actuator_sys_id import usd as usd_module
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import (
@@ -214,22 +215,6 @@ def test_newton_evaluator_uses_shared_simulation_context(
 
     context = FakeContext()
     config = _config(tmp_path)
-    monkeypatch.setattr(simulation_module, "NewtonSimulationContext", FakeContext)
-    requested_context = {}
-
-    def create_context(backend, usd_path, *, fixed_base):
-        requested_context.update(
-            backend=backend,
-            usd_path=usd_path,
-            fixed_base=fixed_base,
-        )
-        return context
-
-    monkeypatch.setattr(
-        simulation_module,
-        "create_simulation_context",
-        create_context,
-    )
     monkeypatch.setattr(
         simulation_module,
         "_builder_joint_indices",
@@ -246,13 +231,14 @@ def test_newton_evaluator_uses_shared_simulation_context(
     )
 
     with caplog.at_level(logging.DEBUG, logger=simulation_module.__name__):
-        evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
+        evaluator = NewtonPopulationEvaluator(
+            config, create_parameter_space(config), cast(Any, context)
+        )
 
     assert evaluator._simulation_context is context
     assert evaluator._simulation_context.control is context.control
     np.testing.assert_allclose(evaluator._base_targets, [1.0, 2.0])
     assert context.created_world_count == config.num_envs
-    assert requested_context["fixed_base"] is True
     assert context.template.joint_target_ke == [15.0]
     assert context.captured_step == (pytest.approx(0.005), 5)
     assert context.solver_options == {
@@ -265,6 +251,22 @@ def test_newton_evaluator_uses_shared_simulation_context(
         "Initialized device score accumulation device=cpu worlds=2 joints=1"
         in caplog.text
     )
+
+    candidate: Candidate = {"hip": {"stiffness": 20.0}}
+
+    def write_usd(source, output, parameters, controller_clamps, config_metadata):
+        assert source == config.simulation.usd_path
+        assert parameters == candidate
+        assert controller_clamps == {
+            "hip": config.joint_parameters[0].controller.clamps
+        }
+        assert config_metadata == config.model_dump_json()
+        output.write_text("#usda 1.0\n", encoding="utf-8")
+
+    monkeypatch.setattr(usd_module, "write_identified_usd_layer", write_usd)
+    exported = evaluator.export_model(candidate, tmp_path)
+    assert exported == tmp_path / "identified.usda"
+    assert exported.is_file()
 
 
 def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):

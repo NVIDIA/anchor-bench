@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from math import isclose
+from pathlib import Path
 from typing import ClassVar, Dict, List, Sequence, Tuple
 
 import newton
@@ -14,9 +15,9 @@ import numpy as np
 import warp as wp
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
-from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
+from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def _accumulate_position_error(
     score_sums[world_index] += error_sum
 
 
-class NewtonPopulationEvaluator:
+class NewtonPopulationEvaluator(PopulationEvaluator):
     """Evaluate one candidate per replicated Newton world."""
 
     _MODEL_ARRAYS: ClassVar[Dict[str, str]] = {
@@ -71,6 +72,7 @@ class NewtonPopulationEvaluator:
         self,
         config: ActuatorSysIdConfig,
         parameter_space: ParameterSpace,
+        simulation_context: NewtonSimulationContext,
     ) -> None:
         self.config = config
         self.parameter_space = parameter_space
@@ -92,22 +94,15 @@ class NewtonPopulationEvaluator:
             _joint_delay_steps(config, self.control_dt),
             dtype=np.int64,
         )
-        self._initialize_simulation()
+        self._initialize_simulation(simulation_context)
         self._initialize_score_buffers()
         self._simulation_context.capture_step_graph(
             dt=self.physics_dt * self.control_substeps,
             substeps=self.control_substeps,
         )
 
-    def _initialize_simulation(self) -> None:
+    def _initialize_simulation(self, context: NewtonSimulationContext) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
-        context = create_simulation_context(
-            self.config.simulation.type,
-            self.config.simulation.usd_path,
-            fixed_base=True,
-        )
-        if not isinstance(context, NewtonSimulationContext):
-            raise TypeError("actuator_sys_id requires a Newton simulation context")
         self._simulation_context = context
 
         def configure_template(template: newton.ModelBuilder) -> None:
@@ -249,6 +244,23 @@ class NewtonPopulationEvaluator:
         if not np.isfinite(scores).all():
             raise RuntimeError("Newton produced non-finite position error")
         return scores
+
+    def export_model(self, best: Candidate, output_dir: Path) -> Path:
+        from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer
+
+        path = output_dir / "identified.usda"
+        write_identified_usd_layer(
+            self.config.simulation.usd_path,
+            path,
+            best,
+            {
+                joint_name: group.controller.clamps
+                for group in self.config.joint_parameters
+                for joint_name in group.names
+            },
+            self.config.model_dump_json(),
+        )
+        return path
 
     def _apply_population(self, population: Sequence[Candidate]) -> None:
         for parameter_name, model_array_name in self._MODEL_ARRAYS.items():

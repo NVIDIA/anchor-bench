@@ -8,17 +8,15 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence, Union
+from typing import Optional, Sequence
 
 import yaml
 
-from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import (
     Candidate,
     GenerationRecord,
     SysIdResult,
 )
-from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer
 
 
 def write_artifacts(
@@ -27,15 +25,13 @@ def write_artifacts(
     best_parameters: Candidate,
     best_mse: float,
     history: Sequence[GenerationRecord],
-    source_usd_path: Union[str, Path],
-    config: ActuatorSysIdConfig,
+    identified_usd_path: Optional[Path] = None,
 ) -> SysIdResult:
-    """Write the fitted parameters, USD layer, log, and resolved run summary."""
+    """Write the fitted parameters, log, and resolved run summary."""
 
     best_parameters_path = output_dir / "best_params.yaml"
     optimization_log_path = output_dir / "optimization_log.csv"
     run_summary_path = output_dir / "run_summary.yaml"
-    identified_usd_path = output_dir / "identified.usda"
 
     best_document = {
         "schema_version": 1,
@@ -70,17 +66,6 @@ def write_artifacts(
     run_summary_path.write_text(
         yaml.safe_dump(summary, sort_keys=False),
         encoding="utf-8",
-    )
-    write_identified_usd_layer(
-        source_usd_path,
-        identified_usd_path,
-        best_parameters,
-        {
-            joint_name: group.controller.clamps
-            for group in config.joint_parameters
-            for joint_name in group.names
-        },
-        config.model_dump_json(),
     )
     return SysIdResult(
         best_parameters=best_parameters,

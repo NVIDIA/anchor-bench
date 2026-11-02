@@ -14,6 +14,7 @@ import warp as wp
 
 from anchor_bench.core.simulation import SimulationContext
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
+from anchor_bench.core.simulation.registry import create_simulation_context
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
@@ -65,6 +66,15 @@ def Xform "Slider" (
         encoding="utf-8",
     )
     return asset
+
+
+def _evaluator(config: ActuatorSysIdConfig) -> NewtonPopulationEvaluator:
+    context = create_simulation_context(
+        config.simulation.type, config.simulation.usd_path, fixed_base=True
+    )
+    evaluator = context.create_sysid_evaluator(config, create_parameter_space(config))
+    assert isinstance(evaluator, NewtonPopulationEvaluator)
+    return evaluator
 
 
 def _config(
@@ -157,7 +167,7 @@ def test_native_mujoco_candidate_updates_change_each_world_response(
     # first population must change these physical scores and final positions.
     config = _config(scalar_asset)
     with wp.ScopedDevice("cpu"):
-        evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
+        evaluator = _evaluator(config)
         episode = _trajectory(0.6, 0.0)
         # CPU Warp arrays expose borrowed NumPy storage; retain a snapshot
         # before the next evaluation reuses the score buffer.
@@ -185,7 +195,7 @@ def test_native_mujoco_repeated_trajectory_reset_is_deterministic(
     # leaking solver state across episodes breaks A/B/A repeatability.
     config = _config(scalar_asset, delay_ms=20, buffer_time=0.02)
     with wp.ScopedDevice("cpu"):
-        evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
+        evaluator = _evaluator(config)
         population = [_candidate(), _candidate(stiffness=80.0, armature=0.4)]
         a = _trajectory(0.6, 0.23)
         b = _trajectory(-0.7, -0.47, samples=13)
@@ -283,7 +293,7 @@ def test_native_mujoco_delay_and_buffer_match_explicit_physical_rollout(
         ),
     )
     with wp.ScopedDevice("cpu"):
-        evaluator = NewtonPopulationEvaluator(config, create_parameter_space(config))
+        evaluator = _evaluator(config)
         scores = evaluator.evaluate([_candidate(), _candidate()], [episode])
         model, solver, control, executor = _native_runtime(scalar_asset, "cpu")
         _reset_native(model, solver, executor, q=0.15)

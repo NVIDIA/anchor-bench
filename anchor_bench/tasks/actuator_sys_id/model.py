@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -69,4 +69,4 @@ class SysIdResult:
     best_parameters_path: Path
     optimization_log_path: Path
     run_summary_path: Path
-    identified_usd_path: Path
+    identified_usd_path: Optional[Path] = None
