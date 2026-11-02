@@ -26,15 +26,18 @@ def measure_pile(
     radii,
     *,
     outlet_height,
-    footprint_fraction=1.0,
+    footprint_fraction=0.99,
     yaw_degrees=0.0,
 ):
     """Measure particle extents along fixed floor axes, including sample radii.
 
-    The optional central quantile footprint excludes scattered samples; 1.0 uses
-    every sample. Height is always the maximum surface elevation above z=0.
-    Dimensions are provisional until retained_fraction and speed are small.
-    All particles have equal mass in this example.
+    Dimensions use only samples below the outlet. The central quantile footprint
+    excludes scattered samples; 1.0 uses every below-outlet sample. Height is the
+    99.5th percentile of surface elevation above z=0. These robust extents can
+    slightly underestimate the full pile dimensions.
+    Retained fraction and RMS speed include all samples, which have equal mass.
+    An empty below-outlet subset returns zero dimensions and an invalid result,
+    allowing periodic measurements to continue while the funnel starts draining.
     """
     if not 0 < footprint_fraction <= 1 or not np.isfinite(yaw_degrees):
         raise ValueError("footprint_fraction must be in (0, 1] and yaw_degrees finite")
@@ -44,6 +47,22 @@ def measure_pile(
         or not np.isfinite(velocities).all()
     ):
         raise ValueError("Cannot measure empty or non-finite particle states")
+    diagnostics = {
+        "rms_speed_m_s": float(np.sqrt(np.mean(np.sum(velocities**2, axis=1)))),
+        "retained_fraction": float(np.mean(positions[:, 2] >= outlet_height)),
+    }
+    below_outlet = positions[:, 2] < outlet_height
+    if not np.any(below_outlet):
+        return {
+            "width_m": 0.0,
+            "length_m": 0.0,
+            "height_m": 0.0,
+            **diagnostics,
+            "valid": False,
+            "failure_reason": "No particles below the funnel outlet",
+        }
+    positions = positions[below_outlet]
+    radii = radii[below_outlet]
     angle = np.radians(yaw_degrees)
     axes = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
     xy = positions[:, :2] @ axes
@@ -53,9 +72,8 @@ def measure_pile(
     return {
         "width_m": float(upper[0] - lower[0]),
         "length_m": float(upper[1] - lower[1]),
-        "height_m": float(np.max(positions[:, 2] + radii)),
-        "rms_speed_m_s": float(np.sqrt(np.mean(np.sum(velocities**2, axis=1)))),
-        "retained_fraction": float(np.mean(positions[:, 2] >= outlet_height)),
+        "height_m": float(np.quantile(positions[:, 2] + radii, 0.995)),
+        **diagnostics,
     }
 
 
@@ -221,7 +239,7 @@ class Simulation:
         self.solver.step(self.state_0, self.state_1, None, None, self.sim_dt)  # pyright: ignore[reportArgumentType]
         self.solver.project_outside(self.state_1, self.state_1, self.sim_dt)
 
-    def measure(self, *, footprint_fraction=1.0, yaw_degrees=0.0):
+    def measure(self, *, footprint_fraction=0.99, yaw_degrees=0.0):
         return measure_pile(
             require_array(self.state_0.particle_q).numpy(),
             require_array(self.state_0.particle_qd).numpy(),

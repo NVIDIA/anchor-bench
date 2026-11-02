@@ -236,7 +236,7 @@ def test_measurement_geometry():
         outlet_height=1,
     )
     np.testing.assert_allclose(
-        [pile["width_m"], pile["length_m"], pile["height_m"]], [2.02, 4.02, 0.41]
+        [pile["width_m"], pile["length_m"], pile["height_m"]], [2.0, 3.98, 0.408]
     )
 
 
@@ -301,3 +301,58 @@ def test_mpm_tracking_records_csv_and_scores(config_path, tmp_path, monkeypatch)
     assert run.data.metrics["material/best/young_modulus"] == 9576000.0
     assert len(run.inputs.dataset_inputs) == 1
     assert run.data.params["datasets/1m-5gal-sand-pour/uploaded"] == "True"
+
+
+def test_pile_excludes_retained_particles_but_keeps_global_diagnostics():
+    from anchor_bench.tasks.mpm_sys_id.simulations.sand_pour import measure_pile
+
+    positions = np.tile([0.0, 0.0, 0.09], (2000, 1))
+    # Include the outlet boundary, and keep retention within the valid-run limit.
+    positions[-2:] = [[10, 20, 1.0], [-10, -20, 1.2]]
+    velocities = np.zeros_like(positions)
+    velocities[-1, 2] = 0.5
+    radii = np.full(len(positions), 0.01)
+    radii[-2:] = 0.1
+    pile = measure_pile(positions, velocities, radii, outlet_height=1.0)
+
+    assert pile["width_m"] == pytest.approx(0.02)
+    assert pile["length_m"] == pytest.approx(0.02)
+    assert pile["height_m"] == pytest.approx(0.1)
+    assert pile["retained_fraction"] == pytest.approx(0.001)
+    assert pile["rms_speed_m_s"] == pytest.approx(0.5 / np.sqrt(2000))
+
+
+def test_pile_quantiles_resist_airborne_and_scattered_particles():
+    from anchor_bench.tasks.mpm_sys_id.simulations.sand_pour import measure_pile
+
+    positions = np.tile([0.0, 0.0, 0.09], (2000, 1))
+    positions[-2:] = [[10, 20, 0.9], [-10, -20, 0.09]]
+    velocities = np.zeros_like(positions)
+    radii = np.full(len(positions), 0.01)
+    pile = measure_pile(positions, velocities, radii, outlet_height=1.0)
+
+    assert pile["width_m"] == pytest.approx(0.02)
+    assert pile["length_m"] == pytest.approx(0.02)
+    assert pile["height_m"] == pytest.approx(0.1)
+    full = measure_pile(
+        positions, velocities, radii, outlet_height=1.0, footprint_fraction=1.0
+    )
+    assert full["width_m"] == pytest.approx(20.02)
+    assert full["length_m"] == pytest.approx(40.02)
+
+
+def test_pile_without_particles_below_outlet_is_invalid():
+    from anchor_bench.tasks.mpm_sys_id.simulations.sand_pour import measure_pile
+
+    pile = measure_pile(
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.2]]),
+        np.zeros((2, 3)),
+        np.full(2, 0.01),
+        outlet_height=1.0,
+    )
+
+    assert pile["valid"] is False
+    assert pile["failure_reason"] == "No particles below the funnel outlet"
+    assert pile["retained_fraction"] == 1.0
+    assert pile["rms_speed_m_s"] == 0.0
+    assert [pile[key] for key in ("width_m", "length_m", "height_m")] == [0, 0, 0]
