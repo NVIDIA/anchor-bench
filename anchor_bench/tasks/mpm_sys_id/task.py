@@ -116,21 +116,20 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                     stdout=log,
                     stderr=subprocess.STDOUT,
                 )
+                failure_reason = None
                 try:
                     code = process.wait(
                         timeout=float(self.config.execution.worker_timeout_s)
                     )
                     if code:
-                        raise AnchorBenchError(
-                            f"MPM worker exited {code}; inspect {directory / 'worker.log'}"
-                        )
+                        failure_reason = f"MPM worker exited {code}; inspect {directory / 'worker.log'}"
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
-                    return {
-                        e["id"]: {"valid": False, "failure_reason": "Worker timed out"}
-                        for e in self.experiments
-                    }
+                    failure_reason = (
+                        f"Worker timed out after {self.config.execution.worker_timeout_s}s; "
+                        f"inspect {directory / 'worker.log'}"
+                    )
                 except BaseException:
                     if process.poll() is None:
                         process.terminate()
@@ -140,6 +139,22 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                             process.kill()
                             process.wait()
                     raise
+                if failure_reason is not None:
+                    # Cache failed attempts too: resume may occur before result.json
+                    # is written. A non-zero exit overrides any worker response.
+                    write_json(
+                        response_path,
+                        {
+                            "request_sha256": digest,
+                            "measurements": {
+                                e["id"]: {
+                                    "valid": False,
+                                    "failure_reason": failure_reason,
+                                }
+                                for e in self.experiments
+                            },
+                        },
+                    )
         response = read_json(response_path)
         if response["request_sha256"] != digest:
             raise AnchorBenchError("Worker response does not match candidate request")

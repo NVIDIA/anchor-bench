@@ -6,6 +6,8 @@
 import argparse
 import gc
 import hashlib
+import math
+from numbers import Real
 from pathlib import Path
 
 from filelock import FileLock
@@ -14,6 +16,18 @@ from anchor_bench.schema.mpm_sys_id import MpmSysIdConfig
 
 from .artifacts import read_json, write_json
 from .simulations.registry import create_simulation
+
+
+def _require_finite_measurements(value, path="measurement") -> None:
+    """Reject non-finite numbers before they enter strict JSON artifacts."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _require_finite_measurements(item, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _require_finite_measurements(item, f"{path}[{index}]")
+    elif isinstance(value, Real) and not math.isfinite(value):
+        raise ValueError(f"Non-finite measurement: {path}")
 
 
 def evaluate(request: dict) -> dict:
@@ -46,6 +60,7 @@ def evaluate(request: dict) -> dict:
             for _ in range(experiment.simulation.num_frames):
                 simulation.step()
             measurement = simulation.measure()
+            _require_finite_measurements(measurement)
             simulation.test_final()
             if experiment.simulation.type == "sand_pour":
                 measurement["valid"] = (

@@ -356,3 +356,114 @@ def test_pile_without_particles_below_outlet_is_invalid():
     assert pile["retained_fraction"] == 1.0
     assert pile["rms_speed_m_s"] == 0.0
     assert [pile[key] for key in ("width_m", "length_m", "height_m")] == [0, 0, 0]
+
+
+@pytest.mark.parametrize("field", ["height_m", "rms_speed_m_s", "nested"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_worker_rejects_nonfinite_measurements(config_path, monkeypatch, field, value):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import warp as wp
+
+    from anchor_bench.tasks.mpm_sys_id import worker
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    measurement = {"valid": True, field: [value] if field == "nested" else value}
+    simulation = Mock()
+    simulation.measure.return_value = measurement
+    monkeypatch.setattr(worker, "create_simulation", lambda *args: simulation)
+    monkeypatch.setattr(wp, "init", lambda: None)
+    monkeypatch.setattr(wp, "set_device", lambda device: None)
+    monkeypatch.setattr(wp, "get_device", lambda: SimpleNamespace(is_cuda=True))
+    results = worker.evaluate(
+        {
+            "config": config.model_dump(mode="json"),
+            "material": {
+                **config.material.fixed,
+                **{k: b.lower for k, b in config.material.optimized.items()},
+            },
+        }
+    )
+    assert len(results) == 1
+    result = next(iter(results.values()))
+    assert result["valid"] is False
+    assert f"measurement.{field}" in result["failure_reason"]
+    json.dumps(results, allow_nan=False)
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "interrupt"])
+def test_worker_failure_persistence(config_path, tmp_path, monkeypatch, failure):
+    import subprocess
+    from unittest.mock import Mock
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    task.experiments = [{"id": "pour"}]
+    process = Mock()
+    if failure == "exit":
+        process.wait.return_value = -11
+    elif failure == "timeout":
+        process.wait.side_effect = [subprocess.TimeoutExpired("worker", 1), -9]
+    else:
+        process.wait.side_effect = [KeyboardInterrupt, 0]
+        process.poll.return_value = None
+    launch = Mock(return_value=process)
+    monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launch)
+    directory = tmp_path / "trial"
+    request = {"evaluation": 1}
+    if failure == "interrupt":
+        with pytest.raises(KeyboardInterrupt):
+            task._evaluate(request, directory)
+        process.terminate.assert_called_once()
+        assert not (directory / "response.json").exists()
+        return
+    results = task._evaluate(request, directory)
+    assert results["pour"]["valid"] is False
+    reason = results["pour"]["failure_reason"]
+    assert ("exited -11" if failure == "exit" else "timed out") in reason
+    assert "worker.log" in reason
+    if failure == "timeout":
+        process.kill.assert_called_once()
+    assert read_json(directory / "response.json")["measurements"] == results
+    assert task._evaluate(request, directory) == results
+    launch.assert_called_once()
+
+
+def test_resume_after_worker_crash_advances_candidate(
+    config_path, tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    output = tmp_path / "run"
+    process = Mock()
+    process.wait.return_value = -11
+    launch = Mock(return_value=process)
+    monkeypatch.setattr(task_module.subprocess, "Popen", launch)
+    original_write = task_module.write_json
+
+    def interrupt_before_trial_record(path, value):
+        if path.name == "result.json":
+            raise KeyboardInterrupt
+        original_write(path, value)
+
+    monkeypatch.setattr(task_module, "write_json", interrupt_before_trial_record)
+    with pytest.raises(KeyboardInterrupt):
+        TaskRunner().run(str(config_path), output=output)
+    first = output / "trials/00000001"
+    assert (first / "response.json").exists()
+    assert not (first / "result.json").exists()
+    monkeypatch.setattr(task_module, "write_json", original_write)
+    TaskRunner().run(str(config_path), output=output, resume=True)
+    # First crash is reused, so only the second candidate launches on resume.
+    assert launch.call_count == 2
+    records = [read_json(p) for p in sorted((output / "trials").glob("*/result.json"))]
+    assert len(records) == 2
+    assert all(not r["valid"] and r["error"] is None for r in records)
+    assert records[0]["point"] != records[1]["point"]
+    assert (output / ".completed").exists()
+    assert not (output / "best.json").exists()
