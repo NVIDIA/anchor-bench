@@ -79,27 +79,9 @@ def measure_pile(
 
 class Simulation:
     def __init__(self, args):
-        for name in (
-            "sand_volume_m3",
-            "drop_height_m",
-            "density",
-            "voxel_size",
-            "fps",
-            "substeps",
-            "bucket_radius",
-            "funnel_height",
-            "outlet_diameter",
-            "young_modulus",
-        ):
-            if not np.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-                raise ValueError(f"{name} must be positive and finite")
-        if args.outlet_diameter >= 2 * args.bucket_radius:
-            raise ValueError("outlet_diameter must be smaller than the bucket diameter")
-        if args.outlet_diameter < 4 * args.voxel_size:
-            raise ValueError(
-                "Resolve the outlet with at least four voxels; reduce voxel_size"
-            )
-        for name in ("friction", "dilatancy", "ground_friction", "funnel_friction"):
+        if not np.isfinite(args.young_modulus) or args.young_modulus <= 0:
+            raise ValueError("young_modulus must be positive and finite")
+        for name in ("friction", "dilatancy"):
             if not np.isfinite(getattr(args, name)) or getattr(args, name) < 0:
                 raise ValueError(f"{name} must be nonnegative and finite")
         self.sim_time = 0.0

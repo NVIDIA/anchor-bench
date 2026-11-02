@@ -152,12 +152,15 @@ class BottleDrop(SimulationSettings):
         return self
 
 
+SimulationConfig = Annotated[Union[SandPour, BottleDrop], Field(discriminator="type")]
+
+
 class Experiment(StrictBaseModel):
     id: Annotated[str, Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")]
     enabled: bool = True
     weight: PositiveNumber = 1.0
     input_data: CsvInput
-    simulation: Annotated[Union[SandPour, BottleDrop], Field(discriminator="type")]
+    simulation: SimulationConfig
 
 
 class Execution(StrictBaseModel):

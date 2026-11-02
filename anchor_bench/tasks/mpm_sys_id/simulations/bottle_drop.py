@@ -185,46 +185,6 @@ def bottle_mesh(radius, height, cap_radius, cap_height):
 
 class Simulation:
     def __init__(self, args):
-        for name in (
-            "drop_height_m",
-            "water_volume_m3",
-            "density",
-            "voxel_size",
-            "fps",
-            "substeps",
-            "bed_width",
-            "bed_length",
-            "bed_depth",
-            "bottle_radius",
-            "bottle_height",
-            "cap_radius",
-            "cap_height",
-            "pre_settle_seconds",
-            "impact_settle_seconds",
-            "lift_speed",
-            "lift_distance",
-            "crater_threshold",
-        ):
-            if not np.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-                raise ValueError(f"{name} must be positive and finite")
-        if (
-            args.bottle_height <= args.cap_height + 0.04
-            or args.bottle_radius <= args.cap_radius
-        ):
-            raise ValueError(
-                "Bottle must be taller and wider than its cap and shoulder"
-            )
-        if (
-            args.bed_depth < max(0.30, 4 * args.voxel_size)
-            or min(args.bed_width, args.bed_length) < 0.4
-        ):
-            raise ValueError(
-                "Use at least 0.30 m of sand, four voxels deep, and a bed at least 0.4 m wide"
-            )
-        if args.voxel_size > args.cap_radius:
-            raise ValueError(
-                "Resolve the cap with at least two voxels across its diameter"
-            )
         self.args = args
         self.sim_time = 0.0
         self.frame_dt = 1.0 / args.fps

@@ -744,3 +744,85 @@ def test_device_cap_minimum_retains_lowest_frame():
         body_q.assign(np.array([[0, 0, height, 0, 0, 0, 1]], dtype=np.float32))
         wp.launch(track_min_cap_z, dim=1, inputs=[body_q, minimum], device="cpu")
     assert float(minimum.numpy()[0]) == 0.25
+
+
+@pytest.mark.parametrize(
+    "kind,updates,valid",
+    [
+        ("sand_pour", {"outlet_diameter": 0.08}, True),
+        ("sand_pour", {"outlet_diameter": 0.079}, False),
+        ("sand_pour", {"outlet_diameter": 0.3}, False),
+        ("sand_pour", {"outlet_diameter": 0.299}, True),
+        ("sand_pour", {"ground_friction": -0.1}, False),
+        ("sand_pour", {"sand_volume_m3": float("nan")}, False),
+        ("sand_pour", {"substeps": 0}, False),
+        ("bottle_drop", {"bed_depth": 0.3, "bed_width": 0.4}, True),
+        ("bottle_drop", {"bed_depth": 0.299}, False),
+        ("bottle_drop", {"bed_length": 0.399}, False),
+        ("bottle_drop", {"voxel_size": 0.015}, True),
+        ("bottle_drop", {"voxel_size": 0.016}, False),
+        ("bottle_drop", {"cap_radius": 0.04}, False),
+        ("bottle_drop", {"bottle_height": 0.055}, False),
+        ("bottle_drop", {"bottle_height": 0.056}, True),
+        ("bottle_drop", {"lift_speed": float("inf")}, False),
+        (
+            "bottle_drop",
+            {
+                "bed_depth": 0.39,
+                "voxel_size": 0.1,
+                "cap_radius": 0.1,
+                "bottle_radius": 0.11,
+            },
+            False,
+        ),
+        (
+            "bottle_drop",
+            {
+                "bed_depth": 0.4,
+                "voxel_size": 0.1,
+                "cap_radius": 0.1,
+                "bottle_radius": 0.11,
+            },
+            True,
+        ),
+    ],
+)
+def test_factory_and_config_share_geometry_validation(
+    monkeypatch, kind, updates, valid
+):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id.simulations import bottle_drop, sand_pour
+    from anchor_bench.tasks.mpm_sys_id.simulations.registry import create_simulation
+
+    settings = {"type": kind, "drop_height_m": 1.0}
+    if kind == "bottle_drop":
+        settings["water_volume_m3"] = 0.001
+    settings.update(updates)
+    config = {
+        "type": "mpm_sys_id",
+        "experiments": [
+            {
+                "id": "test",
+                "input_data": {"source": "unused.csv"},
+                "simulation": settings,
+            }
+        ],
+    }
+    constructor = Mock()
+    monkeypatch.setattr(
+        sand_pour if kind == "sand_pour" else bottle_drop, "Simulation", constructor
+    )
+    if valid:
+        parsed = MpmSysIdConfig.model_validate(config)
+        assert create_simulation(settings, FIXED, True) is constructor.return_value
+        constructor.assert_called_once()
+        options = vars(constructor.call_args.args[0])
+        expected = parsed.experiments[0].simulation.model_dump(mode="python")
+        assert options == {**expected, **FIXED, "no_cuda_graph": False}
+    else:
+        with pytest.raises(ValidationError):
+            MpmSysIdConfig.model_validate(config)
+        with pytest.raises(ValidationError):
+            create_simulation(settings, FIXED, True)
+        constructor.assert_not_called()
