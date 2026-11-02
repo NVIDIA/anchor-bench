@@ -407,6 +407,10 @@ def test_worker_failure_persistence(config_path, tmp_path, monkeypatch, failure)
         process.wait.return_value = -11
     elif failure == "timeout":
         process.wait.side_effect = [subprocess.TimeoutExpired("worker", 1), -9]
+        ticks = iter([0.0, 0.0, float(config.execution.worker_timeout_s)])
+        monkeypatch.setattr(
+            "anchor_bench.tasks.mpm_sys_id.task.time.monotonic", lambda: next(ticks)
+        )
     else:
         process.wait.side_effect = [KeyboardInterrupt, 0]
         process.poll.return_value = None
@@ -637,3 +641,93 @@ def test_chunked_proposals_match_dense_reference(config_path, monkeypatch, valid
     monkeypatch.setattr(optimizer, "_minimum_squared_distances", dense_distances)
     assert optimizer.propose(history, bounds, seed=48, pool_size=272) == actual
     assert actual[1] == ("random_forest" if valid else "space_filling")
+
+
+@pytest.mark.parametrize("signum_name", ["SIGTERM", "SIGINT"])
+@pytest.mark.parametrize("artifact", ["checkpoint.json.tmp", "result.json.tmp"])
+def test_shutdown_finishes_artifact_writes_before_persisting_interruption(
+    config_path, tmp_path, monkeypatch, signum_name, artifact
+):
+    import signal
+
+    output = tmp_path / "run"
+    signum = getattr(signal, signum_name)
+    original_handler = signal.getsignal(signum)
+    original_dump = json.dump
+    signals_sent = []
+
+    def signal_during_write(value, stream, **kwargs):
+        if Path(stream.name).name == artifact and not signals_sent:
+            stream.write(" ")
+            signal.raise_signal(signum)
+            signals_sent.append("during write")
+        if isinstance(value, dict) and value.get("state") == "interrupted":
+            # Repeated termination requests must not interrupt shutdown persistence.
+            signal.raise_signal(signum)
+            signal.raise_signal(signum)
+            signals_sent.append("during shutdown")
+        original_dump(value, stream, **kwargs)
+
+    def evaluate(self, request, directory):
+        directory.mkdir(parents=True, exist_ok=True)
+        return {
+            e["id"]: {"valid": True, **dict(zip(e["dimensions"], e["target"]))}
+            for e in self.experiments
+        }
+
+    monkeypatch.setattr(json, "dump", signal_during_write)
+    monkeypatch.setattr(MpmSysIdTask, "_evaluate", evaluate)
+    with pytest.raises(KeyboardInterrupt):
+        TaskRunner().run(str(config_path), output=output)
+    assert signals_sent == ["during write", "during shutdown"]
+    completed = int(artifact == "result.json.tmp")
+    assert read_json(output / "checkpoint.json")["next_evaluation"] == completed + 1
+    status = read_json(output / "status.json")
+    assert status["state"] == "interrupted"
+    assert status["completed"] == completed
+    assert len((output / "history.jsonl").read_text().splitlines()) == completed
+    assert not list(output.rglob("*.tmp"))
+    assert not (output / ".completed").exists()
+    assert signal.getsignal(signum) == original_handler
+    monkeypatch.setattr(json, "dump", original_dump)
+    TaskRunner().run(str(config_path), output=output, resume=True)
+    assert (output / ".completed").exists()
+
+
+@pytest.mark.parametrize("needs_kill", [False, True])
+def test_shutdown_poll_terminates_worker_without_recording_failure(
+    config_path, tmp_path, monkeypatch, needs_kill
+):
+    import subprocess
+    from unittest.mock import Mock
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    process = Mock()
+    process.poll.return_value = None
+    waits = []
+
+    def wait(timeout=None):
+        waits.append(timeout)
+        if len(waits) == 1:
+            assert timeout is not None
+            task._stop_requested = True
+            raise subprocess.TimeoutExpired("worker", timeout)
+        if needs_kill and len(waits) == 2:
+            assert timeout is not None
+            raise subprocess.TimeoutExpired("worker", timeout)
+        return -9 if needs_kill else -15
+
+    process.wait.side_effect = wait
+    monkeypatch.setattr(
+        "anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", lambda *a, **k: process
+    )
+    directory = tmp_path / "trial"
+    with pytest.raises(KeyboardInterrupt):
+        task._evaluate({"evaluation": 1}, directory)
+    assert waits[0] <= 0.2
+    assert waits[1] == 5
+    process.terminate.assert_called_once()
+    assert process.kill.call_count == int(needs_kill)
+    assert not (directory / "response.json").exists()

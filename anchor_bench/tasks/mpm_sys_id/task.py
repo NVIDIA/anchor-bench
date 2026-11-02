@@ -30,6 +30,28 @@ logger = logging.getLogger(__name__)
 
 
 class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
+    _stop_requested = False
+
+    def _check_stop_requested(self) -> None:
+        """Raise only at safe boundaries, never from a signal handler."""
+        if self._stop_requested:
+            raise KeyboardInterrupt
+
+    def _wait_for_worker(self, process: subprocess.Popen) -> int:
+        """Poll for shutdown requests while preserving the overall worker deadline."""
+        deadline = time.monotonic() + float(self.config.execution.worker_timeout_s)
+        while True:
+            self._check_stop_requested()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(
+                    process.args, self.config.execution.worker_timeout_s
+                )
+            try:
+                return process.wait(timeout=min(0.2, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+
     def validate_output_preflight(
         self, output: Path, *, force: bool = False, resume: bool = False
     ) -> None:
@@ -116,6 +138,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
         else:
             write_json(request_path, request)
         digest = hashlib.sha256(request_path.read_bytes()).hexdigest()
+        self._check_stop_requested()
         if not response_path.exists():
             with (directory / "worker.log").open("a") as log:
                 process = subprocess.Popen(
@@ -132,9 +155,8 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                 )
                 failure_reason = None
                 try:
-                    code = process.wait(
-                        timeout=float(self.config.execution.worker_timeout_s)
-                    )
+                    code = self._wait_for_worker(process)
+                    self._check_stop_requested()
                     if code:
                         failure_reason = f"MPM worker exited {code}; inspect {directory / 'worker.log'}"
                 except subprocess.TimeoutExpired:
@@ -242,16 +264,19 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                 },
             )
 
-        previous_handler = None
+        self._stop_requested = False
+        previous_handlers = {}
         if threading.current_thread() is threading.main_thread():
 
             def interrupted(signum, frame):
-                raise KeyboardInterrupt
+                self._stop_requested = True
 
-            previous_handler = signal.signal(signal.SIGTERM, interrupted)
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                previous_handlers[signum] = signal.signal(signum, interrupted)
         try:
             persist("running")
             while True:
+                self._check_stop_requested()
                 if stopping.mode == "bounded":
                     if len(history) >= int(stopping.max_evaluations or 0):
                         break
@@ -289,6 +314,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                     "material": material,
                     "config": worker_config,
                 }
+                self._check_stop_requested()
                 start = time.monotonic()
                 measurements = self._evaluate(request, directory)
                 record = {
@@ -335,6 +361,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                 tracked.log_artifact(
                     output, collection="mpm-sysid-output", artifact_type="mpm-sysid"
                 )
+            self._check_stop_requested()
             return output_directory
         except KeyboardInterrupt:
             persist("interrupted")
@@ -343,7 +370,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
             persist("failed")
             raise
         finally:
-            if previous_handler is not None:
-                signal.signal(signal.SIGTERM, previous_handler)
+            for signum, previous_handler in previous_handlers.items():
+                signal.signal(signum, previous_handler)
             logger.removeHandler(log_handler)
             log_handler.close()
