@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from math import isclose
 from pathlib import Path
-from typing import ClassVar, Dict, List, Sequence, Tuple
+from typing import ClassVar, Dict, List, Sequence, Tuple, cast
 
 import newton
 import numpy as np
@@ -18,6 +18,11 @@ from pydantic import JsonValue
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
+from anchor_bench.tasks.actuator_sys_id.newton_actuation import (
+    ExternalImplicitPD,
+    NativePD,
+    NewtonActuation,
+)
 from anchor_bench.tasks.actuator_sys_id.objective import PopulationEvaluator
 from anchor_bench.tasks.actuator_sys_id.parameter_space import ParameterSpace
 
@@ -61,9 +66,14 @@ def _accumulate_position_error(
 class NewtonPopulationEvaluator(PopulationEvaluator):
     """Evaluate one candidate per replicated Newton world."""
 
-    _MODEL_ARRAYS: ClassVar[Dict[str, str]] = {
-        "stiffness": "joint_target_ke",
-        "damping": "joint_target_kd",
+    _PARAMETERS: ClassVar[Tuple[str, ...]] = (
+        "stiffness",
+        "damping",
+        "armature",
+        "dry_friction",
+        "viscous_friction",
+    )
+    _PASSIVE_ARRAYS: ClassVar[Dict[str, str]] = {
         "armature": "joint_armature",
         "dry_friction": "joint_friction",
         "viscous_friction": "joint_damping",
@@ -78,6 +88,9 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         self.config = config
         self.parameter_space = parameter_space
         self.joint_names = _joint_names(config)
+        self._group_by_joint = {
+            joint: group for group in config.joint_parameters for joint in group.names
+        }
         self.num_envs = config.num_envs
         self.physics_dt = 1.0 / config.simulation.physics_freq
         self.control_dt = 1.0 / config.simulation.control_freq
@@ -97,10 +110,11 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         )
         self._initialize_simulation(simulation_context)
         self._initialize_score_buffers()
-        self._simulation_context.capture_step_graph(
-            dt=self.physics_dt * self.control_substeps,
-            substeps=self.control_substeps,
-        )
+        if all(actuation.is_graphable() for actuation in self._actuations):
+            self._simulation_context.capture_step_graph(
+                dt=self.physics_dt * self.control_substeps,
+                substeps=self.control_substeps,
+            )
 
     def _initialize_simulation(self, context: NewtonSimulationContext) -> None:
         initial = self.parameter_space.decode(self.parameter_space.initial_normalized)
@@ -128,6 +142,57 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             self.joint_names,
             self.num_envs,
         )
+        implementation = {
+            joint: group.controller.implementation
+            for joint, group in self._group_by_joint.items()
+        }
+        native = [
+            column
+            for column, joint in enumerate(self.joint_names)
+            if implementation[joint] == "native"
+        ]
+        self._actuations: List[NewtonActuation] = []
+        if native:
+            self._actuations.append(
+                NativePD(
+                    model,
+                    joint_names=[self.joint_names[column] for column in native],
+                    dof_indices=self._joint_dof_indices[:, native],
+                )
+            )
+        external = [
+            column
+            for column, joint in enumerate(self.joint_names)
+            if implementation[joint] == "external_implicit"
+        ]
+        if external:
+            names = [self.joint_names[column] for column in external]
+            self._actuations.append(
+                ExternalImplicitPD(
+                    model,
+                    joint_names=names,
+                    q_indices=self._joint_q_indices[:, external],
+                    dof_indices=self._joint_dof_indices[:, external],
+                    target_indices=self._joint_target_indices[:, external],
+                    effort_limits=[
+                        float(self._group_by_joint[name].controller.clamps.effort_limit)
+                        for name in names
+                    ],
+                )
+            )
+        actuations = self._actuations
+
+        def before_substep(
+            state: newton.State, control: newton.Control | None, dt: float
+        ) -> None:
+            # Actuators accumulate into joint_f, so zero it once per substep
+            # before any of them runs. The stepper always supplies a control.
+            joint_f = cast("wp.array", cast("newton.Control", control).joint_f)
+            joint_f.zero_()
+            for actuation in actuations:
+                actuation.before_substep(state, control, dt)
+
+        context.set_before_substep(before_substep)
         model_joint_q = model.joint_q
         model_joint_qd = model.joint_qd
         model_joint_target_q = model.joint_target_q
@@ -142,7 +207,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             dtype=np.float32,
         )
         self._base_model_arrays: Dict[str, np.ndarray] = {}
-        for model_array_name in self._MODEL_ARRAYS.values():
+        for model_array_name in self._PASSIVE_ARRAYS.values():
             model_array = getattr(model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
@@ -173,17 +238,13 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         )
 
     def _builder_configuration_key(self, initial: Candidate) -> tuple[object, ...]:
-        groups = {
-            joint: group
-            for group in self.config.joint_parameters
-            for joint in group.names
-        }
         joint_configuration = tuple(
             (
                 joint,
-                tuple(initial[joint][name] for name in self._MODEL_ARRAYS),
-                float(groups[joint].controller.clamps.effort_limit),
-                float(groups[joint].controller.clamps.velocity_limit),
+                tuple(initial[joint][name] for name in self._PARAMETERS),
+                float(self._group_by_joint[joint].controller.clamps.effort_limit),
+                float(self._group_by_joint[joint].controller.clamps.velocity_limit),
+                self._group_by_joint[joint].controller.implementation,
             )
             for joint in self.joint_names
         )
@@ -196,26 +257,30 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         initial: Candidate,
     ) -> None:
         position_mode = int(newton.JointTargetMode.POSITION)
-        group_by_joint = {
-            joint: group
-            for group in self.config.joint_parameters
-            for joint in group.names
-        }
+        effort_mode = int(newton.JointTargetMode.EFFORT)
         for joint in self.joint_names:
             _, dof_index = indices[joint]
-            group = group_by_joint[joint]
+            group = self._group_by_joint[joint]
             values = initial[joint]
-            template.joint_target_mode[dof_index] = position_mode
-            template.joint_target_ke[dof_index] = values["stiffness"]
-            template.joint_target_kd[dof_index] = values["damping"]
+            if group.controller.implementation == "external_implicit":
+                # Newton's external actuator supplies effort; disable the native
+                # drive with zero gains (VBD ignores joint_target_mode).
+                template.joint_target_mode[dof_index] = effort_mode
+                template.joint_target_ke[dof_index] = 0.0
+                template.joint_target_kd[dof_index] = 0.0
+                template.joint_velocity_limit[dof_index] = float("inf")
+            else:
+                template.joint_target_mode[dof_index] = position_mode
+                template.joint_target_ke[dof_index] = values["stiffness"]
+                template.joint_target_kd[dof_index] = values["damping"]
+                template.joint_velocity_limit[dof_index] = float(
+                    group.controller.clamps.velocity_limit
+                )
             template.joint_armature[dof_index] = values["armature"]
             template.joint_friction[dof_index] = values["dry_friction"]
             template.joint_damping[dof_index] = values["viscous_friction"]
             template.joint_effort_limit[dof_index] = float(
                 group.controller.clamps.effort_limit
-            )
-            template.joint_velocity_limit[dof_index] = float(
-                group.controller.clamps.velocity_limit
             )
 
     def evaluate(
@@ -269,7 +334,7 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         return path
 
     def _apply_population(self, population: Sequence[Candidate]) -> None:
-        for parameter_name, model_array_name in self._MODEL_ARRAYS.items():
+        for parameter_name, model_array_name in self._PASSIVE_ARRAYS.items():
             model_array = getattr(self._simulation_context.model, model_array_name)
             if model_array is None:
                 raise RuntimeError(f"Newton model does not expose {model_array_name}")
@@ -280,6 +345,8 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
                         candidate[joint][parameter_name]
                     )
             model_array.assign(values)
+        for actuation in self._actuations:
+            actuation.apply_population(population)
 
         flags = (
             newton.ModelFlags.JOINT_DOF_PROPERTIES
@@ -353,6 +420,8 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         joint_qd[self._joint_dof_indices] = 0.0
         context = self._simulation_context
         context.solver.reset(context.state)
+        for actuation in self._actuations:
+            actuation.reset(context.control)
         for state in (context.state, context.state_next):
             state_joint_q = state.joint_q
             state_joint_qd = state.joint_qd

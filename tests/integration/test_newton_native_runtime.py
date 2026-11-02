@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import newton
@@ -84,6 +85,7 @@ def _config(
     buffer_time: float = 0.0,
     solver_type: str = "warp_mujoco",
     settings: dict | None = None,
+    implementation: str = "native",
 ) -> ActuatorSysIdConfig:
     return ActuatorSysIdConfig.model_validate(
         {
@@ -93,6 +95,7 @@ def _config(
                     "names": ["slide"],
                     "controller": {
                         "type": "pd",
+                        "implementation": implementation,
                         "delay_duration_ms": delay_ms,
                         "clamps": {"effort_limit": 1000.0, "velocity_limit": 100.0},
                         "stiffness": {"lower": 1.0, "upper": 100.0, "initial": 40.0},
@@ -145,6 +148,9 @@ def _config(
     )
 
 
+RUNTIMES = [("warp_mujoco", "native"), ("warp_mujoco", "external_implicit")]
+
+
 def _candidate(*, stiffness: float = 40.0, armature: float = 0.1) -> Candidate:
     return {
         "slide": {
@@ -166,17 +172,126 @@ def _trajectory(command: float, initial: float, *, samples: int = 25) -> Traject
     )
 
 
+@pytest.fixture
+def two_slider_asset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Two independent horizontal sliders on one fixed base."""
+
+    monkeypatch.setattr(SimulationContext, "_instance", None)
+    asset = tmp_path / "two_sliders.usda"
+    asset.write_text(
+        """#usda 1.0
+(
+    defaultPrim = "Sliders"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+def Xform "Sliders" (
+    prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+) {
+    def Xform "base" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {
+        float physics:mass = 1
+        float3 physics:diagonalInertia = (0.1, 0.1, 0.1)
+    }
+    def Xform "a" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {
+        float physics:mass = 1
+        float3 physics:diagonalInertia = (0.1, 0.1, 0.1)
+    }
+    def Xform "b" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    ) {
+        float physics:mass = 1
+        float3 physics:diagonalInertia = (0.1, 0.1, 0.1)
+    }
+    def PhysicsFixedJoint "root" {
+        rel physics:body1 = </Sliders/base>
+    }
+    def PhysicsPrismaticJoint "slide_a" {
+        rel physics:body0 = </Sliders/base>
+        rel physics:body1 = </Sliders/a>
+        uniform token physics:axis = "X"
+        float physics:lowerLimit = -10
+        float physics:upperLimit = 10
+    }
+    def PhysicsPrismaticJoint "slide_b" {
+        rel physics:body0 = </Sliders/base>
+        rel physics:body1 = </Sliders/b>
+        uniform token physics:axis = "Y"
+        float physics:lowerLimit = -10
+        float physics:upperLimit = 10
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    return asset
+
+
+def test_mixed_groups_keep_native_gains_and_zero_external_ones(
+    two_slider_asset: Path,
+) -> None:
+    data = _config(two_slider_asset).model_dump(mode="json")
+    native_group = data["joint_parameters"][0]
+    native_group["names"] = ["slide_a"]
+    external_group = copy.deepcopy(native_group)
+    external_group["names"] = ["slide_b"]
+    external_group["controller"]["implementation"] = "external_implicit"
+    data["joint_parameters"] = [native_group, external_group]
+    config = ActuatorSysIdConfig.model_validate(data)
+    joint = _candidate()["slide"]
+    candidate: Candidate = {"slide_a": dict(joint), "slide_b": dict(joint)}
+    episode = Trajectory(
+        experiment="mixed",
+        joint_names=["slide_a", "slide_b"],
+        commanded_position=np.tile([[0.6, -0.4]], (25, 1)),
+        measured_position=np.zeros((25, 2)),
+    )
+
+    with wp.ScopedDevice("cpu"):
+        evaluator = _evaluator(config)
+        model = evaluator._simulation_context.model
+        assert model.joint_target_ke is not None
+        ke = model.joint_target_ke.numpy()
+        dofs = evaluator._joint_dof_indices
+        np.testing.assert_allclose(ke[dofs[:, 0]], 40.0)
+        np.testing.assert_allclose(ke[dofs[:, 1]], 0.0)
+        assert [type(a).__name__ for a in evaluator._actuations] == [
+            "NativePD",
+            "ExternalImplicitPD",
+        ]
+        scores = evaluator.evaluate([candidate, candidate], [episode])
+
+    assert np.isfinite(scores).all()
+
+
+@pytest.mark.skipif(not wp.is_cuda_available(), reason="requires CUDA")
+def test_external_pd_runs_with_cuda_graph_capture(scalar_asset: Path) -> None:
+    config = _config(scalar_asset, implementation="external_implicit")
+    with wp.ScopedDevice("cuda:0"):
+        evaluator = _evaluator(config)
+        scores = evaluator.evaluate(
+            [_candidate(), _candidate(stiffness=80.0)], [_trajectory(0.6, 0.0)]
+        )
+    assert np.isfinite(scores).all()
+
+
+@pytest.mark.parametrize(("solver_type", "implementation"), RUNTIMES)
 @pytest.mark.parametrize(
     "alternative",
     [_candidate(stiffness=80.0), _candidate(armature=0.8)],
     ids=["gain", "armature"],
 )
-def test_native_mujoco_candidate_updates_change_each_world_response(
-    scalar_asset: Path, alternative: Candidate
+def test_candidate_updates_change_each_world_response(
+    scalar_asset: Path, alternative: Candidate, solver_type: str, implementation: str
 ) -> None:
     # Dropping notify_model_changed, broadcasting world zero, or caching the
     # first population must change these physical scores and final positions.
-    config = _config(scalar_asset)
+    config = _config(
+        scalar_asset, solver_type=solver_type, implementation=implementation
+    )
     with wp.ScopedDevice("cpu"):
         evaluator = _evaluator(config)
         episode = _trajectory(0.6, 0.0)
@@ -199,12 +314,19 @@ def test_native_mujoco_candidate_updates_change_each_world_response(
     )
 
 
-def test_native_mujoco_repeated_trajectory_reset_is_deterministic(
-    scalar_asset: Path,
+@pytest.mark.parametrize(("solver_type", "implementation"), RUNTIMES)
+def test_repeated_trajectory_reset_is_deterministic(
+    scalar_asset: Path, solver_type: str, implementation: str
 ) -> None:
     # Resetting after restoring the measured pose, retaining velocity, or
     # leaking solver state across episodes breaks A/B/A repeatability.
-    config = _config(scalar_asset, delay_ms=20, buffer_time=0.02)
+    config = _config(
+        scalar_asset,
+        delay_ms=20,
+        buffer_time=0.02,
+        solver_type=solver_type,
+        implementation=implementation,
+    )
     with wp.ScopedDevice("cpu"):
         evaluator = _evaluator(config)
         population = [_candidate(), _candidate(stiffness=80.0, armature=0.4)]

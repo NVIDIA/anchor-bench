@@ -209,3 +209,8 @@ def test_old_mujoco_solver_fields_point_to_settings(valid_config_data, field):
     valid_config_data["simulation"]["solver"] = {"type": "warp_mujoco", field: 5}
     with pytest.raises(ValidationError, match="simulation.solver.settings"):
         ActuatorSysIdConfig.model_validate(valid_config_data)
+
+
+def test_controller_implementation_defaults_to_native(valid_config_data):
+    config = ActuatorSysIdConfig.model_validate(valid_config_data)
+    assert config.joint_parameters[0].controller.implementation == "native"
