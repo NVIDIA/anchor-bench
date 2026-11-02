@@ -103,7 +103,6 @@ class Simulation:
             if not np.isfinite(getattr(args, name)) or getattr(args, name) < 0:
                 raise ValueError(f"{name} must be nonnegative and finite")
         self.sim_time = 0.0
-        self.fps = args.fps
         self.frame_dt = 1.0 / args.fps
         self.sim_substeps = args.substeps
         self.sim_dt = self.frame_dt / self.sim_substeps
@@ -193,7 +192,6 @@ class Simulation:
         builder.add_ground_plane(
             cfg=newton.ModelBuilder.ShapeConfig(mu=args.ground_friction)
         )
-        self.builder = builder
         self.model = builder.finalize()
         self.model.set_gravity((0, 0, -9.81))
         apply_material(self.model, args)
@@ -204,9 +202,6 @@ class Simulation:
         self.solver = SolverImplicitMPM(self.model, config=config)
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
-        colors = rng.uniform(0.8, 1.0, (len(points), 1)) * np.array([0.82, 0.64, 0.36])
-        self.colors = wp.array(colors, dtype=wp.vec3)
-        self.metrics = None
         self.use_cuda_graph = (
             self.model.device.is_cuda
             and wp.is_conditional_graph_supported()
@@ -231,8 +226,6 @@ class Simulation:
             self.state_0, self.state_1 = self.state_1, self.state_0
         self.solver.check_sparse_grid_rebuild_status()
         self.sim_time += self.frame_dt
-        if round(self.sim_time / self.frame_dt) % self.fps == 0:
-            self.metrics = self.measure()
 
     def _substep(self):
         # Implicit MPM accepts absent controls/contacts; its stubs require both.

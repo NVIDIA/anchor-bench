@@ -297,7 +297,6 @@ class Simulation:
         builder.add_ground_plane(
             cfg=newton.ModelBuilder.ShapeConfig(mu=args.ground_friction)
         )
-        self.builder = builder
         self.model = builder.finalize()
         self._min_cap_z = wp.array(
             [float("inf")], dtype=float, device=self.model.device
@@ -318,14 +317,9 @@ class Simulation:
         self.solver.setup_collider(
             body_mass=self.kinematic_mass, body_inv_inertia=self.kinematic_inertia
         )
-        self.colors = wp.array(
-            rng.uniform(0.8, 1.0, (len(points), 1)) * np.array([0.82, 0.64, 0.36]),
-            dtype=wp.vec3,
-        )
         self.radii = require_array(self.model.particle_radius).numpy()
         self.surface_extent = min(args.bed_width, args.bed_length) * 0.45
         self.initial_mass = float(require_array(self.model.particle_mass).numpy().sum())
-        self.metrics = None
         self.use_cuda_graph = (
             self.model.device.is_cuda
             and wp.is_conditional_graph_supported()
