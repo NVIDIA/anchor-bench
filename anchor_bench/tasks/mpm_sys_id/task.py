@@ -34,63 +34,66 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
     def output_context(
         self, output: Path, *, force: bool = False, resume: bool = False
     ):
+        lock = FileLock(str(output / ".run.lock"), timeout=0)
         try:
-            with FileLock(str(output / ".run.lock"), timeout=0):
-                experiments = load_experiments(self.config)
-                # Versions are part of identity: optimizer replay and physics may change.
+            lock.acquire()
+        except Timeout as exc:
+            raise AnchorBenchError(f"Another MPM process owns {output}") from exc
+        try:
+            experiments = load_experiments(self.config)
+            # Versions are part of identity: optimizer replay and physics may change.
+            try:
                 versions = {
                     p: importlib.metadata.version(p)
                     for p in ("newton", "warp-lang", "numpy", "scikit-learn")
                 }
-                identity = self.config.model_dump(
-                    mode="json",
-                    exclude={
-                        "output_dir",
-                        "description",
-                        "tags",
-                        "mlops",
-                        "experiments",
-                    },
-                )
-                identity["experiments"] = experiments
-                manifest = {
-                    "schema_version": 1,
-                    "implementation_version": 1,
-                    "configuration": identity,
-                    "versions": versions,
-                }
-                path = output / "inputs.json"
-                if path.exists():
-                    if read_json(path) != manifest:
-                        raise AnchorBenchError(
-                            "MPM inputs or dependency versions changed; use a new output directory"
-                        )
-                    if force:
-                        raise AnchorBenchError(
-                            "MPM --force does not overwrite checkpoints; use a new output directory"
-                        )
-                    if not (output / ".completed").exists() and not resume:
-                        raise AnchorBenchError(
-                            "Incomplete MPM run exists; pass --resume with the same output directory"
-                        )
-                else:
-                    if resume:
-                        raise AnchorBenchError(
-                            "Cannot resume: inputs.json does not exist"
-                        )
-                    if (output / "trials").exists() or (output / ".completed").exists():
-                        raise AnchorBenchError(
-                            "Output contains artifacts without MPM inputs; use a new directory"
-                        )
-                    write_json(path, manifest)
-                self.experiments = experiments
-                yield
-        except Timeout as exc:
-            raise AnchorBenchError(f"Another MPM process owns {output}") from exc
-        except importlib.metadata.PackageNotFoundError as exc:
-            raise AnchorBenchError(
-                "Install MPM dependencies with uv sync --extra mpm"
-            ) from exc
+            except importlib.metadata.PackageNotFoundError as exc:
+                raise AnchorBenchError(
+                    "Install MPM dependencies with uv sync --extra mpm"
+                ) from exc
+            identity = self.config.model_dump(
+                mode="json",
+                exclude={
+                    "output_dir",
+                    "description",
+                    "tags",
+                    "mlops",
+                    "experiments",
+                },
+            )
+            identity["experiments"] = experiments
+            manifest = {
+                "schema_version": 1,
+                "implementation_version": 1,
+                "configuration": identity,
+                "versions": versions,
+            }
+            path = output / "inputs.json"
+            if path.exists():
+                if read_json(path) != manifest:
+                    raise AnchorBenchError(
+                        "MPM inputs or dependency versions changed; use a new output directory"
+                    )
+                if force:
+                    raise AnchorBenchError(
+                        "MPM --force does not overwrite checkpoints; use a new output directory"
+                    )
+                if not (output / ".completed").exists() and not resume:
+                    raise AnchorBenchError(
+                        "Incomplete MPM run exists; pass --resume with the same output directory"
+                    )
+            else:
+                if resume:
+                    raise AnchorBenchError("Cannot resume: inputs.json does not exist")
+                if (output / "trials").exists() or (output / ".completed").exists():
+                    raise AnchorBenchError(
+                        "Output contains artifacts without MPM inputs; use a new directory"
+                    )
+                write_json(path, manifest)
+            self.experiments = experiments
+            yield
+        finally:
+            lock.release()
 
     def _evaluate(self, request: dict, directory: Path) -> dict:
         directory.mkdir(parents=True, exist_ok=True)

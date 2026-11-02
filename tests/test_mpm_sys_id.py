@@ -467,3 +467,69 @@ def test_resume_after_worker_crash_advances_candidate(
     assert records[0]["point"] != records[1]["point"]
     assert (output / ".completed").exists()
     assert not (output / "best.json").exists()
+
+
+@pytest.mark.parametrize("stage", ["setup", "body"])
+@pytest.mark.parametrize("kind", ["timeout", "missing_package"])
+def test_output_context_preserves_unrelated_errors_and_releases_lock(
+    config_path, tmp_path, monkeypatch, stage, kind
+):
+    from importlib.metadata import PackageNotFoundError
+
+    from filelock import Timeout
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    output = tmp_path / "run"
+    output.mkdir()
+    failure = (
+        Timeout("plugin.lock")
+        if kind == "timeout"
+        else PackageNotFoundError("unrelated-plugin")
+    )
+
+    def fail_setup(config):
+        raise failure
+
+    if stage == "setup":
+        monkeypatch.setattr(task_module, "load_experiments", fail_setup)
+    with pytest.raises(type(failure)) as caught, task.output_context(output):
+        assert stage == "body"
+        # The lock remains held throughout the context body.
+        with pytest.raises(Timeout):
+            FileLock(str(output / ".run.lock"), timeout=0).acquire()
+        raise failure
+    assert caught.value is failure
+    with FileLock(str(output / ".run.lock"), timeout=0):
+        pass
+
+
+def test_output_context_translates_missing_mpm_dependency_and_releases_lock(
+    config_path, tmp_path, monkeypatch
+):
+    from importlib.metadata import PackageNotFoundError
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    output = tmp_path / "run"
+    output.mkdir()
+    failure = PackageNotFoundError("newton")
+
+    def missing_version(name):
+        raise failure
+
+    monkeypatch.setattr(task_module.importlib.metadata, "version", missing_version)
+    with (
+        pytest.raises(AnchorBenchError, match="uv sync --extra mpm") as caught,
+        task.output_context(output),
+    ):
+        pytest.fail("Missing dependency must prevent entry")
+    assert caught.value.__cause__ is failure
+    with FileLock(str(output / ".run.lock"), timeout=0):
+        pass
