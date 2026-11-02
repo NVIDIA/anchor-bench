@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Type, Union
 from anchor_bench.core.artifacts import (
     COMPLETION_MARKER,
     get_or_create_output_folder,
+    resolve_output_folder,
     write_yaml,
 )
 from anchor_bench.errors import (
@@ -83,13 +84,16 @@ class TaskRunner:
                 f"Registered task types: {known_types}."
             )
 
-        output_directory, already_completed = get_or_create_output_folder(
+        task = task_class(config)
+        output_directory = resolve_output_folder(
             config,
             output_root=getattr(config, "output_dir", None),
             output_folder=output,
-            initialize_config=False,
         )
-        task = task_class(config)
+        task.validate_output_preflight(output_directory, force=force, resume=resume)
+        get_or_create_output_folder(
+            config, output_folder=output_directory, initialize_config=False
+        )
         with task.output_context(output_directory, force=force, resume=resume):
             already_completed = (output_directory / COMPLETION_MARKER).exists()
             if already_completed and not force:

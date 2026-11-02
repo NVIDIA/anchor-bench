@@ -533,3 +533,59 @@ def test_output_context_translates_missing_mpm_dependency_and_releases_lock(
     assert caught.value.__cause__ is failure
     with FileLock(str(output / ".run.lock"), timeout=0):
         pass
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_mpm_resume_without_checkpoint_does_not_mutate_output(
+    config_path, tmp_path, explicit, existing
+):
+    from anchor_bench.core.artifacts import resolve_output_folder
+
+    data = yaml.safe_load(config_path.read_text())
+    data["output_dir"] = str(tmp_path / "output")
+    config_path.write_text(yaml.safe_dump(data))
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    requested = tmp_path / "explicit" if explicit else None
+    resolved = resolve_output_folder(
+        config, output_root=config.output_dir, output_folder=requested
+    )
+    if existing:
+        resolved.mkdir(parents=True)
+        (resolved / "config.yaml").write_text("original config")
+        (resolved / "sentinel").write_text("keep")
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises(AnchorBenchError, match="Cannot resume: inputs.json"):
+        TaskRunner().run(str(config_path), resume=True, output=requested)
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+    assert resolved.exists() is existing
+    if not existing:
+        assert not (tmp_path / "output").exists()
+
+
+def test_mpm_resume_uses_default_output_path(config_path, tmp_path, monkeypatch):
+    from anchor_bench.core.artifacts import resolve_output_folder
+
+    data = yaml.safe_load(config_path.read_text())
+    data["output_dir"] = str(tmp_path / "output")
+    config_path.write_text(yaml.safe_dump(data))
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    resolved = resolve_output_folder(config, output_root=config.output_dir)
+    calls = 0
+
+    def run(self, output_directory):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise KeyboardInterrupt
+        return output_directory
+
+    monkeypatch.setattr(MpmSysIdTask, "run", run)
+    with pytest.raises(KeyboardInterrupt):
+        TaskRunner().run(str(config_path))
+    assert (resolved / "inputs.json").is_file()
+    assert TaskRunner().run(str(config_path), resume=True) == resolved
+    assert calls == 2
+    assert (resolved / ".completed").is_file()

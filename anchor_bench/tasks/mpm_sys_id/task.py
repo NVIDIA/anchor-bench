@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 
 
 class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
+    def validate_output_preflight(
+        self, output: Path, *, force: bool = False, resume: bool = False
+    ) -> None:
+        """Reject a missing resume checkpoint before any filesystem mutation.
+
+        This read-only check also permits resume at the config-derived path.
+        output_context rechecks checkpoint state while holding the run lock.
+        """
+        if resume and not (output / "inputs.json").is_file():
+            raise AnchorBenchError("Cannot resume: inputs.json does not exist")
+
     @contextmanager
     def output_context(
         self, output: Path, *, force: bool = False, resume: bool = False

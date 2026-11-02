@@ -229,3 +229,52 @@ def test_base_task_rejects_indirect_inheritance():
 
         class IndirectTask(DirectTask):
             pass
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+def test_unsupported_resume_does_not_mutate_output(config_path, explicit, existing):
+    from anchor_bench.core.artifacts import resolve_output_folder
+    from anchor_bench.errors import AnchorBenchError
+
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def run(self, output_directory: Path) -> Path:
+            pytest.fail("Rejected resume must not execute the task")
+
+    config = parse(config_path)
+    assert isinstance(config, ActuatorSysIdConfig)
+    requested = config_path.parent / "explicit" if explicit else None
+    resolved = resolve_output_folder(
+        config, output_root=config.output_dir, output_folder=requested
+    )
+    if existing:
+        resolved.mkdir(parents=True)
+        (resolved / "config.yaml").write_text("original config")
+        (resolved / ".completed").touch()
+    before = {p: p.read_bytes() for p in config_path.parent.rglob("*") if p.is_file()}
+    with pytest.raises(AnchorBenchError, match="does not support --resume"):
+        TaskRunner({"actuator_sys_id": RecordingTask}).run(
+            str(config_path), resume=True, output=requested
+        )
+    assert {
+        p: p.read_bytes() for p in config_path.parent.rglob("*") if p.is_file()
+    } == before
+    assert resolved.exists() is existing
+    if not existing:
+        assert not (config_path.parent / "output").exists()
+
+
+def test_preflight_runs_before_output_creation(config_path):
+    events = []
+
+    class RecordingTask(BaseTask[ActuatorSysIdConfig]):
+        def validate_output_preflight(self, output, *, force=False, resume=False):
+            assert not output.parent.exists()
+            assert not output.exists()
+            events.append("preflight")
+
+        def run(self, output_directory: Path) -> Path:
+            assert events
+            return output_directory
+
+    TaskRunner({"actuator_sys_id": RecordingTask}).run(str(config_path))

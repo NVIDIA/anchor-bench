@@ -55,6 +55,19 @@ class BaseTask(ABC, Generic[ConfigT]):
             f"{cls.__name__} must bind a concrete config as BaseTask[ConfigType]"
         )
 
+    def validate_output_preflight(
+        self, output: Path, *, force: bool = False, resume: bool = False
+    ) -> None:
+        """Validate output options before the runner mutates the filesystem.
+
+        The output path is resolved but may not exist. This hook must remain
+        read-only: reject invalid requests before creating directories, locks,
+        or artifacts. Recheck state-sensitive conditions in output_context
+        under any required lock; this preflight does not provide synchronization.
+        """
+        if resume:
+            raise AnchorBenchError(f"{self.name()} does not support --resume")
+
     @contextmanager
     def output_context(
         self, output: Path, *, force: bool = False, resume: bool = False
