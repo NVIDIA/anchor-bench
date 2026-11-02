@@ -297,8 +297,11 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
     requested_context = {}
 
     class FakeContext:
-        def create_sysid_evaluator(self, task_config, parameter_space):
+        def create_sysid_evaluator(
+            self, task_config, parameter_space, *, trajectory_count
+        ):
             assert task_config is config
+            assert trajectory_count == 1
             return FakeEvaluator()
 
     def create_context(backend, usd_path, *, fixed_base):

@@ -46,7 +46,9 @@ class ActuatorSysIdTask(BaseTask[ActuatorSysIdConfig]):
             self.config.simulation.usd_path,
             fixed_base=True,
         )
-        evaluator = context.create_sysid_evaluator(self.config, parameter_space)
+        evaluator = context.create_sysid_evaluator(
+            self.config, parameter_space, trajectory_count=len(trajectories)
+        )
         objective = ActuatorSysIdObjective(
             parameter_space,
             evaluator,

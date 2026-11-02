@@ -15,6 +15,7 @@ import warp as wp
 logger = logging.getLogger(__name__)
 
 BeforeSubstep = Callable[[newton.State, "newton.Control | None", float], None]
+AfterInterval = Callable[[newton.State], None]
 
 
 class NewtonStepExecutor:
@@ -46,6 +47,7 @@ class NewtonStepExecutor:
         self._graph: wp.Graph | None = None
         self._graph_key: tuple[float, int] | None = None
         self._before_substep: BeforeSubstep | None = None
+        self._after_interval: AfterInterval | None = None
 
     @property
     def state(self) -> newton.State:
@@ -66,6 +68,16 @@ class NewtonStepExecutor:
         """
 
         self._before_substep = callback
+        self._graph = None
+        self._graph_key = None
+
+    def set_after_interval(self, callback: AfterInterval | None) -> None:
+        """Run ``callback(state)`` after every interval on the canonical state.
+
+        Any captured graph is dropped so the next capture includes the callback.
+        """
+
+        self._after_interval = callback
         self._graph = None
         self._graph_key = None
 
@@ -138,6 +150,8 @@ class NewtonStepExecutor:
                 canonical.assign(state_next)
             else:
                 state, state_next = state_next, state
+        if self._after_interval is not None:
+            self._after_interval(canonical)
 
     def _step_once(
         self,

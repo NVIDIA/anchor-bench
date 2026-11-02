@@ -159,6 +159,7 @@ class ActuatorSysIdConfig(BaseConfig):
     optimizer: CmaesOptimizerConfig
     simulation: NewtonSimulationConfig
     num_envs: CmaesPopulationSize = 64
+    trajectory_batch_size: Optional[PositiveInteger] = None
     buffer_time: NonNegativeNumber = 0.0
     seed: NonNegativeInteger = 0
     output_dir: NonEmptyString = "outputs/actuator_sys_id"

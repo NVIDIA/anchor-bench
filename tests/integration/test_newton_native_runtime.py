@@ -69,11 +69,15 @@ def Xform "Slider" (
     return asset
 
 
-def _evaluator(config: ActuatorSysIdConfig) -> NewtonPopulationEvaluator:
+def _evaluator(
+    config: ActuatorSysIdConfig, *, trajectory_count: int = 1
+) -> NewtonPopulationEvaluator:
     context = create_simulation_context(
         config.simulation.type, config.simulation.usd_path, fixed_base=True
     )
-    evaluator = context.create_sysid_evaluator(config, create_parameter_space(config))
+    evaluator = context.create_sysid_evaluator(
+        config, create_parameter_space(config), trajectory_count=trajectory_count
+    )
     assert isinstance(evaluator, NewtonPopulationEvaluator)
     return evaluator
 
@@ -357,6 +361,46 @@ def test_repeated_trajectory_reset_is_deterministic(
     assert not np.allclose(middle, first)
     np.testing.assert_allclose(repeated, first, rtol=1.0e-6, atol=1.0e-9)
     np.testing.assert_allclose(repeated_q.numpy(), positions, rtol=1.0e-6, atol=1.0e-7)
+
+
+@pytest.mark.parametrize(("solver_type", "implementation"), RUNTIMES)
+@pytest.mark.parametrize("batch_size", [2, None], ids=["partial-batch", "all"])
+def test_parallel_trajectories_match_one_at_a_time(
+    scalar_asset: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    solver_type: str,
+    implementation: str,
+    batch_size: int | None,
+) -> None:
+    # Leaking padded steps into scores, mapping worlds to the wrong slot, or
+    # resetting every slot to one pose changes these against serial replay.
+    config = _config(
+        scalar_asset,
+        delay_ms=20,
+        buffer_time=0.02,
+        solver_type=solver_type,
+        implementation=implementation,
+    )
+    episodes = [
+        _trajectory(0.6, 0.23),
+        _trajectory(-0.7, -0.47, samples=13),
+        _trajectory(0.2, 0.5, samples=31),
+    ]
+    population = [_candidate(), _candidate(stiffness=80.0, armature=0.4)]
+    scores = {}
+    for name, size in (("serial", 1), ("parallel", batch_size)):
+        monkeypatch.setattr(SimulationContext, "_instance", None)
+        batched = config.model_copy(update={"trajectory_batch_size": size})
+        with wp.ScopedDevice("cpu"):
+            evaluator = _evaluator(batched, trajectory_count=len(episodes))
+            scores[name] = evaluator.evaluate(population, episodes).copy()
+        assert evaluator.trajectory_slots == (size or len(episodes))
+
+    assert np.isfinite(scores["serial"]).all()
+    assert abs(scores["serial"][0] - scores["serial"][1]) > 1.0e-4
+    np.testing.assert_allclose(
+        scores["parallel"], scores["serial"], rtol=1.0e-12, atol=0.0
+    )
 
 
 def _native_runtime(

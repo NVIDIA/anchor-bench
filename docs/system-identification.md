@@ -26,8 +26,8 @@ uv run anchor-bench \
   --output outputs/so101_actuator_sysid
 ```
 
-The configuration evaluates up to 100 CMA-ES generations across 64 replicated
-worlds and may stop earlier when it reaches the configured convergence target.
+The configuration evaluates up to 100 CMA-ES generations with a population of
+64 candidates and may stop earlier when it reaches the configured convergence target.
 The first run downloads the trajectories into the Hugging Face cache; later
 runs reuse the cached files.
 
@@ -89,9 +89,19 @@ both are 0.005 seconds. Joint names must be unique across parameter groups and
 must match the canonical names produced by the dataset loader and authored in
 the USD.
 
-Optional top-level settings include `num_envs`, `buffer_time`, `seed`,
-`output_dir`, descriptive tags, and an [`mlops` block](mlops.md). The CMA-ES
-population contains at least two environments; `num_envs` defaults to 64.
+Optional top-level settings include `num_envs`, `trajectory_batch_size`,
+`buffer_time`, `seed`, `output_dir`, descriptive tags, and an
+[`mlops` block](mlops.md). `num_envs` is the CMA-ES population size: at least
+two, defaulting to 64.
+
+Each generation replays every trajectory for every candidate in parallel: one
+Newton world per (candidate, trajectory) pair, so the simulation holds
+`num_envs × trajectory_batch_size` worlds. Trajectories of different lengths
+step together; a shorter one holds its last command and stops contributing to
+the score once it ends. `trajectory_batch_size` defaults to all trajectories in
+one rollout. Set it lower when that many worlds do not fit in GPU memory; the
+trajectories are then replayed in batches of that size, with the same
+objective.
 `buffer_time` excludes an aligned prefix of each recorded trajectory from the
 objective while still replaying its commands, allowing the simulated state to
 settle without advancing it ahead of the measurements.

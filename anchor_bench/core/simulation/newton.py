@@ -20,6 +20,7 @@ from anchor_bench.core.simulation.newton_solvers import (
     get_solver_adapter,
 )
 from anchor_bench.core.simulation.newton_stepper import (
+    AfterInterval,
     BeforeSubstep,
     NewtonStepExecutor,
 )
@@ -65,14 +66,20 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
             self._initialized = False
 
     def create_sysid_evaluator(
-        self, config: ActuatorSysIdConfig, parameter_space: ParameterSpace
+        self,
+        config: ActuatorSysIdConfig,
+        parameter_space: ParameterSpace,
+        *,
+        trajectory_count: int = 1,
     ) -> PopulationEvaluator:
         # Imported here because the evaluator module depends on this one.
         from anchor_bench.tasks.actuator_sys_id.simulation import (
             NewtonPopulationEvaluator,
         )
 
-        return NewtonPopulationEvaluator(config, parameter_space, self)
+        return NewtonPopulationEvaluator(
+            config, parameter_space, self, trajectory_count=trajectory_count
+        )
 
     def initialize(
         self,
@@ -225,6 +232,12 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
 
         self._ensure_initialized()
         self._step_executor.set_before_substep(callback)
+
+    def set_after_interval(self, callback: AfterInterval | None) -> None:
+        """Run a callback after each simulation interval, eager or captured."""
+
+        self._ensure_initialized()
+        self._step_executor.set_after_interval(callback)
 
     def step(self, *, dt: float, substeps: int = 1) -> None:
         """Advance every world over one eager or graph-captured interval."""

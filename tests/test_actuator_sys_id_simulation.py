@@ -22,8 +22,10 @@ from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_
 from anchor_bench.tasks.actuator_sys_id.simulation import (
     NewtonPopulationEvaluator,
     _accumulate_position_error,
+    _advance_step,
     _builder_joint_indices,
     _model_joint_indices,
+    _write_targets,
 )
 
 
@@ -220,6 +222,9 @@ def test_newton_evaluator_uses_shared_simulation_context(
         def set_before_substep(self, callback):
             self.before_substep = callback
 
+        def set_after_interval(self, callback):
+            self.after_interval = callback
+
         def capture_step_graph(self, *, dt, substeps):
             self.captured_step = (dt, substeps)
             return True
@@ -285,9 +290,10 @@ def test_newton_evaluator_uses_shared_simulation_context(
     assert evaluator.run_summary() == {
         "solver": {"type": "warp_mujoco", "settings": context.solver_settings}
     }
+    assert context.after_interval == evaluator._after_interval
     assert (
-        "Initialized device score accumulation device=cpu worlds=2 joints=1"
-        in caplog.text
+        "Initialized device score accumulation device=cpu worlds=2 "
+        "trajectory_slots=1 joints=1" in caplog.text
     )
 
     candidate: Candidate = {"hip": {"stiffness": 20.0}}
@@ -310,7 +316,7 @@ def test_newton_evaluator_uses_shared_simulation_context(
 def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
     class FakeScoreArray:
         def __init__(self):
-            self.values = np.zeros(2, dtype=np.float64)
+            self.values = np.zeros(4, dtype=np.float64)
 
         def zero_(self):
             self.values.fill(0.0)
@@ -320,37 +326,43 @@ def test_newton_evaluator_weights_episode_mse_by_transition_count(monkeypatch):
 
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
     evaluator.num_envs = 2
+    evaluator.trajectory_slots = 2
+    evaluator.buffer_steps = 0
     evaluator.joint_names = ["hip"]
+    evaluator._commands = cast(Any, SimpleNamespace(shape=(2, 10, 1)))
     score_sums = FakeScoreArray()
     evaluator._score_sums = cast(Any, score_sums)
-    short = Trajectory(
-        experiment="short",
-        joint_names=["hip"],
-        commanded_position=np.zeros((2, 1)),
-        measured_position=np.zeros((2, 1)),
-    )
-    long = Trajectory(
-        experiment="long",
-        joint_names=["hip"],
-        commanded_position=np.zeros((3, 1)),
-        measured_position=np.zeros((3, 1)),
-    )
+
+    def trajectory(name, samples):
+        return Trajectory(
+            experiment=name,
+            joint_names=["hip"],
+            commanded_position=np.zeros((samples, 1)),
+            measured_position=np.zeros((samples, 1)),
+        )
+
+    episodes = [trajectory("short", 2), trajectory("long", 3), trajectory("odd", 4)]
     episode_mse = {
         "short": np.asarray([3.0, 5.0]),
         "long": np.asarray([0.0, 2.0]),
+        "odd": np.asarray([1.0, 1.0]),
     }
     monkeypatch.setattr(evaluator, "_apply_population", lambda population: None)
+    batches = []
 
-    def evaluate_trajectory(trajectory):
-        transitions = trajectory.measured_position.shape[0] - 1
-        score_sums.values += episode_mse[trajectory.experiment] * transitions
-        return transitions
+    def evaluate_batch(batch, steps):
+        batches.append([episode.experiment for episode in batch])
+        world_sums = score_sums.values.reshape(2, 2)
+        for slot, (episode, count) in enumerate(zip(batch, steps)):
+            world_sums[slot] += episode_mse[episode.experiment] * count
 
-    monkeypatch.setattr(evaluator, "_evaluate_trajectory", evaluate_trajectory)
+    monkeypatch.setattr(evaluator, "_evaluate_batch", evaluate_batch)
 
-    scores = evaluator.evaluate([{}, {}], [short, long])
+    scores = evaluator.evaluate([{}, {}], episodes)
 
-    np.testing.assert_allclose(scores, [1.0, 3.0])
+    # Three trajectories over two slots: a full batch, then a partial one.
+    assert batches == [["short", "long"], ["odd"]]
+    np.testing.assert_allclose(scores, [6.0 / 6.0, 12.0 / 6.0])
 
 
 def test_newton_evaluator_rejects_a_buffer_without_scored_transitions():
@@ -365,36 +377,65 @@ def test_newton_evaluator_rejects_a_buffer_without_scored_transitions():
     )
 
     with pytest.raises(ValueError, match="at least one scored transition"):
-        evaluator._evaluate_trajectory(trajectory)
+        evaluator._trajectory_steps(trajectory)
 
 
-def test_position_error_kernel_accumulates_all_worlds_and_samples():
-    joint_q = wp.array([2.0, 3.0, 3.0, 4.0], dtype=wp.float32, device="cpu")
-    joint_q_indices = wp.array([0, 1, 2, 3], dtype=wp.int32, device="cpu")
-    measured_positions = wp.array(
-        [2.0, 3.0, 3.0, 4.0],
-        dtype=wp.float64,
-        device="cpu",
-    )
+def test_position_error_kernel_scores_each_slot_inside_its_window():
+    # Two slots of one candidate: slot 0 scores steps [1, 3), slot 1 is padding.
+    joint_q = wp.array([2.0, 3.0, 5.0, 7.0], dtype=wp.float32, device="cpu")
+    joint_q_indices = wp.array([[0, 1], [2, 3]], dtype=wp.int32, device="cpu")
+    measured = np.zeros((2, 3, 2))
+    measured[0] = [[9.0, 9.0], [1.0, 1.0], [2.0, 4.0]]
+    measured_positions = wp.array(measured, dtype=wp.float64, device="cpu")
+    score_end = wp.array([3, 0], dtype=wp.int32, device="cpu")
+    step = wp.zeros(1, dtype=wp.int32, device="cpu")
     score_sums = wp.zeros(2, dtype=wp.float64, device="cpu")
 
-    wp.launch(
-        _accumulate_position_error,
-        dim=2,
-        inputs=[joint_q, joint_q_indices, measured_positions, 0, 2],
-        outputs=[score_sums],
+    for _ in range(4):
+        wp.launch(
+            _accumulate_position_error,
+            dim=2,
+            # buffer_steps=1, population_size=1
+            inputs=[
+                joint_q,
+                joint_q_indices,
+                measured_positions,
+                score_end,
+                step,
+                1,
+                1,
+            ],
+            outputs=[score_sums],
+            device="cpu",
+        )
+        wp.launch(_advance_step, dim=1, inputs=[step], device="cpu")
+
+    # Step 1: (2-1)^2 + (3-1)^2 = 5; step 2: (2-2)^2 + (3-4)^2 = 1.
+    np.testing.assert_allclose(score_sums.numpy(), [6.0, 0.0])
+    assert step.numpy()[0] == 4
+
+
+def test_write_targets_kernel_maps_slots_and_holds_last_command():
+    # Two candidates per slot, two slots, one joint; slot 1 ends after step 0.
+    commands = wp.array(
+        [[[10.0], [11.0], [12.0]], [[20.0], [21.0], [22.0]]],
+        dtype=wp.float32,
         device="cpu",
     )
-    joint_q.assign([3.0, 4.0, 4.0, 5.0])
+    last_step = wp.array([2, 0], dtype=wp.int32, device="cpu")
+    step = wp.array([1], dtype=wp.int32, device="cpu")
+    target_indices = wp.array([[4], [3], [2], [1]], dtype=wp.int32, device="cpu")
+    joint_target_q = wp.full(5, -1.0, dtype=wp.float32, device="cpu")
+
     wp.launch(
-        _accumulate_position_error,
-        dim=2,
-        inputs=[joint_q, joint_q_indices, measured_positions, 1, 2],
-        outputs=[score_sums],
+        _write_targets,
+        dim=4,
+        inputs=[commands, last_step, step, 2, target_indices],
+        outputs=[joint_target_q],
         device="cpu",
     )
 
-    np.testing.assert_allclose(score_sums.numpy(), [0.0, 4.0])
+    np.testing.assert_allclose(joint_target_q.numpy(), [-1.0, 20.0, 20.0, 11.0, 11.0])
 
 
 def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch):
@@ -436,6 +477,15 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
     evaluator._joint_q_indices = np.asarray([[0], [1]])
     evaluator._joint_dof_indices = np.asarray([[0], [1]])
     evaluator._actuations = []
+    evaluator.num_envs = 2
+    evaluator._base_targets = np.asarray([4.0, 5.0], dtype=np.float32)
+    evaluator._joint_target_q = cast(Any, FakeArray([0.0, 0.0]))
+    step_resets = []
+    evaluator._step = cast(Any, SimpleNamespace(zero_=lambda: step_resets.append(1)))
+    target_writes = []
+    monkeypatch.setattr(
+        evaluator, "_launch_write_targets", lambda: target_writes.append(1)
+    )
     fk_calls = []
     monkeypatch.setattr(
         simulation_module.newton,
@@ -443,9 +493,11 @@ def test_newton_evaluator_restores_measured_pose_after_solver_reset(monkeypatch)
         lambda *args: fk_calls.append(args),
     )
 
-    evaluator._reset(np.asarray([0.75], dtype=np.float32))
+    evaluator._reset(np.asarray([[0.75]], dtype=np.float32))
 
     assert solver.reset_states == [state]
+    assert step_resets == [1] and target_writes == [1]
+    np.testing.assert_allclose(evaluator._joint_target_q.values, [4.0, 5.0])
     assert fk_calls == [
         (context.model, state.joint_q, state.joint_qd, state),
         (context.model, state_next.joint_q, state_next.joint_qd, state_next),
@@ -471,10 +523,6 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
         def assign(self, values):
             self.values = np.asarray(values, dtype=np.float32)
 
-    class FakeScoreArray(FakeArray):
-        def zero_(self):
-            self.values.fill(0.0)
-
     class FakeSolver:
         def __init__(self):
             self.reset_states = []
@@ -498,17 +546,20 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 joint_friction=FakeArray([0.0, 0.0, 0.0, 0.0]),
                 joint_damping=FakeArray([0.0, 0.0, 0.0, 0.0]),
             )
+            self.model.device = "cpu"
+            # Real CPU Warp arrays, so the evaluator's own kernels run.
             self.state = SimpleNamespace(
-                joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
-                joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_q=wp.zeros(4, dtype=wp.float32, device="cpu"),
+                joint_qd=wp.zeros(4, dtype=wp.float32, device="cpu"),
             )
             self.state_next = SimpleNamespace(
-                joint_q=FakeArray([0.0, 0.0, 0.0, 0.0]),
-                joint_qd=FakeArray([0.0, 0.0, 0.0, 0.0]),
+                joint_q=wp.zeros(4, dtype=wp.float32, device="cpu"),
+                joint_qd=wp.zeros(4, dtype=wp.float32, device="cpu"),
             )
             self.control = SimpleNamespace(
-                joint_target_q=FakeArray([-9.0] * 6),
+                joint_target_q=wp.full(6, -9.0, dtype=wp.float32, device="cpu"),
             )
+            self.captured_steps = []
             self.solver = FakeSolver()
             self.step_dts = []
             self.target_history = []
@@ -519,6 +570,12 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 )
             )
 
+        def set_after_interval(self, callback):
+            self.after_interval = callback
+
+        def capture_step_graph(self, *, dt, substeps):
+            self.captured_steps.append((dt, substeps))
+
         def step(self, *, dt, substeps=1):
             physics_dt = dt / substeps
             for _ in range(substeps):
@@ -528,11 +585,14 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
                 )
                 if len(self.step_dts) % 2 == 0:
                     self.state.joint_q.assign(next(self._simulated_positions))
+            self.after_interval(self.state)
 
     context = FakeContext()
     evaluator = NewtonPopulationEvaluator.__new__(NewtonPopulationEvaluator)
     evaluator.joint_names = ["hip", "knee"]
     evaluator.num_envs = 2
+    evaluator.trajectory_slots = 1
+    evaluator.world_count = 2
     evaluator.physics_dt = 0.001
     evaluator.control_substeps = 2
     evaluator.buffer_steps = 1
@@ -555,24 +615,8 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
             dof_indices=evaluator._joint_dof_indices,
         )
     ]
-    evaluator._device = cast(Any, "cpu")
-    evaluator._joint_q_indices_device = cast(Any, object())
-    score_sums = FakeScoreArray([0.0, 0.0])
-    evaluator._score_sums = cast(Any, score_sums)
+    evaluator._initialize_device_buffers()
     monkeypatch.setattr(simulation_module.newton, "eval_fk", lambda *args: None)
-    monkeypatch.setattr(
-        simulation_module.wp,
-        "array",
-        lambda values, **kwargs: FakeArray(values),
-    )
-
-    def launch_position_error(measured_positions, sample_index):
-        simulated = context.state.joint_q.values[evaluator._joint_q_indices]
-        measured = measured_positions.values.reshape(-1, 2)[sample_index]
-        error = simulated - measured[np.newaxis, :]
-        score_sums.values += np.sum(np.square(error), axis=1)
-
-    monkeypatch.setattr(evaluator, "_launch_position_error", launch_position_error)
 
     population: list[Candidate] = [
         {
@@ -632,7 +676,8 @@ def test_newton_evaluator_applies_candidates_and_scores_delayed_trajectories(
     np.testing.assert_allclose(context.target_history[::2], expected_targets)
     np.testing.assert_allclose(context.target_history[1::2], expected_targets)
     np.testing.assert_allclose(context.step_dts, [0.001] * 4)
-    assert context.state.joint_q.numpy_calls == 0
-    assert score_sums.numpy_calls == 1
+    # The two-step trajectory grows the one-step buffers, which recaptures.
+    assert evaluator._commands.shape == (1, 2, 2)
+    assert context.captured_steps == [(pytest.approx(0.002), 2)]
     assert context.solver.reset_states == [context.state]
     assert len(context.solver.changed_flags) == 1
