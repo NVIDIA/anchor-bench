@@ -731,3 +731,16 @@ def test_shutdown_poll_terminates_worker_without_recording_failure(
     process.terminate.assert_called_once()
     assert process.kill.call_count == int(needs_kill)
     assert not (directory / "response.json").exists()
+
+
+def test_device_cap_minimum_retains_lowest_frame():
+    import warp as wp
+
+    from anchor_bench.tasks.mpm_sys_id.simulations.coupling import track_min_cap_z
+
+    minimum = wp.array([float("inf")], dtype=float, device="cpu")
+    body_q = wp.array([[0, 0, 2, 0, 0, 0, 1]], dtype=wp.transform, device="cpu")
+    for height in (2.0, 0.25, 0.5, 1.0):
+        body_q.assign(np.array([[0, 0, height, 0, 0, 0, 1]], dtype=np.float32))
+        wp.launch(track_min_cap_z, dim=1, inputs=[body_q, minimum], device="cpu")
+    assert float(minimum.numpy()[0]) == 0.25

@@ -80,8 +80,16 @@ def test_cuda_graph_matches_eager(kind):
     with wp.ScopedDevice("cuda:0"):
         for graphs in (False, True):
             simulation = create_simulation(settings, {**DEFAULTS, **FIXED}, graphs)
+            host_min_cap_z = float("inf")
             for _ in range(180 if kind == "bottle_drop" else 12):
                 simulation.step()
+                if isinstance(simulation, BottleSimulation):
+                    host_min_cap_z = min(
+                        host_min_cap_z,
+                        float(require_array(simulation.state_0.body_q).numpy()[0, 2]),
+                    )
+            if isinstance(simulation, BottleSimulation):
+                assert simulation.measure()["min_cap_z_m"] == host_min_cap_z
             simulation.test_final()
             assert isinstance(simulation, (BottleSimulation, PourSimulation))
             positions = require_array(simulation.state_0.particle_q).numpy()

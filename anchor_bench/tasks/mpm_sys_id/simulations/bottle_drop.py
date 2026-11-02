@@ -16,7 +16,12 @@ import warp as wp
 from newton.solvers import SolverImplicitMPM
 
 from .arrays import require_array
-from .coupling import _lift_body, compute_body_forces, subtract_body_force
+from .coupling import (
+    _lift_body,
+    compute_body_forces,
+    subtract_body_force,
+    track_min_cap_z,
+)
 from .material import apply_material
 
 
@@ -229,7 +234,6 @@ class Simulation:
         self.removal_start = args.pre_settle_seconds + args.impact_settle_seconds
         self.removal_end = self.removal_start + args.lift_distance / args.lift_speed
         self.mass = args.water_volume_m3 * 1000.0
-        self.min_cap_z = float("inf")
         builder = newton.ModelBuilder()
         SolverImplicitMPM.register_custom_attributes(builder)
         spacing = args.voxel_size / 2
@@ -295,6 +299,9 @@ class Simulation:
         )
         self.builder = builder
         self.model = builder.finalize()
+        self._min_cap_z = wp.array(
+            [float("inf")], dtype=float, device=self.model.device
+        )
         self.model.set_gravity((0, 0, -9.81))
         apply_material(self.model, args)
         config = SolverImplicitMPM.Config()
@@ -374,8 +381,13 @@ class Simulation:
                 self.warmed_phases.add(self.phase)
             self.sim_time += self.sim_dt
         self.solver.check_sparse_grid_rebuild_status()
-        cap_z = float(require_array(self.state_0.body_q).numpy()[0, 2])
-        self.min_cap_z = min(self.min_cap_z, cap_z)
+        # Preserve frame-end sampling without synchronizing body poses to the host.
+        wp.launch(
+            track_min_cap_z,
+            dim=1,
+            inputs=[require_array(self.state_0.body_q), self._min_cap_z],
+            device=self.model.device,
+        )
 
     def _substep(self):
         args = self.args
@@ -445,7 +457,7 @@ class Simulation:
             "rms_speed_m_s": float(np.sqrt(np.mean(np.sum(velocities**2, axis=1)))),
             "phase": self.phase,
             "valid": False,
-            "min_cap_z_m": self.min_cap_z,
+            "min_cap_z_m": float(self._min_cap_z.numpy()[0]),
         }
         if self.reference is not None:
             current, _ = self._surface()
@@ -492,8 +504,9 @@ class Simulation:
             rtol=1e-6,
         )
         if self.sim_time > self.removal_end + 1:
-            assert self.min_cap_z < self.args.bed_depth, (
+            measurement = self.measure()
+            assert measurement["min_cap_z_m"] < self.args.bed_depth, (
                 "Bottle never indented the sand"
             )
-            assert self.min_cap_z > 0, "Bottle passed through the sand bed"
-            assert self.measure()["valid"], "Crater not ready for measurement"
+            assert measurement["min_cap_z_m"] > 0, "Bottle passed through the sand bed"
+            assert measurement["valid"], "Crater not ready for measurement"

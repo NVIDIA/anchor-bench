@@ -90,3 +90,10 @@ def _lift_body(
         wp.transform_get_rotation(q),
     )
     body_qd[i] = wp.spatial_vector(wp.vec3(0.0, 0.0, speed), wp.vec3(0.0))
+
+
+@wp.kernel
+def track_min_cap_z(body_q: wp.array[wp.transform], minimum: wp.array[float]):
+    """Accumulate the bottle origin's lowest frame-end elevation on the device."""
+    cap_z = wp.transform_get_translation(body_q[0])[2]
+    wp.atomic_min(minimum, 0, cap_z)
