@@ -62,8 +62,12 @@ def _config(tmp_path, **overrides):
             "render_freq": 60,
             "solver": {
                 "type": "warp_mujoco",
-                "solver_iterations": 10,
-                "line_search_iterations": 4,
+                "settings": {
+                    "solver": "newton",
+                    "integrator": "implicitfast",
+                    "iterations": 10,
+                    "ls_iterations": 4,
+                },
             },
         },
         "num_envs": 2,
@@ -312,6 +316,7 @@ def test_task_runs_optimization_and_writes_artifacts(tmp_path, monkeypatch):
 
     assert result == output_directory
     assert written["best_mse"] == pytest.approx(0.25)
+    assert written["summary_fields"] == {}
     assert requested_context == {
         "backend": "newton",
         "usd_path": config.simulation.usd_path,
@@ -358,6 +363,12 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path):
         best_mse=0.125,
         history=[GenerationRecord(0, 0.125, 0.5)],
         identified_usd_path=identified_usd_path,
+        summary_fields={
+            "solver": {
+                "type": "warp_mujoco",
+                "settings": {"itertions": "NOT SET: not a SolverMuJoCo parameter"},
+            }
+        },
     )
 
     document = yaml.safe_load(result.best_parameters_path.read_text())
@@ -365,4 +376,6 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path):
     assert document["parameters"] == candidate
     assert "0,0.125,0.5" in result.optimization_log_path.read_text()
     assert result.run_summary_path.is_file()
+    summary = yaml.safe_load(result.run_summary_path.read_text())
+    assert summary["solver"]["settings"]["itertions"].startswith("NOT SET: ")
     assert result.identified_usd_path == identified_usd_path

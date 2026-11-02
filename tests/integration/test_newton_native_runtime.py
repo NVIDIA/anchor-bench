@@ -78,7 +78,12 @@ def _evaluator(config: ActuatorSysIdConfig) -> NewtonPopulationEvaluator:
 
 
 def _config(
-    asset: Path, *, delay_ms: int = 0, buffer_time: float = 0.0
+    asset: Path,
+    *,
+    delay_ms: int = 0,
+    buffer_time: float = 0.0,
+    solver_type: str = "warp_mujoco",
+    settings: dict | None = None,
 ) -> ActuatorSysIdConfig:
     return ActuatorSysIdConfig.model_validate(
         {
@@ -117,9 +122,15 @@ def _config(
                 "control_freq": 100,
                 "render_freq": 50,
                 "solver": {
-                    "type": "warp_mujoco",
-                    "solver_iterations": 10,
-                    "line_search_iterations": 4,
+                    "type": solver_type,
+                    "settings": settings
+                    if settings is not None
+                    else {
+                        "solver": "newton",
+                        "integrator": "implicitfast",
+                        "iterations": 10,
+                        "ls_iterations": 4,
+                    },
                 },
             },
             "num_envs": 2,
