@@ -192,13 +192,8 @@ def test_task_runner_loads_mlflow_backend_by_default(monkeypatch, tmp_path):
     backend = RecordingBackend()
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
     monkeypatch.setattr(task_runner, "MLflowBackend", lambda **options: backend)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
-    TaskRunner({"tracked": ReportingTask}).run("tracked.yaml")
+    TaskRunner({"tracked": ReportingTask}).run("tracked.yaml", output=tmp_path)
 
     assert backend.start_arguments == (
         "anchor-bench",
@@ -217,17 +212,12 @@ def test_task_runner_reports_unknown_backend(monkeypatch, tmp_path):
         update={"mlops": MLOpsConfig(backend="missing")}
     )
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
     with pytest.raises(
         MLOpsBackendNotFoundError,
         match="Available backends: mlflow",
     ):
-        TaskRunner({"tracked": ReportingTask}).run("tracked.yaml")
+        TaskRunner({"tracked": ReportingTask}).run("tracked.yaml", output=tmp_path)
 
 
 def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_path):
@@ -240,16 +230,11 @@ def test_task_runner_owns_run_and_task_reports_to_active_run(monkeypatch, tmp_pa
         return backend
 
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
     result = TaskRunner(
         {"tracked": ReportingTask},
         mlops_backends={"recording": create_backend},
-    ).run("tracked.yaml")
+    ).run("tracked.yaml", output=tmp_path)
 
     assert result == tmp_path
     assert factory_options == [{"mode": "offline"}]
@@ -297,17 +282,12 @@ def test_active_run_is_reset_when_task_fails(monkeypatch, tmp_path):
     config = _tracked_config()
     backend = RecordingBackend()
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
     with pytest.raises(RuntimeError, match="training failed"):
         TaskRunner(
             {"tracked": FailingTask},
             mlops_backends={"recording": lambda **options: backend},
-        ).run("tracked.yaml")
+        ).run("tracked.yaml", output=tmp_path)
 
     assert backend.context.exit_exception_type is RuntimeError
     assert get_active_run() is None
@@ -323,11 +303,6 @@ def test_output_validation_failure_marks_tracked_run_failed(monkeypatch, tmp_pat
     config = _tracked_config()
     backend = RecordingBackend()
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
     with pytest.raises(
         RuntimeError,
@@ -336,7 +311,7 @@ def test_output_validation_failure_marks_tracked_run_failed(monkeypatch, tmp_pat
         TaskRunner(
             {"tracked": MisdirectedTask},
             mlops_backends={"recording": lambda **options: backend},
-        ).run("tracked.yaml")
+        ).run("tracked.yaml", output=tmp_path)
 
     assert backend.context.exit_exception_type is RuntimeError
     assert get_active_run() is None
@@ -353,17 +328,12 @@ def test_backend_exit_failure_removes_completion_marker(monkeypatch, tmp_path):
     backend = RecordingBackend()
     backend.context = FailingExitContext(backend.run)
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
     with pytest.raises(OSError, match="run finalization failed"):
         TaskRunner(
             {"tracked": ReportingTask},
             mlops_backends={"recording": lambda **options: backend},
-        ).run("tracked.yaml")
+        ).run("tracked.yaml", output=tmp_path)
 
     assert backend.context.exit_exception_type is None
     assert get_active_run() is None
@@ -379,17 +349,12 @@ def test_artifact_failure_fails_run_without_completion_marker(monkeypatch, tmp_p
 
     monkeypatch.setattr(backend.run, "log_artifact", fail_artifact_upload)
     monkeypatch.setattr(task_runner, "parse", lambda path: config)
-    monkeypatch.setattr(
-        task_runner,
-        "get_or_create_output_folder",
-        lambda config, *, output_root=None, output_folder=None: (tmp_path, False),
-    )
 
     with pytest.raises(OSError, match="artifact upload failed"):
         TaskRunner(
             {"tracked": ReportingTask},
             mlops_backends={"recording": lambda **options: backend},
-        ).run("tracked.yaml")
+        ).run("tracked.yaml", output=tmp_path)
 
     assert backend.context.exit_exception_type is OSError
     assert get_active_run() is None

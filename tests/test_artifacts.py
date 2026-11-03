@@ -124,3 +124,25 @@ def test_get_or_create_output_folder_uses_explicit_output_folder(tmp_path: Path)
 
 def test_resolve_repo_root_returns_project_root():
     assert resolve_repo_root() == Path(__file__).resolve().parents[1]
+
+
+def test_output_creation_can_defer_config_until_locked(tmp_path):
+    from anchor_bench.schema.mpm_sys_id import MpmSysIdConfig
+
+    config = MpmSysIdConfig.model_validate(
+        {
+            "type": "mpm_sys_id",
+            "experiments": [
+                {
+                    "id": "pour",
+                    "input_data": {"source": "unused.csv"},
+                    "simulation": {"type": "sand_pour", "drop_height_m": 1.0},
+                }
+            ],
+        }
+    )
+    output, completed = get_or_create_output_folder(
+        config, output_folder=tmp_path / "deferred", initialize_config=False
+    )
+    assert output.is_dir() and not completed
+    assert not (output / "config.yaml").exists()

@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
   "cmaes",
+  "filelock>=3.16,<4",
   "GitPython==3.1.60",
   "huggingface-hub>=1,<2",
   "mlflow>=3.15.2,<4",
@@ -32,6 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mpm = ["scikit-learn==1.7.2"]
 dev = [
   "pyright>=1.1,<2",
   "pytest>=9.1.1,<10",
