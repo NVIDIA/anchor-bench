@@ -238,6 +238,7 @@ class Simulation:
         vertices, indices, com_z, inertia = bottle_mesh(
             args.bottle_radius, args.bottle_height, args.cap_radius, args.cap_height
         )
+        self.bottle_vertices = vertices
         builder.add_body(
             xform=wp.transform(
                 wp.vec3(0, 0, args.bed_depth + args.drop_height_m), wp.quat_identity()
@@ -406,7 +407,20 @@ class Simulation:
         velocities = require_array(self.state_0.particle_qd).numpy()
         if not np.isfinite(positions).all() or not np.isfinite(velocities).all():
             raise ValueError("Non-finite sand state")
+        pose = require_array(self.state_0.body_q).numpy()[0]
+        if not np.isfinite(pose).all():
+            raise ValueError("Non-finite bottle pose")
+        # Rotate the collision mesh by the current body quaternion (xyzw).
+        xyz, w = pose[3:6], pose[6]
+        cross = 2 * np.cross(xyz, self.bottle_vertices)
+        rotated = self.bottle_vertices + w * cross + np.cross(xyz, cross)
+        lowest_z = float(np.min(rotated[:, 2]) + pose[2])
+        # Include raised rims and displaced sand, not just the nominal bed plane.
+        clearance = lowest_z - max(
+            self.args.bed_depth, float(np.max(positions[:, 2] + self.radii))
+        )
         result = {
+            "bottle_clearance_m": clearance,
             "rms_speed_m_s": float(np.sqrt(np.mean(np.sum(velocities**2, axis=1)))),
             "phase": self.phase,
             "valid": False,
@@ -424,6 +438,7 @@ class Simulation:
             )
             result["valid"] = (
                 self.phase == "settling crater"
+                and clearance > 0
                 and self.sim_time >= self.removal_end + 1.0
                 and result["rms_speed_m_s"] < 0.03
                 and not result["touches_measurement_boundary"]
@@ -464,4 +479,7 @@ class Simulation:
                 "Bottle never indented the sand"
             )
             assert measurement["min_cap_z_m"] > 0, "Bottle passed through the sand bed"
+            assert measurement["bottle_clearance_m"] > 0, (
+                "Bottle has not cleared the sand bed"
+            )
             assert measurement["valid"], "Crater not ready for measurement"

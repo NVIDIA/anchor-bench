@@ -28,7 +28,10 @@ EXAMPLE = Path(__file__).parents[1] / "examples/mpm_sys_id/sand.yaml"
 
 
 @pytest.fixture
-def config_path(tmp_path):
+def config_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "anchor_bench.tasks.mpm_sys_id.task.validate_device", lambda device: None
+    )
     data = yaml.safe_load(EXAMPLE.read_text())
     for index, e in enumerate(data["experiments"]):
         e["enabled"] = index == 0
@@ -108,7 +111,8 @@ def test_objective_requires_all_enabled_experiments():
     )["valid"]
 
 
-def test_forest_replays_and_preserves_parameter_bounds(config_path):
+@pytest.mark.parametrize("seed", [48, 2**32 - 2, 2**32 - 1, 2**32, 2**80])
+def test_forest_replays_and_preserves_parameter_bounds(config_path, seed):
     pytest.importorskip("sklearn", reason="Install the mpm extra: uv sync --extra mpm")
     config = parse(config_path)
     assert isinstance(config, MpmSysIdConfig)
@@ -117,17 +121,19 @@ def test_forest_replays_and_preserves_parameter_bounds(config_path):
         for k, b in config.material.optimized.items()
     }
     history = []
+    strategies = set()
     for _ in range(20):
         point, strategy = propose(
-            history, bounds, seed=48, initial_samples=3, pool_size=32
+            history, bounds, seed=seed, initial_samples=3, pool_size=32
         )
         assert propose(
             json.loads(json.dumps(history)),
             bounds,
-            seed=48,
+            seed=seed,
             initial_samples=3,
             pool_size=32,
         ) == (point, strategy)
+        strategies.add(strategy)
         material = {**decode(point, bounds), **config.material.fixed}
         assert all(material[k] == v for k, v in FIXED.items())
         history.append(
@@ -137,6 +143,7 @@ def test_forest_replays_and_preserves_parameter_bounds(config_path):
                 "error": sum((v - 0.25) ** 2 for v in point),
             }
         )
+    assert "random_forest" in strategies
     assert any(h["error"] < history[0]["error"] for h in history[1:])
     assert decode([0] * 5, bounds)["damping"] == 0
 
@@ -251,6 +258,7 @@ def test_completed_worker_response_is_reused(config_path, tmp_path):
     request = {"material": config.material.fixed, "schema_version": 1}
     write_json(directory / "request.json", request)
     digest = hashlib.sha256((directory / "request.json").read_bytes()).hexdigest()
+    task.experiments = [{"id": "pour"}]
     expected = {"pour": {"valid": False, "failure_reason": "not settled"}}
     write_json(
         directory / "response.json",
@@ -414,7 +422,21 @@ def test_worker_failure_persistence(config_path, tmp_path, monkeypatch, failure)
     else:
         process.wait.side_effect = [KeyboardInterrupt, 0]
         process.poll.return_value = None
-    launch = Mock(return_value=process)
+
+    def launched(command, **kwargs):
+        import hashlib
+
+        request_path = Path(command[-2])
+        write_json(
+            request_path.parent / "worker_state.json",
+            {
+                "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                "stage": "candidate",
+            },
+        )
+        return process
+
+    launch = Mock(side_effect=launched)
     monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launch)
     directory = tmp_path / "trial"
     request = {"evaluation": 1}
@@ -446,7 +468,21 @@ def test_resume_after_worker_crash_advances_candidate(
     output = tmp_path / "run"
     process = Mock()
     process.wait.return_value = -11
-    launch = Mock(return_value=process)
+
+    def launched(command, **kwargs):
+        import hashlib
+
+        request_path = Path(command[-2])
+        write_json(
+            request_path.parent / "worker_state.json",
+            {
+                "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                "stage": "candidate",
+            },
+        )
+        return process
+
+    launch = Mock(side_effect=launched)
     monkeypatch.setattr(task_module.subprocess, "Popen", launch)
     original_write = task_module.write_json
 
@@ -867,3 +903,341 @@ def test_final_validation_reports_accumulated_grid_failure(kind):
         simulation.test_final()
     assert caught.value is failure
     simulation.solver.check_sparse_grid_rebuild_status.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("rotation", "lift", "cleared"),
+    [
+        ((0, 0, 0, 1), 1e-6, False),
+        ((0, 0, 0, 1), 0.4, True),
+        # Cap above the bed, but the sideways body or inverted base is embedded.
+        ((0, 2**-0.5, 0, 2**-0.5), 0.08, False),
+        ((0, 2**-0.5, 0, 2**-0.5), 0.4, True),
+        ((1, 0, 0, 0), 0.1, False),
+        ((1, 0, 0, 0), 0.4, True),
+    ],
+)
+def test_bottle_post_removal_requires_geometric_clearance(rotation, lift, cleared):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import warp as wp
+
+    from anchor_bench.tasks.mpm_sys_id.simulations.bottle_drop import (
+        Simulation,
+        bottle_mesh,
+    )
+
+    simulation = object.__new__(Simulation)
+    simulation.args = SimpleNamespace(
+        bed_depth=0.3, voxel_size=0.01, crater_threshold=0.02
+    )
+    simulation.bottle_vertices = bottle_mesh(0.04, 0.25, 0.015, 0.015)[0]
+    simulation.phase = "settling crater"
+    simulation.removal_end = 1.0
+    simulation.sim_time = 3.0
+    simulation.mass = simulation.initial_mass = 1.0
+    simulation.solver = Mock()
+    simulation.radii = np.array([0.005])
+    simulation.reference = np.full((40, 40), 0.3)
+    current = simulation.reference.copy()
+    current[15:25, 15:25] -= 0.04
+    simulation.surface_spacing = 0.01
+    simulation._surface = lambda: (current, 0.01)
+    with wp.ScopedDevice("cpu"):
+        simulation._min_cap_z = wp.array([0.2349], dtype=float)
+        simulation.model = Mock(
+            body_mass=wp.array([1.0]), particle_mass=wp.array([1.0])
+        )
+        simulation.state_0 = Mock(
+            body_q=wp.array([[0, 0, 0.2349 + lift, *rotation]], dtype=wp.transform),
+            body_qd=wp.zeros(1, dtype=wp.spatial_vector),
+            particle_q=wp.array([[0, 0, 0.295]], dtype=wp.vec3),
+            particle_qd=wp.zeros(1, dtype=wp.vec3),
+        )
+    measurement = simulation.measure()
+    assert measurement["valid"] is cleared
+    assert (measurement["bottle_clearance_m"] > 0) is cleared
+    if cleared:
+        simulation.test_final()
+    else:
+        with pytest.raises(AssertionError, match="Bottle has not cleared"):
+            simulation.test_final()
+
+
+@pytest.mark.parametrize("mode", ["bounded", "continuous"])
+def test_device_failure_stops_before_search(config_path, tmp_path, monkeypatch, mode):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    data = yaml.safe_load(config_path.read_text())
+    data["optimizer"]["stopping"] = (
+        {"mode": mode, "max_evaluations": 2} if mode == "bounded" else {"mode": mode}
+    )
+    data.setdefault("execution", {})["device"] = "cuda:999"
+    config_path.write_text(yaml.safe_dump(data))
+    # Use the real device resolver; other unit tests isolate hardware access.
+    from anchor_bench.tasks.mpm_sys_id.worker import validate_device
+
+    monkeypatch.setattr(task_module, "validate_device", validate_device)
+    launch = Mock()
+    monkeypatch.setattr(task_module.subprocess, "Popen", launch)
+    output = tmp_path / "bad-device"
+    with pytest.raises(SystemExit) as caught:
+        main(["mpm_sys_id", "--config", str(config_path), "--output", str(output)])
+    assert caught.value.code == 2
+    launch.assert_not_called()
+    assert not (output / ".completed").exists()
+    assert not list((output / "trials").glob("*/result.json"))
+    assert read_json(output / "status.json")["state"] == "failed"
+    assert read_json(output / "checkpoint.json")["next_evaluation"] == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        {},
+        {"measurements": {}},
+        {"failure": {"category": "initialization", "message": "CUDA unavailable"}},
+    ],
+)
+def test_worker_infrastructure_failure_is_fatal(
+    config_path, tmp_path, monkeypatch, response
+):
+    import hashlib
+    from unittest.mock import Mock
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    task.experiments = [{"id": "pour"}]
+    directory = tmp_path / "trial"
+
+    def launch(command, **kwargs):
+        request_path = Path(command[-2])
+        if response is not None:
+            write_json(
+                Path(command[-1]),
+                {
+                    "request_sha256": hashlib.sha256(
+                        request_path.read_bytes()
+                    ).hexdigest(),
+                    **response,
+                },
+            )
+        process = Mock()
+        process.wait.return_value = (
+            1 if response is None or "failure" in response else 0
+        )
+        return process
+
+    monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launch)
+    with pytest.raises(AnchorBenchError):
+        task._evaluate({"evaluation": 1}, directory)
+    assert not (directory / "result.json").exists()
+
+
+@pytest.mark.parametrize("stage", ["protocol", "initialization"])
+def test_worker_emits_structured_fatal_failure(
+    config_path, tmp_path, monkeypatch, stage
+):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import worker
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    request = {
+        "config": config.model_dump(mode="json"),
+        "material": {
+            **config.material.fixed,
+            **{k: b.lower for k, b in config.material.optimized.items()},
+        },
+    }
+    if stage == "protocol":
+        request["material"] = {}
+    else:
+        monkeypatch.setattr(worker, "validate_device", lambda device: None)
+        monkeypatch.setattr(
+            worker,
+            "create_simulation",
+            Mock(side_effect=RuntimeError("allocation failed")),
+        )
+    directory = tmp_path / "trials" / "00000001"
+    directory.mkdir(parents=True)
+    request_path, response_path = (
+        directory / "request.json",
+        directory / "response.json",
+    )
+    write_json(request_path, request)
+    monkeypatch.setattr("sys.argv", ["worker", str(request_path), str(response_path)])
+    with pytest.raises(SystemExit) as caught:
+        worker.main()
+    assert caught.value.code == 1
+    response = read_json(response_path)
+    assert response["failure"]["category"] == stage
+    assert "measurements" not in response
+
+
+def test_nonzero_worker_exit_cannot_reuse_success_response(
+    config_path, tmp_path, monkeypatch
+):
+    import hashlib
+    from unittest.mock import Mock
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    task.experiments = [{"id": "pour"}]
+
+    def launch(command, **kwargs):
+        request_path = Path(command[-2])
+        write_json(
+            Path(command[-1]),
+            {
+                "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                "measurements": {"pour": {"valid": True}},
+            },
+        )
+        process = Mock()
+        process.wait.return_value = 1
+        return process
+
+    launched = Mock(side_effect=launch)
+    monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launched)
+    for _ in range(2):
+        with pytest.raises(AnchorBenchError, match="protocol"):
+            task._evaluate({"evaluation": 1}, tmp_path / "trial")
+    launched.assert_called_once()
+
+
+@pytest.mark.parametrize("change", ["newton_commit", "implementation_revision"])
+def test_resume_rejects_implementation_change_with_same_versions(
+    config_path, tmp_path, monkeypatch, change
+):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    output = tmp_path / "identity"
+    output.mkdir()
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps(
+        {"vcs_info": {"vcs": "git", "commit_id": "a" * 40}}
+    )
+    monkeypatch.setattr(
+        task_module.importlib.metadata, "distribution", lambda name: distribution
+    )
+    monkeypatch.setattr(
+        task_module.importlib.metadata, "version", lambda name: "1.8.0.dev0"
+    )
+    with task.output_context(output):
+        pass
+    original = (output / "inputs.json").read_bytes()
+    manifest = read_json(output / "inputs.json")
+    assert manifest["newton_commit"] == "a" * 40
+    assert manifest["implementation_version"] == task_module.IMPLEMENTATION_REVISION
+    with task.output_context(output, resume=True):
+        pass
+    if change == "newton_commit":
+        distribution.read_text.return_value = json.dumps(
+            {"vcs_info": {"vcs": "git", "commit_id": "b" * 40}}
+        )
+    else:
+        monkeypatch.setattr(
+            task_module,
+            "IMPLEMENTATION_REVISION",
+            task_module.IMPLEMENTATION_REVISION + 1,
+        )
+    with (
+        pytest.raises(AnchorBenchError, match="implementation identity"),
+        task.output_context(output, resume=True),
+    ):
+        pytest.fail("Changed implementation must not enter the run")
+    assert (output / "inputs.json").read_bytes() == original
+    with FileLock(str(output / ".run.lock"), timeout=0):
+        pass
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        "{broken",
+        "{}",
+        '{"dir_info": {"editable": true}}',
+        '{"vcs_info": {"vcs": "git", "commit_id": "main"}}',
+    ],
+)
+def test_newton_identity_requires_installed_commit(monkeypatch, metadata):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    distribution = Mock()
+    distribution.read_text.return_value = metadata
+    monkeypatch.setattr(
+        task_module.importlib.metadata, "distribution", lambda name: distribution
+    )
+    with pytest.raises(
+        AnchorBenchError, match="Cannot identify installed Newton commit"
+    ):
+        task_module._newton_commit()
+    distribution.read_text.assert_called_once_with("direct_url.json")
+
+
+@pytest.mark.parametrize(
+    ("targets", "predictions", "weights", "expected"),
+    [
+        ([1e-200], [1.0], [1.0], 1e200),
+        ([1.0, 1.0], [2.0, 3.0], [1e308, 1e308], (2.5) ** 0.5),
+        ([1e-200, 1e-200], [1.0, 2.0], [1e308, 1e308], (2.5) ** 0.5 * 1e200),
+        ([1.0, 1.0], [1.0, 1.0], [1e308, 1e308], 0.0),
+        ([1e-320], [1e308], [1.0], None),
+    ],
+)
+def test_objective_extreme_finite_inputs_are_json_safe(
+    targets, predictions, weights, expected
+):
+    experiments = [
+        {"id": str(i), "dimensions": ["width_m"], "target": [target], "weight": weight}
+        for i, (target, weight) in enumerate(zip(targets, weights))
+    ]
+    measurements = {
+        str(i): {"valid": True, "width_m": prediction}
+        for i, prediction in enumerate(predictions)
+    }
+    result = score(experiments, measurements)
+    assert result["valid"] is (expected is not None)
+    if expected is None:
+        assert result["error"] is None
+        assert "residuals" not in result["experiments"]["0"]
+        assert (
+            "Nonfinite relative residual"
+            in result["experiments"]["0"]["failure_reason"]
+        )
+    else:
+        assert result["error"] == pytest.approx(expected)
+    assert json.loads(json.dumps(result, allow_nan=False)) == result
+
+
+def test_objective_multidimensional_rms_avoids_norm_overflow():
+    result = score(
+        [
+            {
+                "id": "a",
+                "dimensions": ["width_m", "length_m"],
+                "target": [1.0, 1.0],
+                "weight": 1e308,
+            }
+        ],
+        {"a": {"valid": True, "width_m": 1.7e308, "length_m": 1.7e308}},
+    )
+    assert result["valid"]
+    assert result["error"] == pytest.approx(1.7e308)
+    assert json.loads(json.dumps(result, allow_nan=False)) == result

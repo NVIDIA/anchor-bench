@@ -91,7 +91,8 @@ def propose(
         )
     if not history:
         return initial_point(bounds), "baseline"
-    rng = np.random.default_rng(np.random.SeedSequence([seed, len(history)]))
+    seed_sequence = np.random.SeedSequence([seed, len(history)])
+    rng = np.random.default_rng(seed_sequence)
     if len(history) < initial_samples and len(history) <= len(bounds):
         # Probe one parameter at a time around the viable baseline before global
         # exploration; random cohesion combinations can otherwise all block pouring.
@@ -119,7 +120,10 @@ def propose(
     penalty = max(losses) + max(1.0, np.ptp(losses))
     y = np.log1p([trial["error"] if trial["valid"] else penalty for trial in history])
     forest = RandomForestRegressor(
-        n_estimators=128, max_features=0.8, random_state=seed + len(history), n_jobs=1
+        n_estimators=128,
+        max_features=0.8,
+        random_state=int(seed_sequence.generate_state(1, dtype=np.uint32)[0]),
+        n_jobs=1,
     )
     forest.fit(x, y)
     predictions = np.asarray([tree.predict(pool) for tree in forest.estimators_])

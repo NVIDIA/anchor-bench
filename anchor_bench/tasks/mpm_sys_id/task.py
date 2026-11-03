@@ -25,8 +25,36 @@ from anchor_bench.tasks.base_task import BaseTask
 from .artifacts import read_json, write_json
 from .dataset import load_experiments
 from .objective import score
+from .worker import validate_device
 
 logger = logging.getLogger(__name__)
+
+# Bump whenever simulation, measurement/scoring, or proposal/replay behavior
+# changes incompatibly. Revision 4 uses stable RMS scoring and rejects
+# nonfinite residuals, changing objective behavior from revision 3.
+IMPLEMENTATION_REVISION = 4
+
+
+def _newton_commit() -> str:
+    """Read the installed commit, never infer it from the lockfile or version."""
+    raw = importlib.metadata.distribution("newton").read_text("direct_url.json")
+    try:
+        metadata = json.loads(raw or "null")
+        vcs = metadata["vcs_info"]
+        commit = vcs["commit_id"]
+        if (
+            vcs["vcs"] != "git"
+            or not isinstance(commit, str)
+            or len(commit) not in (40, 64)
+            or any(c not in "0123456789abcdef" for c in commit.lower())
+        ):
+            raise ValueError("Expected a full Git commit ID")
+        return commit.lower()
+    except (ValueError, KeyError, TypeError) as exc:
+        raise AnchorBenchError(
+            "Cannot identify installed Newton commit; install the pinned Git "
+            "dependency with uv sync --extra mpm"
+        ) from exc
 
 
 class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
@@ -80,6 +108,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                     p: importlib.metadata.version(p)
                     for p in ("newton", "warp-lang", "numpy", "scikit-learn")
                 }
+                newton_commit = _newton_commit()
             except importlib.metadata.PackageNotFoundError as exc:
                 raise AnchorBenchError(
                     "Install MPM dependencies with uv sync --extra mpm"
@@ -97,7 +126,8 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
             identity["experiments"] = experiments
             manifest = {
                 "schema_version": 1,
-                "implementation_version": 1,
+                "implementation_version": IMPLEMENTATION_REVISION,
+                "newton_commit": newton_commit,
                 "configuration": identity,
                 "versions": versions,
             }
@@ -105,7 +135,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
             if path.exists():
                 if read_json(path) != manifest:
                     raise AnchorBenchError(
-                        "MPM inputs or dependency versions changed; use a new output directory"
+                        "MPM inputs, implementation identity, or dependency versions changed; use a new output directory"
                     )
                 if force:
                     raise AnchorBenchError(
@@ -139,7 +169,10 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
             write_json(request_path, request)
         digest = hashlib.sha256(request_path.read_bytes()).hexdigest()
         self._check_stop_requested()
+        failure_reason = None
         if not response_path.exists():
+            state_path = directory / "worker_state.json"
+            state_path.unlink(missing_ok=True)
             with (directory / "worker.log").open("a") as log:
                 process = subprocess.Popen(
                     [
@@ -175,9 +208,32 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                             process.kill()
                             process.wait()
                     raise
-                if failure_reason is not None:
+                if failure_reason is not None and response_path.exists():
+                    try:
+                        response = read_json(response_path)
+                    except (OSError, ValueError) as exc:
+                        raise AnchorBenchError(
+                            f"Invalid worker response: {exc}"
+                        ) from exc
+                    if not isinstance(response, dict) or "failure" not in response:
+                        write_json(
+                            response_path,
+                            {
+                                "request_sha256": digest,
+                                "failure": {
+                                    "category": "protocol",
+                                    "message": failure_reason,
+                                },
+                            },
+                        )
+                if failure_reason is not None and not response_path.exists():
+                    state = read_json(state_path) if state_path.exists() else {}
+                    if state != {"request_sha256": digest, "stage": "candidate"}:
+                        raise AnchorBenchError(
+                            f"Worker initialization failed: {failure_reason}"
+                        )
                     # Cache failed attempts too: resume may occur before result.json
-                    # is written. A non-zero exit overrides any worker response.
+                    # is written. Only initialized candidate crashes are observations.
                     write_json(
                         response_path,
                         {
@@ -185,16 +241,39 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                             "measurements": {
                                 e["id"]: {
                                     "valid": False,
+                                    "failure_category": "candidate_crash",
                                     "failure_reason": failure_reason,
                                 }
                                 for e in self.experiments
                             },
                         },
                     )
-        response = read_json(response_path)
-        if response["request_sha256"] != digest:
-            raise AnchorBenchError("Worker response does not match candidate request")
-        return response["measurements"]
+        try:
+            response = read_json(response_path)
+            if response["request_sha256"] != digest:
+                raise AnchorBenchError(
+                    "Worker response does not match candidate request"
+                )
+            if "failure" in response:
+                failure = response["failure"]
+                raise AnchorBenchError(
+                    f"Worker {failure['category']} failure: {failure['message']}"
+                )
+            measurements = response["measurements"]
+            expected = {e["id"] for e in self.experiments}
+            if not isinstance(measurements, dict) or set(measurements) != expected:
+                raise ValueError("Worker measurement IDs do not match experiments")
+            for measurement in measurements.values():
+                if (
+                    not isinstance(measurement, dict)
+                    or type(measurement.get("valid")) is not bool
+                ):
+                    raise ValueError(
+                        "Worker measurement must contain a boolean valid flag"
+                    )
+            return measurements
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise AnchorBenchError(f"Invalid worker response: {exc}") from exc
 
     def run(self, output_directory: Path) -> Path:
         from .optimizer import decode, propose
@@ -275,6 +354,12 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                 previous_handlers[signum] = signal.signal(signum, interrupted)
         try:
             persist("running")
+            try:
+                validate_device(self.config.execution.device)
+            except Exception as exc:
+                raise AnchorBenchError(
+                    f"MPM device initialization failed: {exc}"
+                ) from exc
             while True:
                 self._check_stop_requested()
                 if stopping.mode == "bounded":

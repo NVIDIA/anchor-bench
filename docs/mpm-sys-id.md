@@ -109,16 +109,40 @@ width_m,length_m,depth_m
 - Include at least one row. Missing cells, extra columns, nonnumeric values,
   NaN, and infinity are errors. Do not add an index column.
 - Width and length use fixed X/Y measurement axes.
-- Pour height is the highest pile surface above the floor; the footprint
-  includes scattered particles.
+- Pour measurements use only particles below the outlet, including sample
+  radii. Height is the 99.5th percentile of surface elevation above the floor.
+  Width and length use the central 99% footprint along each measurement axis,
+  excluding scattered particles. These robust extents may slightly underestimate
+  the full pile dimensions.
 - Bottle depth is positive downward, measured from the **post-removal crater
   rim to the crater floor**. Remove the bottle before measuring.
 - Column means become fitting targets. Sample standard deviations are recorded
   as descriptive repeat variability; a single repeat has `null` standard deviation.
 - Repeats do not increase experiment weight. Set `weight` explicitly if needed.
 
+### Pour target measurement contract
+
+For each repeat, use the same below-outlet sample population for all three
+observables. Along each fixed X/Y axis, width or length is the 99.5th percentile
+of sample center plus radius minus the 0.5th percentile of sample center minus
+radius. Height is the 99.5th percentile of sample center elevation plus radius,
+relative to the floor. Quantiles use linear interpolation, matching
+`numpy.quantile` in `measure_pile`. Simulation samples have equal mass; physical
+measurements must use equivalent sampling/weighting, rather than an arbitrary
+surface-point density. Maximum height and an all-particle bounding box are not
+interchangeable with these observables.
+
 The bundled CSVs preserve the original six experimental datasets. Their original
 filenames are retained, including `2m-gal-sand-pour.csv` (a five-US-gallon pour).
+**The two bundled pour datasets have unverified measurement compatibility:** the
+repository contains only aggregate dimensions, with no acquisition protocol or
+raw samples establishing that these quantile definitions were used. Treat them
+as example inputs, not confirmed calibration targets. Before interpreting fitted
+material parameters, confirm the acquisition protocol matches this contract or
+recompute the targets from suitable raw measurements. The three aggregate
+dimensions alone cannot be converted to these quantiles. Record that provenance
+with replacement targets; changing material parameters cannot resolve a mismatch
+in measurement definitions.
 
 ## Material and objective
 
@@ -171,7 +195,10 @@ outputs/sand-fit/
 ```
 
 `inputs.json` stores resolved settings, measured repeats, targets, content hashes,
-and dependency versions. `result.json` stores the evaluation ID, optimizer point,
+dependency versions, Newton’s installed Git commit, and an implementation
+compatibility revision. Newton must expose its commit through installed
+`direct_url.json` metadata; installs without a verifiable commit are rejected.
+`result.json` stores the evaluation ID, optimizer point,
 full material, validity, combined error, per-experiment predictions/residuals,
 and elapsed seconds. A worker response is tied to its request by SHA-256.
 `best.json` has the same format as a trial result. `history.jsonl` has one result
@@ -181,7 +208,11 @@ and seed; seeded proposals are reconstructed from completed trial records.
 Completed trial results are written atomically and are authoritative. Resume
 rebuilds derived history and best-result files, reuses completed worker responses,
 and retries interrupted candidates. It refuses changed data, selected experiments,
-physics, parameter bounds, objective, stopping settings, or dependency versions.
+physics, parameter bounds, objective, stopping settings, dependency versions,
+Newton commit, or implementation compatibility revision. Maintainers must bump
+`IMPLEMENTATION_REVISION` in `task.py` when simulation, measurement/scoring, or
+proposal/replay behavior changes incompatibly. Older manifests without the
+implementation identity are also rejected.
 A new search with different settings needs a new output directory.
 
 ```bash

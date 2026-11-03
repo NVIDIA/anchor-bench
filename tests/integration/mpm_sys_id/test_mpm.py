@@ -57,8 +57,11 @@ def test_six_experiments_in_isolated_cli_worker(tmp_path):
     assert (output / ".completed").exists()
 
 
-@pytest.mark.parametrize("kind", ["sand_pour", "bottle_drop"])
-def test_cuda_graph_matches_eager(kind):
+@pytest.mark.parametrize(
+    ("kind", "lift_distance"),
+    [("sand_pour", None), ("bottle_drop", 0.4), ("bottle_drop", 1e-6)],
+)
+def test_cuda_graph_matches_eager(kind, lift_distance):
     raw = yaml.safe_load(EXAMPLE.read_text())
     config = MpmSysIdConfig.model_validate(raw)
     settings = next(
@@ -75,6 +78,7 @@ def test_cuda_graph_matches_eager(kind):
             pre_settle_seconds=0.05,
             impact_settle_seconds=1.0,
             lift_speed=1.0,
+            lift_distance=lift_distance,
         )
     results = []
     with wp.ScopedDevice("cuda:0"):
@@ -90,12 +94,20 @@ def test_cuda_graph_matches_eager(kind):
                     )
             if isinstance(simulation, BottleSimulation):
                 assert simulation.measure()["min_cap_z_m"] == host_min_cap_z
-            simulation.test_final()
+            if isinstance(simulation, BottleSimulation) and lift_distance == 1e-6:
+                assert simulation.measure()["valid"] is False
+                assert simulation.measure()["bottle_clearance_m"] < 0
+                with pytest.raises(AssertionError, match="Bottle has not cleared"):
+                    simulation.test_final()
+            else:
+                simulation.test_final()
             assert isinstance(simulation, (BottleSimulation, PourSimulation))
             positions = require_array(simulation.state_0.particle_q).numpy()
             if isinstance(simulation, BottleSimulation):
                 assert simulation.phase == "settling crater"
-                assert len(simulation.graphs) == (4 if graphs else 0)
+                # A one-substep lift only warms removal; it never captures it.
+                expected_graphs = 3 if lift_distance == 1e-6 else 4
+                assert len(simulation.graphs) == (expected_graphs if graphs else 0)
                 results.append(
                     (positions, require_array(simulation.state_0.body_q).numpy())
                 )
