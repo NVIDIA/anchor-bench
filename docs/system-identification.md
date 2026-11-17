@@ -97,8 +97,15 @@ objective while still replaying its commands, allowing the simulated state to
 settle without advancing it ahead of the measurements.
 
 `simulation.solver.type` selects the Newton solver (`warp_mujoco`).
-`simulation.solver.settings` is passed to that solver's constructor. A key
-that is not a constructor parameter is skipped with a warning and recorded in
+`simulation.solver.settings` is passed to that solver's constructor. For
+`warp_mujoco`, omitted `integrator` and `solver` settings use `implicitfast`
+and `newton`, preserving the previous sysID behavior even when the USD authors
+different options. Explicit settings override these defaults; YAML `null`
+delegates that option to Newton, which uses the USD/model value when available.
+Other omitted settings use Newton's defaults and USD/model values. Unknown
+constructor parameters are errors, so typos or options missing from the installed
+Newton version stop the run before fitting. Arguments supplied by the simulation
+context, such as `model`, are skipped with a warning and recorded in
 `run_summary.yaml` as `"NOT SET: <reason>"`. Solver-specific joint, body, and
 shape attributes are read from the USD (for example
 `newton:mujoco:solreflimit`); author them in the asset or in an override layer
@@ -109,14 +116,22 @@ class to `NEWTON_SOLVERS`.
 
 `controller.implementation` selects how candidate gains are applied:
 
-- `native` (default): the solver's joint position drive, with the configured
-  effort and velocity limits.
+- `native` (default): the solver's joint position drive. Clamp support depends
+  on the selected solver.
 - `external_implicit`: Newton's implicit external PD actuator. The PD law is
   solved against the coupled joint-space response with the gravity and
   Coriolis bias at the current state, and effort is clamped to
   `clamps.effort_limit`. `clamps.velocity_limit` is not applied. Fitted gains
   are exported to the same USD drive attributes; consumers that use a native
   drive may behave slightly differently.
+
+The external actuator predicts motion using inertia and armature with
+gravity/Coriolis bias feedback. Joint damping, dry friction, and joint limits
+remain active in the physics solver, but their effects are not included in
+that prediction. The implicit effort calculation is therefore approximate
+when those effects are significant. On the pinned MuJoCo implementation,
+`mujoco_warp.solve_m` also inverts the bare mass matrix; using it as the response
+would not remove this approximation.
 
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 

@@ -87,7 +87,10 @@ class ExternalImplicitPD(NewtonActuation):
 
     The PD law is solved against the coupled joint-space response, with the
     passive gravity and Coriolis bias at the current state, before every
-    physics substep. Velocity limits are not applied.
+    physics substep. The response includes inertia and armature, but excludes
+    joint damping, friction, and limit effects from the actuator's prediction.
+    Those effects remain active in the physics solver. Velocity limits are not
+    applied.
     """
 
     def __init__(
