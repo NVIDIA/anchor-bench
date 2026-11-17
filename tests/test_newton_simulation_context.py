@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, ClassVar, Tuple
 
 import pytest
+from pydantic import JsonValue
 
 from anchor_bench.core import NewtonSimulationContext, SimulationContext
 from anchor_bench.core.simulation.newton_solvers import MuJoCoAdapter
@@ -130,11 +131,24 @@ class FakeSolver:
         builder.custom_attributes_registered = True
         cls.registered_builders.append(builder)
 
-    def __init__(self, model: FakeModel, *, iterations: int | None = None) -> None:
+    def __init__(
+        self,
+        model: FakeModel,
+        *,
+        iterations: int | None = None,
+        wind: list[float] | None = None,
+        integrator: str | None = None,
+        solver: str | None = None,
+    ) -> None:
         self.model = model
         self.options = {
             key: value
-            for key, value in {"iterations": iterations}.items()
+            for key, value in {
+                "iterations": iterations,
+                "wind": wind,
+                "integrator": integrator,
+                "solver": solver,
+            }.items()
             if value is not None
         }
         self.steps = []
@@ -238,7 +252,10 @@ def test_lazily_builds_one_newton_model_and_state(
     assert pipeline.broad_phase == "explicit"
     assert context.contacts is pipeline.contacts_buffer
     assert context.solver is FakeSolver.instances[0]
-    assert FakeSolver.instances[0].options == {}
+    assert FakeSolver.instances[0].options == {
+        "integrator": "implicitfast",
+        "solver": "newton",
+    }
     assert context.world_count == 1
     assert FakeModelBuilder.instance_count == 2
     assert len(FakeCollisionPipeline.instances) == 1
@@ -277,7 +294,11 @@ def test_initializes_one_configurable_replicated_simulation(
     fake_solver = FakeSolver.instances[0]
     assert context.solver is fake_solver
     assert fake_solver.model is population.model
-    assert fake_solver.options == {"iterations": 5}
+    assert fake_solver.options == {
+        "iterations": 5,
+        "integrator": "implicitfast",
+        "solver": "newton",
+    }
     pipeline = FakeCollisionPipeline.instances[0]
     assert pipeline.model is population.model
     assert pipeline.broad_phase == "explicit"
@@ -336,7 +357,11 @@ def test_initialize_records_solver_type_and_settings(
     context.initialize(solver_settings={"iterations": 5})
 
     assert context.solver_type == "warp_mujoco"
-    assert dict(context.solver_settings) == {"iterations": 5}
+    assert dict(context.solver_settings) == {
+        "iterations": 5,
+        "integrator": "implicitfast",
+        "solver": "newton",
+    }
 
 
 def test_reinitializing_with_different_solver_settings_raises(
@@ -347,6 +372,30 @@ def test_reinitializing_with_different_solver_settings_raises(
 
     with pytest.raises(RuntimeError, match="different world count or configuration"):
         context.initialize(solver_settings={"iterations": 6})
+
+
+def test_mutating_requested_settings_does_not_change_context_identity(
+    fake_newton_usd: Path,
+) -> None:
+    wind: list[JsonValue] = [1.0, 2.0, 3.0]
+    context = NewtonSimulationContext(str(fake_newton_usd))
+    context.initialize(solver_settings={"wind": wind})
+    wind[0] = 9.0
+
+    assert context.solver_settings["wind"] == [1.0, 2.0, 3.0]
+    context.initialize(solver_settings={"wind": [1.0, 2.0, 3.0]})
+
+
+def test_nested_reported_settings_cannot_change_runtime_provenance(
+    fake_newton_usd: Path,
+) -> None:
+    context = NewtonSimulationContext(str(fake_newton_usd))
+    context.initialize(solver_settings={"wind": [1.0, 2.0, 3.0]})
+    wind = context.solver_settings["wind"]
+    assert isinstance(wind, list)
+    wind[0] = 9.0
+
+    assert context.solver_settings["wind"] == [1.0, 2.0, 3.0]
 
 
 def test_unknown_solver_type_fails_before_loading_usd(

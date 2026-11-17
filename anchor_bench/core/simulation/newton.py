@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Hashable
+from copy import deepcopy
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Mapping, Tuple
@@ -101,7 +102,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
             raise ValueError(
                 "configure_builder is required when configuration_key is provided."
             )
-        request = (solver_type, dict(solver_settings or {}))
+        request = (solver_type, deepcopy(dict(solver_settings or {})))
         if self._initialized:
             if (
                 self._world_count != world_count
@@ -209,7 +210,7 @@ class NewtonSimulationContext(SimulationContext[newton.Model, newton.State]):
         """Return settings as applied, with skipped keys marked NOT SET."""
 
         self._ensure_initialized()
-        return MappingProxyType(self._solver_settings)
+        return MappingProxyType(deepcopy(self._solver_settings))
 
     def capture_step_graph(self, *, dt: float, substeps: int = 1) -> None:
         """Capture a reusable Warp graph for one simulation interval."""

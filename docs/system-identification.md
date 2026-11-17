@@ -97,8 +97,15 @@ objective while still replaying its commands, allowing the simulated state to
 settle without advancing it ahead of the measurements.
 
 `simulation.solver.type` selects the Newton solver (`warp_mujoco`).
-`simulation.solver.settings` is passed to that solver's constructor. A key
-that is not a constructor parameter is skipped with a warning and recorded in
+`simulation.solver.settings` is passed to that solver's constructor. For
+`warp_mujoco`, omitted `integrator` and `solver` settings use `implicitfast`
+and `newton`, preserving the previous sysID behavior even when the USD authors
+different options. Explicit settings override these defaults; YAML `null`
+delegates that option to Newton, which uses the USD/model value when available.
+Other omitted settings use Newton's defaults and USD/model values. Unknown
+constructor parameters are errors, so typos or options missing from the installed
+Newton version stop the run before fitting. Arguments supplied by the simulation
+context, such as `model`, are skipped with a warning and recorded in
 `run_summary.yaml` as `"NOT SET: <reason>"`. Solver-specific joint, body, and
 shape attributes are read from the USD (for example
 `newton:mujoco:solreflimit`); author them in the asset or in an override layer
