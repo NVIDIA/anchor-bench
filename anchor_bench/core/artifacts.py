@@ -20,25 +20,41 @@ def get_or_create_output_folder(
     *,
     output_root: Optional[Union[str, Path]] = None,
     output_folder: Optional[Union[str, Path]] = None,
+    initialize_config: bool = True,
 ) -> Tuple[Path, bool]:
     """Get or initialize an output folder and report whether it is complete."""
 
-    if output_folder is None:
-        output_root = output_root or resolve_repo_root() / "output"
-        output_folder = Path(output_root).expanduser() / _hash_name(config)
-    else:
-        output_folder = Path(output_folder).expanduser()
+    output_folder = resolve_output_folder(
+        config, output_root=output_root, output_folder=output_folder
+    )
     try:
         output_folder.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
         if output_folder.is_dir():
             return output_folder, (output_folder / COMPLETION_MARKER).is_file()
         raise
-    write_yaml(
-        output_folder / "config.yaml",
-        config.model_dump(mode="json"),
-    )
+    if initialize_config:
+        write_yaml(
+            output_folder / "config.yaml",
+            config.model_dump(mode="json"),
+        )
     return output_folder, False
+
+
+def resolve_output_folder(
+    config: BaseModel,
+    *,
+    output_root: Optional[Union[str, Path]] = None,
+    output_folder: Optional[Union[str, Path]] = None,
+) -> Path:
+    """Resolve the explicit or config-derived output path without filesystem writes."""
+
+    if output_folder is None:
+        output_root = output_root or resolve_repo_root() / "output"
+        output_folder = Path(output_root).expanduser() / _hash_name(config)
+    else:
+        output_folder = Path(output_folder).expanduser()
+    return output_folder
 
 
 def resolve_repo_root() -> Path:

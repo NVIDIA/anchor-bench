@@ -11,7 +11,7 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from anchor_bench.core.task_runner import TaskRunner
+from anchor_bench.core.task_runner import TASKS, TaskRunner
 from anchor_bench.errors import AnchorBenchError
 from anchor_bench.logging_utils import configure_logging
 
@@ -20,6 +20,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="anchor-bench",
         description="Run an Anchor Bench task from a YAML configuration file.",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=sorted(TASKS),
+        help="Optional explicit task subcommand.",
+    )
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume an interrupted MPM search."
     )
     parser.add_argument(
         "--config",
@@ -58,8 +67,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     configure_logging(args.verbose, quiet=args.quiet)
 
     try:
-        TaskRunner().run(args.config, force=args.force, output=args.output)
+        options = {}
+        if args.command:
+            options["expected_type"] = args.command
+        if args.resume:
+            options["resume"] = True
+        TaskRunner().run(args.config, force=args.force, output=args.output, **options)
     except (AnchorBenchError, ValidationError) as error:
         parser.error(str(error))
+
+    except KeyboardInterrupt:
+        return 130
 
     return 0

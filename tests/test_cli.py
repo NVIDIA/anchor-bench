@@ -89,3 +89,33 @@ def test_cli_reports_mlops_tracking_errors(monkeypatch, capsys):
         in captured.err
     )
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "command", ["mpm_sys_id", "actuator_sys_id", "training", "trajectory_v1"]
+)
+def test_cli_dispatches_registered_task_commands(command, monkeypatch, tmp_path):
+    calls = []
+
+    def run(self, path, *, force=False, output=None, expected_type=None):
+        calls.append(expected_type)
+        return tmp_path
+
+    monkeypatch.setattr("anchor_bench.cli.TaskRunner.run", run)
+    assert main([command, "--config", "config.yaml"]) == 0
+    assert calls == [command]
+
+
+def test_cli_choices_follow_registry_changes(monkeypatch):
+    from anchor_bench.cli import build_parser
+    from anchor_bench.core.task_runner import TASKS
+
+    monkeypatch.setitem(TASKS, "new_task", TASKS["training"])
+    parser = build_parser()
+    assert (
+        parser.parse_args(["new_task", "--config", "config.yaml"]).command == "new_task"
+    )
+    monkeypatch.delitem(TASKS, "new_task")
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["new_task", "--config", "config.yaml"])
+    assert exc.value.code == 2

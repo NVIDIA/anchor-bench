@@ -3,6 +3,8 @@
 
 """Shared Pydantic configuration base classes."""
 
+from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -21,3 +23,11 @@ class BaseConfig(StrictBaseModel):
     """Common shape shared by all top-level task configurations."""
 
     type: str
+
+    def resolve_paths(self, directory: Path) -> None:
+        """Resolve task-specific paths relative to the configuration directory.
+
+        Called after validation with the absolute parent directory of the YAML
+        file. The default leaves paths unchanged; overrides may normalize path
+        fields in memory but must not create or modify filesystem artifacts.
+        """
