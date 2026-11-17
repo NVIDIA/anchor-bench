@@ -57,11 +57,7 @@ def test_six_experiments_in_isolated_cli_worker(tmp_path):
     assert (output / ".completed").exists()
 
 
-@pytest.mark.parametrize(
-    ("kind", "lift_distance"),
-    [("sand_pour", None), ("bottle_drop", 0.4), ("bottle_drop", 1e-6)],
-)
-def test_cuda_graph_matches_eager(kind, lift_distance):
+def _simulation_settings(kind, lift_distance):
     raw = yaml.safe_load(EXAMPLE.read_text())
     config = MpmSysIdConfig.model_validate(raw)
     settings = next(
@@ -80,6 +76,15 @@ def test_cuda_graph_matches_eager(kind, lift_distance):
             lift_speed=1.0,
             lift_distance=lift_distance,
         )
+    return settings
+
+
+@pytest.mark.parametrize(
+    ("kind", "lift_distance"),
+    [("sand_pour", None), ("bottle_drop", 0.4), ("bottle_drop", 1e-6)],
+)
+def test_cuda_graph_and_eager_complete_physical_scenarios(kind, lift_distance):
+    settings = _simulation_settings(kind, lift_distance)
     results = []
     with wp.ScopedDevice("cuda:0"):
         for graphs in (False, True):
@@ -97,31 +102,111 @@ def test_cuda_graph_matches_eager(kind, lift_distance):
             if isinstance(simulation, BottleSimulation) and lift_distance == 1e-6:
                 assert simulation.measure()["valid"] is False
                 assert simulation.measure()["bottle_clearance_m"] < 0
-                with pytest.raises(AssertionError, match="Bottle has not cleared"):
-                    simulation.test_final()
+                with pytest.raises(ValueError, match="Bottle has not cleared"):
+                    simulation.validate_final_state()
             else:
-                simulation.test_final()
+                simulation.validate_final_state()
             assert isinstance(simulation, (BottleSimulation, PourSimulation))
             positions = require_array(simulation.state_0.particle_q).numpy()
             if isinstance(simulation, BottleSimulation):
                 assert simulation.phase == "settling crater"
                 # A one-substep lift only warms removal; it never captures it.
-                expected_graphs = 3 if lift_distance == 1e-6 else 4
-                assert len(simulation.graphs) == (expected_graphs if graphs else 0)
-                results.append(
-                    (positions, require_array(simulation.state_0.body_q).numpy())
-                )
+                expected_graphs = {
+                    "settling bed",
+                    "falling / impact",
+                    "settling crater",
+                }
+                if lift_distance != 1e-6:
+                    expected_graphs.add("removing bottle")
+                assert set(simulation.graphs) == (expected_graphs if graphs else set())
+                results.append((require_array(simulation.state_0.body_q).numpy(),))
             else:
                 assert len(simulation.graphs) == (2 if graphs else 0)
                 results.append((positions,))
             del simulation
     for eager, captured in zip(results[0], results[1]):
-        # Preserve the source regression's state-based tolerance. Atomic contact
-        # reductions perturb trajectories; crater bin thresholds amplify tiny
-        # state differences and are not suitable for near-bitwise comparison.
+        # Check the rigid trajectory and uncoupled pour here. For sand in the
+        # coupled bottle scene, contact roundoff can amplify at individual
+        # particles over 1,440 substeps (especially with an embedded bottle).
+        # Compare that graph from identical states in the replay test below.
         np.testing.assert_allclose(
             captured, eager, atol=0.001 if kind == "bottle_drop" else 1e-5, rtol=0
         )
+
+
+@pytest.mark.parametrize(
+    ("frames", "phase", "lift_distance"),
+    [
+        (1, "settling bed", 0.4),
+        (40, "falling / impact", 0.4),
+        (64, "removing bottle", 0.4),
+        (100, "settling crater", 0.4),
+        (64, "settling crater", 1e-6),
+    ],
+)
+def test_bottle_graph_replay_matches_eager_from_same_state(
+    frames, phase, lift_distance
+):
+    """Compare execution modes without accumulating independent contact trajectories."""
+    settings = _simulation_settings("bottle_drop", lift_distance)
+    with wp.ScopedDevice("cuda:0"):
+        simulation = create_simulation(settings, {**DEFAULTS, **FIXED}, True)
+        assert isinstance(simulation, BottleSimulation)
+        for _ in range(frames):
+            simulation.step()
+        assert simulation.phase == phase
+        graph = simulation.graphs[phase]
+        # Include material history, velocities, and the previous contact force.
+        # Newton adds arrays such as collider_ids after stepping, so a fresh
+        # model.state().assign(...) cannot snapshot this evolved state.
+        arrays = [
+            array
+            for owner in (
+                simulation.state_0,
+                vars(simulation.state_0)["mpm"],
+                simulation.rigid_state,
+                vars(simulation.rigid_state)["mpm"],
+            )
+            for array in vars(owner).values()
+            if isinstance(array, wp.array)
+        ]
+        tolerances = {
+            "particle_q": 1e-5,
+            "particle_qd": 1e-4,
+            "body_q": 1e-5,
+            "body_qd": 1e-4,
+            "body_f": 1e-3,
+        }
+        for substep in range(settings["substeps"]):
+            snapshot = [(array, wp.clone(array)) for array in arrays]
+            captured = {}
+            for use_graph in (True, False):
+                for array, saved in snapshot:
+                    array.assign(saved)
+                # Compare each replay from identical evolving inputs. Letting two
+                # contact trajectories diverge across substeps tests chaotic
+                # amplification of reduction roundoff, not graph replay parity.
+                simulation.solver.reset(simulation.state_0, flags=0)
+                if use_graph:
+                    wp.capture_launch(graph)
+                else:
+                    simulation._substep()
+                values = {
+                    name: require_array(getattr(simulation.state_0, name)).numpy()
+                    for name in tolerances
+                }
+                if use_graph:
+                    captured = values
+                else:
+                    for name, atol in tolerances.items():
+                        np.testing.assert_allclose(
+                            values[name],
+                            captured[name],
+                            atol=atol,
+                            rtol=0,
+                            err_msg=f"{phase}, substep {substep}: {name}",
+                        )
+                simulation.solver.check_sparse_grid_rebuild_status()
 
 
 def test_sigterm_preserves_resume_checkpoint(tmp_path):

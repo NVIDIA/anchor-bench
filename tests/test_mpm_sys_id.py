@@ -29,9 +29,6 @@ EXAMPLE = Path(__file__).parents[1] / "examples/mpm_sys_id/sand.yaml"
 
 @pytest.fixture
 def config_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "anchor_bench.tasks.mpm_sys_id.task.validate_device", lambda device: None
-    )
     data = yaml.safe_load(EXAMPLE.read_text())
     for index, e in enumerate(data["experiments"]):
         e["enabled"] = index == 0
@@ -900,7 +897,7 @@ def test_final_validation_reports_accumulated_grid_failure(kind):
     simulation.solver.check_sparse_grid_rebuild_status.side_effect = failure
     # No particle/body state is needed: grid failures must surface before reads.
     with pytest.raises(RuntimeError) as caught:
-        simulation.test_final()
+        simulation.validate_final_state()
     assert caught.value is failure
     simulation.solver.check_sparse_grid_rebuild_status.assert_called_once()
 
@@ -917,7 +914,10 @@ def test_final_validation_reports_accumulated_grid_failure(kind):
         ((1, 0, 0, 0), 0.4, True),
     ],
 )
-def test_bottle_post_removal_requires_geometric_clearance(rotation, lift, cleared):
+@pytest.mark.parametrize("outliers", [False, True])
+def test_bottle_post_removal_requires_geometric_clearance(
+    rotation, lift, cleared, outliers
+):
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -938,35 +938,46 @@ def test_bottle_post_removal_requires_geometric_clearance(rotation, lift, cleare
     simulation.sim_time = 3.0
     simulation.mass = simulation.initial_mass = 1.0
     simulation.solver = Mock()
-    simulation.radii = np.array([0.005])
+    positions = np.column_stack(
+        (np.linspace(-0.19, 0.19, 1000), np.full(1000, 0.12), np.full(1000, 0.295))
+    )
+    if outliers:
+        positions = np.vstack(
+            (positions, [[0, 0, 0.2349 + lift], [0.15, 0.15, 2], [3, 3, 3]])
+        )
+    simulation.radii = np.full(len(positions), 0.005)
     simulation.reference = np.full((40, 40), 0.3)
     current = simulation.reference.copy()
     current[15:25, 15:25] -= 0.04
     simulation.surface_spacing = 0.01
-    simulation._surface = lambda: (current, 0.01)
+    simulation.surface_extent = 0.2
+    simulation._surface = lambda positions=None, radii=None: (current, 0.01)
     with wp.ScopedDevice("cpu"):
         simulation._min_cap_z = wp.array([0.2349], dtype=float)
         simulation.model = Mock(
-            body_mass=wp.array([1.0]), particle_mass=wp.array([1.0])
+            body_mass=wp.array([1.0]),
+            particle_mass=wp.array(np.full(len(positions), 1 / len(positions))),
         )
         simulation.state_0 = Mock(
             body_q=wp.array([[0, 0, 0.2349 + lift, *rotation]], dtype=wp.transform),
             body_qd=wp.zeros(1, dtype=wp.spatial_vector),
-            particle_q=wp.array([[0, 0, 0.295]], dtype=wp.vec3),
-            particle_qd=wp.zeros(1, dtype=wp.vec3),
+            particle_q=wp.array(positions, dtype=wp.vec3),
+            particle_qd=wp.zeros(len(positions), dtype=wp.vec3),
         )
     measurement = simulation.measure()
     assert measurement["valid"] is cleared
     assert (measurement["bottle_clearance_m"] > 0) is cleared
     if cleared:
-        simulation.test_final()
+        simulation.measure = Mock(side_effect=AssertionError("Must reuse measurement"))
+        simulation.validate_final_state(measurement)
     else:
-        with pytest.raises(AssertionError, match="Bottle has not cleared"):
-            simulation.test_final()
+        with pytest.raises(ValueError, match="Bottle has not cleared"):
+            simulation.validate_final_state()
 
 
 @pytest.mark.parametrize("mode", ["bounded", "continuous"])
 def test_device_failure_stops_before_search(config_path, tmp_path, monkeypatch, mode):
+    import hashlib
     from unittest.mock import Mock
 
     from anchor_bench.tasks.mpm_sys_id import task as task_module
@@ -975,19 +986,29 @@ def test_device_failure_stops_before_search(config_path, tmp_path, monkeypatch, 
     data["optimizer"]["stopping"] = (
         {"mode": mode, "max_evaluations": 2} if mode == "bounded" else {"mode": mode}
     )
-    data.setdefault("execution", {})["device"] = "cuda:999"
     config_path.write_text(yaml.safe_dump(data))
-    # Use the real device resolver; other unit tests isolate hardware access.
-    from anchor_bench.tasks.mpm_sys_id.worker import validate_device
 
-    monkeypatch.setattr(task_module, "validate_device", validate_device)
-    launch = Mock()
+    def unavailable(command, **kwargs):
+        request_path, response_path = map(Path, command[-2:])
+        write_json(
+            response_path,
+            {
+                "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                "failure": {
+                    "category": "initialization",
+                    "message": "CUDA unavailable",
+                },
+            },
+        )
+        return Mock(wait=Mock(return_value=1))
+
+    launch = Mock(side_effect=unavailable)
     monkeypatch.setattr(task_module.subprocess, "Popen", launch)
     output = tmp_path / "bad-device"
     with pytest.raises(SystemExit) as caught:
         main(["mpm_sys_id", "--config", str(config_path), "--output", str(output)])
     assert caught.value.code == 2
-    launch.assert_not_called()
+    launch.assert_called_once()
     assert not (output / ".completed").exists()
     assert not list((output / "trials").glob("*/result.json"))
     assert read_json(output / "status.json")["state"] == "failed"
@@ -1081,7 +1102,7 @@ def test_worker_emits_structured_fatal_failure(
     assert "measurements" not in response
 
 
-def test_nonzero_worker_exit_cannot_reuse_success_response(
+def test_nonzero_worker_exit_preserves_success_response(
     config_path, tmp_path, monkeypatch
 ):
     import hashlib
@@ -1108,8 +1129,9 @@ def test_nonzero_worker_exit_cannot_reuse_success_response(
     launched = Mock(side_effect=launch)
     monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launched)
     for _ in range(2):
-        with pytest.raises(AnchorBenchError, match="protocol"):
-            task._evaluate({"evaluation": 1}, tmp_path / "trial")
+        assert task._evaluate({"evaluation": 1}, tmp_path / "trial") == {
+            "pour": {"valid": True}
+        }
     launched.assert_called_once()
 
 
@@ -1167,10 +1189,7 @@ def test_resume_rejects_implementation_change_with_same_versions(
 @pytest.mark.parametrize(
     "metadata",
     [
-        None,
         "{broken",
-        "{}",
-        '{"dir_info": {"editable": true}}',
         '{"vcs_info": {"vcs": "git", "commit_id": "main"}}',
     ],
 )
@@ -1241,3 +1260,363 @@ def test_objective_multidimensional_rms_avoids_norm_overflow():
     assert result["valid"]
     assert result["error"] == pytest.approx(1.7e308)
     assert json.loads(json.dumps(result, allow_nan=False)) == result
+
+
+@pytest.mark.parametrize("category", ["initialization", "protocol"])
+def test_resume_retries_initialization_and_preserves_attempts(
+    config_path, tmp_path, monkeypatch, category
+):
+    import hashlib
+    from unittest.mock import Mock
+
+    task_output = tmp_path / "retry"
+    attempts = []
+
+    def launch(command, **kwargs):
+        request_path, response_path = map(Path, command[-2:])
+        response: dict = {
+            "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest()
+        }
+        if len(attempts) < 2:
+            response["failure"] = {
+                "category": category,
+                "message": f"allocation failed {len(attempts)}",
+            }
+        else:
+            response["measurements"] = {
+                experiment["id"]: {"valid": False}
+                for experiment in read_json(request_path)["config"]["experiments"]
+            }
+        attempts.append(response)
+        write_json(response_path, response)
+        return Mock(wait=Mock(return_value=1 if "failure" in response else 0))
+
+    monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launch)
+    for resume in (False, True):
+        with pytest.raises(AnchorBenchError, match=category):
+            TaskRunner().run(str(config_path), output=task_output, resume=resume)
+    TaskRunner().run(str(config_path), output=task_output, resume=True)
+    assert len(attempts) == 4  # Two failures, then two candidate observations.
+    first = task_output / "trials/00000001"
+    archives = sorted(first.glob(f"{category}_failure_*.json"))
+    assert [read_json(path) for path in archives] == attempts[:2]
+    assert read_json(first / "response.json") == attempts[2]
+    TaskRunner().run(str(config_path), output=task_output, resume=True)
+    assert len(attempts) == 4
+
+
+def test_extreme_losses_have_finite_forest_targets(monkeypatch):
+    from anchor_bench.tasks.mpm_sys_id import optimizer
+
+    pytest.importorskip("sklearn")
+    original_fit = optimizer.RandomForestRegressor.fit
+    targets = []
+
+    def fit(forest, x, y):
+        targets.extend(y)
+        return original_fit(forest, x, y)
+
+    monkeypatch.setattr(optimizer.RandomForestRegressor, "fit", fit)
+    history = [
+        {"point": [0.1], "valid": True, "error": 1.7e308},
+        {"point": [0.5], "valid": True, "error": 1.0},
+        {"point": [0.9], "valid": False, "error": None},
+    ]
+    bounds = {"damping": [0.0, 1.0, "linear", 0.0]}
+    point, strategy = [], ""
+    for seed in range(10):
+        point, strategy = propose(
+            history, bounds, seed=seed, initial_samples=2, pool_size=16
+        )
+        if strategy == "random_forest":
+            break
+    assert strategy == "random_forest"
+    assert np.isfinite(targets).all()
+    assert targets[2] > max(targets[:2])
+    assert 0 <= point[0] <= 1
+
+
+@pytest.mark.parametrize("kind", ["sand_pour", "bottle_drop"])
+@pytest.mark.parametrize("optimize", [0, 1, 2])
+@pytest.mark.parametrize("fault", ["floor", "position", "velocity", "mass"])
+def test_physical_validation_survives_optimization(kind, optimize, fault):
+    import importlib
+    import inspect
+    import textwrap
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    module = importlib.import_module(
+        f"anchor_bench.tasks.mpm_sys_id.simulations.{kind}"
+    )
+    # Compile the actual production method as Python -O/-OO would.
+    namespace = dict(vars(module))
+    namespace["require_array"] = lambda value: value
+    exec(  # noqa: S102 - Compile trusted repository code to exercise -O/-OO.
+        compile(
+            textwrap.dedent(inspect.getsource(module.Simulation.validate_final_state)),
+            "<runtime validation>",
+            "exec",
+            optimize=optimize,
+        ),
+        namespace,
+    )
+
+    def array(value):
+        return Mock(numpy=Mock(return_value=np.asarray(value)))
+
+    simulation = SimpleNamespace(
+        solver=Mock(),
+        state_0=SimpleNamespace(
+            particle_q=array(
+                [
+                    [
+                        0,
+                        0,
+                        -10
+                        if fault == "floor"
+                        else float("nan")
+                        if fault == "position"
+                        else 0.5,
+                    ]
+                ]
+            ),
+            particle_qd=array([[0, 0, float("inf") if fault == "velocity" else 0]]),
+            body_q=array([[0, 0, 0, 0, 0, 0, 1]]),
+            body_qd=array([[0] * 6]),
+        ),
+        model=SimpleNamespace(
+            particle_mass=array([2 if fault == "mass" else 1]),
+            body_mass=array([1]),
+            particle_radius=array([0.5]),
+        ),
+        mass=1,
+        initial_mass=1,
+        volume=1,
+        voxel_size=0.01,
+        args=SimpleNamespace(voxel_size=0.01),
+        sim_time=0,
+        removal_end=1,
+    )
+    with pytest.raises(ValueError):
+        namespace["validate_final_state"](simulation)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [None, "{}", '{"url": "file:///newton", "dir_info": {"editable": true}}'],
+)
+def test_newton_non_vcs_identity_is_explicit_and_stable(monkeypatch, caplog, metadata):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    monkeypatch.setattr(
+        task_module.importlib.metadata,
+        "distribution",
+        lambda name: Mock(read_text=Mock(return_value=metadata), version="1.7.0"),
+    )
+    identity = task_module._newton_commit()
+    assert identity.startswith("unverified:")
+    assert identity == task_module._newton_commit()
+    assert "Local source changes cannot be detected" in caplog.text
+
+
+@pytest.mark.parametrize("stage", ["initialization", "protocol"])
+@pytest.mark.parametrize("started", [False, True])
+@pytest.mark.parametrize("failure", ["crash", "timeout"])
+def test_late_worker_crash_uses_candidate_started(
+    config_path, tmp_path, monkeypatch, stage, started, failure
+):
+    import hashlib
+    import subprocess
+    from unittest.mock import Mock
+
+    config = parse(config_path)
+    assert isinstance(config, MpmSysIdConfig)
+    task = MpmSysIdTask(config)
+    task.experiments = [{"id": "pour"}]
+    if failure == "timeout":
+        monkeypatch.setattr(
+            task,
+            "_wait_for_worker",
+            Mock(side_effect=subprocess.TimeoutExpired("worker", 1)),
+        )
+
+    def launch(command, **kwargs):
+        request_path = Path(command[-2])
+        write_json(
+            request_path.with_name("worker_state.json"),
+            {
+                "request_sha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                "stage": stage,
+                "candidate_started": started,
+            },
+        )
+        return Mock(wait=Mock(return_value=-11))
+
+    monkeypatch.setattr("anchor_bench.tasks.mpm_sys_id.task.subprocess.Popen", launch)
+    if started:
+        assert (
+            task._evaluate({"evaluation": 1}, tmp_path / "trial")["pour"][
+                "failure_category"
+            ]
+            == "candidate_crash"
+        )
+    else:
+        with pytest.raises(AnchorBenchError, match="initialization failed"):
+            task._evaluate({"evaluation": 1}, tmp_path / "trial")
+
+
+def test_worker_progress_keeps_candidate_started(tmp_path, monkeypatch):
+    from anchor_bench.tasks.mpm_sys_id import worker
+
+    directory = tmp_path / "trials/00000001"
+    directory.mkdir(parents=True)
+    request, response = directory / "request.json", directory / "response.json"
+    write_json(request, {})
+    states = []
+
+    def evaluate(request, progress):
+        for stage in (
+            "initialization",
+            "candidate",
+            "initialization",
+            "candidate",
+            "protocol",
+        ):
+            progress(stage)
+            states.append(read_json(directory / "worker_state.json"))
+        return {}
+
+    monkeypatch.setattr(worker, "evaluate", evaluate)
+    monkeypatch.setattr("sys.argv", ["worker", str(request), str(response)])
+    worker.main()
+    assert [s["candidate_started"] for s in states] == [False, True, True, True, True]
+
+
+def test_signal_during_final_upload_preserves_completion(
+    config_path, tmp_path, monkeypatch
+):
+    import signal
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import task as task_module
+
+    tracked = Mock()
+    tracked.log_artifact.side_effect = lambda *a, **kw: signal.raise_signal(
+        signal.SIGTERM
+    )
+    monkeypatch.setattr(task_module, "get_active_run", lambda: tracked)
+
+    def evaluate(self, request, directory):
+        directory.mkdir(parents=True)
+        return {e["id"]: {"valid": False} for e in self.experiments}
+
+    monkeypatch.setattr(MpmSysIdTask, "_evaluate", evaluate)
+    output = tmp_path / "complete"
+    TaskRunner().run(str(config_path), output=output)
+    assert read_json(output / "status.json")["state"] == "completed"
+    assert (output / ".completed").exists()
+
+
+def test_second_sigint_interrupts_proposal_with_consistent_checkpoint(
+    config_path, tmp_path, monkeypatch
+):
+    import signal
+
+    from anchor_bench.tasks.mpm_sys_id import optimizer
+
+    def blocked(*args, **kwargs):
+        signal.raise_signal(signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)
+        pytest.fail("Second SIGINT must interrupt the proposal")
+
+    monkeypatch.setattr(optimizer, "propose", blocked)
+    output = tmp_path / "interrupt"
+    with pytest.raises(KeyboardInterrupt):
+        TaskRunner().run(str(config_path), output=output)
+    assert read_json(output / "status.json")["state"] == "interrupted"
+    assert read_json(output / "checkpoint.json")["next_evaluation"] == 1
+    assert not list(output.rglob("*.tmp"))
+
+
+def test_completed_budget_resume_does_not_initialize_cuda(
+    config_path, tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id import worker
+
+    validate = Mock(side_effect=AssertionError("Coordinator must not initialize CUDA"))
+    monkeypatch.setattr(worker, "validate_device", validate)
+
+    def evaluate(self, request, directory):
+        directory.mkdir(parents=True)
+        return {e["id"]: {"valid": False} for e in self.experiments}
+
+    monkeypatch.setattr(MpmSysIdTask, "_evaluate", evaluate)
+    output = tmp_path / "complete"
+    TaskRunner().run(str(config_path), output=output)
+    (output / ".completed").unlink()
+    TaskRunner().run(str(config_path), output=output, resume=True)
+    validate.assert_not_called()
+    assert (output / ".completed").exists()
+
+
+def test_carried_sand_does_not_become_crater_rim():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from anchor_bench.tasks.mpm_sys_id.simulations.bottle_drop import (
+        Simulation,
+        bottle_mesh,
+    )
+
+    simulation = object.__new__(Simulation)
+    simulation.args = SimpleNamespace(
+        bed_depth=0.3, voxel_size=0.01, crater_threshold=0.01
+    )
+    simulation.bottle_vertices = bottle_mesh(0.04, 0.25, 0.015, 0.015)[0]
+    simulation.surface_extent = 0.2
+    simulation.surface_spacing = 0.01
+    simulation.reference = np.full((40, 40), 0.3)
+    simulation.phase = "settling crater"
+    simulation.sim_time = 3
+    simulation.removal_end = 1
+    simulation._min_cap_z = Mock(numpy=lambda: np.array([0.24]))
+    xy = np.arange(40) * 0.01 - 0.195
+    x, y = np.meshgrid(xy, xy, indexing="ij")
+    heights = np.full((40, 40), 0.3)
+    heights[15:25, 15:25] = 0.26
+    bed = np.column_stack((x.ravel(), y.ravel(), heights.ravel() - 0.005))
+    measurements = []
+    particle_q = Mock()
+    particle_qd = Mock()
+    simulation.state_0 = Mock(
+        particle_q=particle_q,
+        particle_qd=particle_qd,
+        body_q=Mock(numpy=lambda: np.array([[0, 0, 0.65, 0, 0, 0, 1]])),
+    )
+    for carried in (False, True):
+        positions = np.vstack((bed, [[0.005, 0.005, 0.895]])) if carried else bed
+        simulation.radii = np.full(len(positions), 0.005)
+        particle_q.numpy.return_value = positions
+        particle_qd.numpy.return_value = np.zeros_like(positions)
+        measurements.append(simulation.measure())
+    assert all(m["valid"] for m in measurements)
+    assert measurements[0]["depth_m"] == pytest.approx(0.04)
+    for field in ("width_m", "length_m", "depth_m", "bottle_clearance_m"):
+        assert measurements[1][field] == pytest.approx(measurements[0][field])
+
+    # A substantial raised rim outside the bottle still blocks clearance.
+    rim = np.column_stack(
+        (np.full(30, 0.15), np.linspace(-0.1, 0.1, 30), np.full(30, 0.70))
+    )
+    positions = np.vstack((bed, rim))
+    simulation.radii = np.full(len(positions), 0.005)
+    particle_q.numpy.return_value = positions
+    particle_qd.numpy.return_value = np.zeros_like(positions)
+    blocked = simulation.measure()
+    assert blocked["bottle_clearance_m"] < 0
+    assert blocked["valid"] is False

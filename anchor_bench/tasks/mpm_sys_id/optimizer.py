@@ -116,9 +116,10 @@ def propose(
     pool = pool[_minimum_squared_distances(pool, x) > 1e-12]
     if not len(pool):
         raise RuntimeError("No unevaluated candidates remain in the proposal pool")
-    losses = [trial["error"] for trial in valid]
+    # Transform first: finite raw losses can overflow when adding their range.
+    losses = np.log1p([trial["error"] for trial in valid])
     penalty = max(losses) + max(1.0, np.ptp(losses))
-    y = np.log1p([trial["error"] if trial["valid"] else penalty for trial in history])
+    y = [np.log1p(trial["error"]) if trial["valid"] else penalty for trial in history]
     forest = RandomForestRegressor(
         n_estimators=128,
         max_features=0.8,

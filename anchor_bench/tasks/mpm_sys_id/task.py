@@ -25,21 +25,34 @@ from anchor_bench.tasks.base_task import BaseTask
 from .artifacts import read_json, write_json
 from .dataset import load_experiments
 from .objective import score
-from .worker import validate_device
 
 logger = logging.getLogger(__name__)
 
 # Bump whenever simulation, measurement/scoring, or proposal/replay behavior
-# changes incompatibly. Revision 4 uses stable RMS scoring and rejects
-# nonfinite residuals, changing objective behavior from revision 3.
-IMPLEMENTATION_REVISION = 4
+# changes incompatibly. Revision 5 changes invalid-trial surrogate targets
+# and preserves candidate failures across later worker stages.
+IMPLEMENTATION_REVISION = 5
 
 
 def _newton_commit() -> str:
-    """Read the installed commit, never infer it from the lockfile or version."""
+    """Identify the installed Git commit or explicitly label weaker provenance."""
     raw = importlib.metadata.distribution("newton").read_text("direct_url.json")
     try:
         metadata = json.loads(raw or "null")
+        if metadata is None or (
+            isinstance(metadata, dict) and "vcs_info" not in metadata
+        ):
+            # Wheels and editable installs may have no Git provenance. Include
+            # their version and origin, but never claim this identifies source.
+            identity = json.dumps(
+                {"version": importlib.metadata.version("newton"), "origin": metadata},
+                sort_keys=True,
+            )
+            logger.warning(
+                "Newton has no installed Git commit; using unverified version/origin identity. "
+                "Local source changes cannot be detected on resume; use a new output directory after edits."
+            )
+            return "unverified:" + hashlib.sha256(identity.encode()).hexdigest()
         vcs = metadata["vcs_info"]
         commit = vcs["commit_id"]
         if (
@@ -59,6 +72,16 @@ def _newton_commit() -> str:
 
 class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
     _stop_requested = False
+    _interruptible = False
+
+    @contextmanager
+    def _interruptible_work(self):
+        """Allow a second Ctrl-C in long calls that do not write checkpoints."""
+        self._interruptible = True
+        try:
+            yield
+        finally:
+            self._interruptible = False
 
     def _check_stop_requested(self) -> None:
         """Raise only at safe boundaries, never from a signal handler."""
@@ -154,6 +177,7 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                     )
                 write_json(path, manifest)
             self.experiments = experiments
+            self._resume = resume
             yield
         finally:
             lock.release()
@@ -170,6 +194,25 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
         digest = hashlib.sha256(request_path.read_bytes()).hexdigest()
         self._check_stop_requested()
         failure_reason = None
+        if getattr(self, "_resume", False) and response_path.exists():
+            try:
+                cached = read_json(response_path)
+            except (OSError, ValueError) as exc:
+                raise AnchorBenchError(f"Invalid worker response: {exc}") from exc
+            if (
+                isinstance(cached, dict)
+                and cached.get("request_sha256") == digest
+                and isinstance(cached.get("failure"), dict)
+                and cached["failure"].get("category") in ("initialization", "protocol")
+            ):
+                # Preserve every failed response; worker.log is already append-only.
+                attempt = 1
+                category = cached["failure"]["category"]
+                archive = directory / f"{category}_failure_{attempt:08d}.json"
+                while archive.exists():
+                    attempt += 1
+                    archive = directory / f"{category}_failure_{attempt:08d}.json"
+                response_path.replace(archive)
         if not response_path.exists():
             state_path = directory / "worker_state.json"
             state_path.unlink(missing_ok=True)
@@ -208,27 +251,22 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                             process.kill()
                             process.wait()
                     raise
+                # An atomic response may precede a teardown crash. Validate it
+                # below exactly as on success; never overwrite completed work.
                 if failure_reason is not None and response_path.exists():
-                    try:
-                        response = read_json(response_path)
-                    except (OSError, ValueError) as exc:
-                        raise AnchorBenchError(
-                            f"Invalid worker response: {exc}"
-                        ) from exc
-                    if not isinstance(response, dict) or "failure" not in response:
-                        write_json(
-                            response_path,
-                            {
-                                "request_sha256": digest,
-                                "failure": {
-                                    "category": "protocol",
-                                    "message": failure_reason,
-                                },
-                            },
-                        )
+                    logger.warning(
+                        "Worker exited after writing a response: %s", failure_reason
+                    )
                 if failure_reason is not None and not response_path.exists():
                     state = read_json(state_path) if state_path.exists() else {}
-                    if state != {"request_sha256": digest, "stage": "candidate"}:
+                    if not (
+                        isinstance(state, dict)
+                        and state.get("request_sha256") == digest
+                        and (
+                            state.get("candidate_started") is True
+                            or state.get("stage") == "candidate"
+                        )
+                    ):
                         raise AnchorBenchError(
                             f"Worker initialization failed: {failure_reason}"
                         )
@@ -348,18 +386,18 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
         if threading.current_thread() is threading.main_thread():
 
             def interrupted(signum, frame):
+                if (
+                    signum == signal.SIGINT
+                    and self._stop_requested
+                    and self._interruptible
+                ):
+                    raise KeyboardInterrupt
                 self._stop_requested = True
 
             for signum in (signal.SIGTERM, signal.SIGINT):
                 previous_handlers[signum] = signal.signal(signum, interrupted)
         try:
             persist("running")
-            try:
-                validate_device(self.config.execution.device)
-            except Exception as exc:
-                raise AnchorBenchError(
-                    f"MPM device initialization failed: {exc}"
-                ) from exc
             while True:
                 self._check_stop_requested()
                 if stopping.mode == "bounded":
@@ -374,14 +412,15 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                         for h in history
                     ):
                         break
-                point, strategy = propose(
-                    history,
-                    bounds,
-                    seed=self.config.execution.seed,
-                    initial_samples=self.config.optimizer.initial_samples,
-                    pool_size=self.config.optimizer.pool_size,
-                    exploration=self.config.optimizer.exploration,
-                )
+                with self._interruptible_work():
+                    point, strategy = propose(
+                        history,
+                        bounds,
+                        seed=self.config.execution.seed,
+                        initial_samples=self.config.optimizer.initial_samples,
+                        pool_size=self.config.optimizer.pool_size,
+                        exploration=self.config.optimizer.exploration,
+                    )
                 material = {**decode(point, bounds), **self.config.material.fixed}
                 evaluation = len(history) + 1
                 directory = trials / f"{evaluation:08d}"
@@ -440,13 +479,14 @@ class MpmSysIdTask(BaseTask[MpmSysIdConfig]):
                             metrics[f"experiments/{name}/relative_rms"] = result[
                                 "error"
                             ]
-                    tracked.log_metrics(metrics, step=evaluation)
+                    with self._interruptible_work():
+                        tracked.log_metrics(metrics, step=evaluation)
             persist("completed")
             if tracked is not None:
-                tracked.log_artifact(
-                    output, collection="mpm-sysid-output", artifact_type="mpm-sysid"
-                )
-            self._check_stop_requested()
+                with self._interruptible_work():
+                    tracked.log_artifact(
+                        output, collection="mpm-sysid-output", artifact_type="mpm-sysid"
+                    )
             return output_directory
         except KeyboardInterrupt:
             persist("interrupted")

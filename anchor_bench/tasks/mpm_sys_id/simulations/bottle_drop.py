@@ -290,10 +290,12 @@ class Simulation:
         self.graphs = {}
         self.warmed_phases = set()
 
-    def _surface(self):
+    def _surface(self, positions=None, radii=None):
         return surface_grid(
-            require_array(self.state_0.particle_q).numpy(),
-            self.radii,
+            require_array(self.state_0.particle_q).numpy()
+            if positions is None
+            else positions,
+            self.radii if radii is None else radii,
             extent=self.surface_extent,
             cell_size=self.args.voxel_size,
         )
@@ -415,10 +417,29 @@ class Simulation:
         cross = 2 * np.cross(xyz, self.bottle_vertices)
         rotated = self.bottle_vertices + w * cross + np.cross(xyz, cross)
         lowest_z = float(np.min(rotated[:, 2]) + pose[2])
-        # Include raised rims and displaced sand, not just the nominal bed plane.
-        clearance = lowest_z - max(
-            self.args.bed_depth, float(np.max(positions[:, 2] + self.radii))
+        # Exclude grains carried near the bottle, and measure the bed footprint
+        # robustly. Keep the nominal bed plane as a floor so masking cannot make
+        # an embedded or rotated bottle appear clear.
+        relative = positions - pose[:3]
+        inverse_cross = 2 * np.cross(-xyz, relative)
+        local = relative + w * inverse_cross + np.cross(-xyz, inverse_cross)
+        margin = 2 * self.args.voxel_size + self.radii[:, None]
+        near_bottle = np.all(
+            (local >= self.bottle_vertices.min(axis=0) - margin)
+            & (local <= self.bottle_vertices.max(axis=0) + margin),
+            axis=1,
         )
+        bed = (
+            np.all(np.abs(positions[:, :2]) < self.surface_extent, axis=1)
+            & ~near_bottle
+        )
+        bed_height = self.args.bed_depth
+        if np.any(bed):
+            bed_height = max(
+                bed_height,
+                float(np.quantile((positions[:, 2] + self.radii)[bed], 0.995)),
+            )
+        clearance = lowest_z - bed_height
         result = {
             "bottle_clearance_m": clearance,
             "rms_speed_m_s": float(np.sqrt(np.mean(np.sum(velocities**2, axis=1)))),
@@ -427,7 +448,12 @@ class Simulation:
             "min_cap_z_m": float(self._min_cap_z.numpy()[0]),
         }
         if self.reference is not None:
-            current, _ = self._surface()
+            # A cleared bottle's carried grains must not become crater rims.
+            # Retain the bed below the bottle and the unfiltered initial reference.
+            carried = near_bottle & (positions[:, 2] + self.radii >= lowest_z)
+            if lowest_z <= self.args.bed_depth:
+                carried[:] = False
+            current, _ = self._surface(positions[~carried], self.radii[~carried])
             result.update(
                 measure_crater(
                     self.reference,
@@ -445,41 +471,45 @@ class Simulation:
             )
         return result
 
-    def test_final(self):
+    def validate_final_state(self, measurement=None):
         """Check finite two-way impact states, floor containment, and sand mass."""
         # Rebuild failures accumulate until reset; inspect once after all frames.
         self.solver.check_sparse_grid_rebuild_status()
-        assert np.isfinite(require_array(self.state_0.body_q).numpy()).all(), (
-            "Bottle pose is non-finite"
-        )
-        assert np.isfinite(require_array(self.state_0.body_qd).numpy()).all(), (
-            "Bottle velocity is non-finite"
-        )
-        assert np.isfinite(require_array(self.state_0.particle_q).numpy()).all(), (
-            "Sand position is non-finite"
-        )
-        assert np.isfinite(require_array(self.state_0.particle_qd).numpy()).all(), (
-            "Sand velocity is non-finite"
-        )
-        assert (
+        if not (np.isfinite(require_array(self.state_0.body_q).numpy()).all()):
+            raise ValueError("Bottle pose is non-finite")
+        if not (np.isfinite(require_array(self.state_0.body_qd).numpy()).all()):
+            raise ValueError("Bottle velocity is non-finite")
+        if not (np.isfinite(require_array(self.state_0.particle_q).numpy()).all()):
+            raise ValueError("Sand position is non-finite")
+        if not (np.isfinite(require_array(self.state_0.particle_qd).numpy()).all()):
+            raise ValueError("Sand velocity is non-finite")
+        if not (
             require_array(self.state_0.particle_q).numpy()[:, 2].min()
             > -self.args.voxel_size
-        ), "Sand penetrated the floor"
-        np.testing.assert_allclose(
-            require_array(self.model.body_mass).numpy()[0], self.mass, rtol=1e-6
-        )
-        np.testing.assert_allclose(
+        ):
+            raise ValueError("Sand penetrated the floor")
+        if not np.allclose(
+            require_array(self.model.body_mass).numpy()[0],
+            self.mass,
+            rtol=1e-06,
+            atol=0,
+        ):
+            raise ValueError("Mass or volume conservation failed")
+        if not np.allclose(
             require_array(self.model.particle_mass).numpy().sum(),
             self.initial_mass,
-            rtol=1e-6,
-        )
+            rtol=1e-06,
+            atol=0,
+        ):
+            raise ValueError("Mass or volume conservation failed")
         if self.sim_time > self.removal_end + 1:
-            measurement = self.measure()
-            assert measurement["min_cap_z_m"] < self.args.bed_depth, (
-                "Bottle never indented the sand"
-            )
-            assert measurement["min_cap_z_m"] > 0, "Bottle passed through the sand bed"
-            assert measurement["bottle_clearance_m"] > 0, (
-                "Bottle has not cleared the sand bed"
-            )
-            assert measurement["valid"], "Crater not ready for measurement"
+            if measurement is None:
+                measurement = self.measure()
+            if not (measurement["min_cap_z_m"] < self.args.bed_depth):
+                raise ValueError("Bottle never indented the sand")
+            if not (measurement["min_cap_z_m"] > 0):
+                raise ValueError("Bottle passed through the sand bed")
+            if not (measurement["bottle_clearance_m"] > 0):
+                raise ValueError("Bottle has not cleared the sand bed")
+            if not (measurement["valid"]):
+                raise ValueError("Crater not ready for measurement")

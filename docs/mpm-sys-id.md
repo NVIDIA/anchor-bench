@@ -196,8 +196,11 @@ outputs/sand-fit/
 
 `inputs.json` stores resolved settings, measured repeats, targets, content hashes,
 dependency versions, Newton’s installed Git commit, and an implementation
-compatibility revision. Newton must expose its commit through installed
-`direct_url.json` metadata; installs without a verifiable commit are rejected.
+compatibility revision. Git installs use the commit from installed
+`direct_url.json` metadata. Wheel and editable installs without Git provenance
+use an explicitly unverified version/origin identity and emit a warning. This
+weaker identity cannot detect local source edits; use a new output directory
+after changing Newton source. Malformed Git metadata is rejected.
 `result.json` stores the evaluation ID, optimizer point,
 full material, validity, combined error, per-experiment predictions/residuals,
 and elapsed seconds. A worker response is tied to its request by SHA-256.
@@ -207,7 +210,11 @@ and seed; seeded proposals are reconstructed from completed trial records.
 
 Completed trial results are written atomically and are authoritative. Resume
 rebuilds derived history and best-result files, reuses completed worker responses,
-and retries interrupted candidates. It refuses changed data, selected experiments,
+and retries interrupted candidates. Explicit resume also retries worker
+initialization and protocol failures, preserving each failed response as
+`<category>_failure_00000001.json` (with increasing attempt numbers) beside
+the append-only worker log. Invalid candidate observations remain cached.
+It refuses changed data, selected experiments,
 physics, parameter bounds, objective, stopping settings, dependency versions,
 Newton commit, or implementation compatibility revision. Maintainers must bump
 `IMPLEMENTATION_REVISION` in `task.py` when simulation, measurement/scoring, or
@@ -222,7 +229,12 @@ uv run anchor-bench mpm_sys_id --config examples/mpm_sys_id/sand.yaml \
 
 Ctrl-C and SIGTERM stop the worker, preserve progress, and leave the task
 incomplete. `.completed` is written only after a bounded search returns normally.
-Output and worker locks prevent concurrent evaluation of the same run. `--force`
+A second Ctrl-C interrupts long optimizer and tracking calls; signals during
+checkpoint writes remain deferred so those writes can finish. A single signal
+during the final upload does not undo an already completed search.
+Output and worker locks prevent concurrent evaluation of the same run. Use an
+output directory whose path and contents are writable only by trusted users;
+the supported filelock 3.x backend is not safe against hostile lock-file replacement. `--force`
 does not erase MPM checkpoints; choose a fresh output directory to start over.
 Data fingerprints are checked even when reusing an already completed run.
 
@@ -233,7 +245,11 @@ source of truth for resume. Continuous runs retain local artifacts throughout.
 
 ## Implementation and limitations
 
-The coordinator runs the optimizer; a fresh subprocess evaluates each candidate.
+The coordinator runs the optimizer without initializing CUDA; a fresh subprocess
+validates the device and evaluates each candidate. After candidate stepping has
+started, a crash or timeout remains an invalid trial even during later experiment
+setup or response serialization. A valid, request-matching response survives a
+worker teardown failure.
 Enabled experiments run sequentially in that worker to bound GPU memory use.
 They share the candidate material but have independent physical states. Numerical
 failures and timeouts produce invalid trials; a worker process failure stops the
@@ -254,9 +270,20 @@ assumptions and discretization settings. This command does not provide a viewer
 or import legacy Newton search histories.
 
 To add a simulation, add a typed schema to the experiment union and an
-implementation with `step`, `measure`, and `test_final`; register it in
+implementation with `step`, `measure`, and `validate_final_state`; register it in
 `simulations/registry.py` and declare its CSV observables in the data loader.
 Keep its validity criteria explicit and add measurement and GPU integration tests.
+
+
+Bottle clearance uses the nominal bed plane or, if higher, the 99.5th percentile
+of particle surfaces in the measurement footprint. Grains within the rotated
+bottle mesh bounds plus two voxels and their radius are excluded as possible
+carried sand. This heuristic reduces sensitivity to stray grains while retaining
+raised rims; it can underestimate small localized protrusions. The nominal bed
+check still rejects an embedded bottle regardless of this exclusion.
+Once the bottle clears the nominal bed, grains near it whose surfaces reach
+its lowest vertex are also excluded from the final crater raster. Bed samples
+below the bottle and the initial reference surface remain available.
 
 ## Validation
 
@@ -266,8 +293,17 @@ uv run pytest tests/test_mpm_sys_id.py
 uv run pytest -m integration tests/integration/mpm_sys_id
 ```
 
-CUDA graph regression tests compare physical states with the original test's
-1 mm absolute position tolerance for bottle contact (5% of its 2 cm test voxel).
-Atomic impulse reductions can produce small trajectory changes between runs;
-thresholded crater dimensions are not bitwise reproducible. Full-duration
-comparisons should be interpreted at the configured voxel resolution.
+CUDA integration tests run complete eager and captured scenarios through physical
+validation, including rejection of an insufficient bottle lift. They compare the
+final rigid pose with a 1 mm absolute tolerance and the uncoupled pour particles
+with a 10 micrometre tolerance.
+
+Bottle graph replay is checked separately in every phase, including after a
+one-substep lift. At each substep both execution modes start from the same saved
+particle, rigid, and material state with cleared solver warmstarts, then advance
+the shared reference state for the next comparison. The test compares positions,
+velocities, and contact forces after each of eight substeps; the position tolerance
+is 10 micrometres. This tests graph replay without conflating it with independent
+long contact trajectories: atomic impulse reductions introduce roundoff that can
+amplify around individual particles near the embedded bottle. Thresholded crater
+dimensions are likewise not bitwise reproducible.

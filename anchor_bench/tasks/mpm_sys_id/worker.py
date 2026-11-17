@@ -25,7 +25,7 @@ class WorkerFailure(RuntimeError):
 
 
 def validate_device(device: str) -> None:
-    """Resolve the requested CUDA device before proposing any candidates."""
+    """Resolve the requested CUDA device inside the isolated worker."""
     import warp as wp
 
     wp.init()
@@ -85,7 +85,7 @@ def evaluate(request: dict, progress=None) -> dict:
                 simulation.step()
             measurement = simulation.measure()
             _require_finite_measurements(measurement)
-            simulation.test_final()
+            simulation.validate_final_state(measurement)
             if experiment.simulation.type == "sand_pour":
                 measurement["valid"] = (
                     experiment.simulation.num_frames / experiment.simulation.fps
@@ -122,11 +122,18 @@ def main() -> None:
     args = parser.parse_args()
     digest = hashlib.sha256(args.request.read_bytes()).hexdigest()
     with FileLock(str(args.request.parent.parent.parent / ".worker.lock"), timeout=0):
+        candidate_started = False
 
         def progress(stage):
+            nonlocal candidate_started
+            candidate_started = candidate_started or stage == "candidate"
             write_json(
                 args.response.with_name("worker_state.json"),
-                {"request_sha256": digest, "stage": stage},
+                {
+                    "request_sha256": digest,
+                    "stage": stage,
+                    "candidate_started": candidate_started,
+                },
             )
 
         try:

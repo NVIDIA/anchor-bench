@@ -223,18 +223,25 @@ class Simulation:
             yaw_degrees=yaw_degrees,
         )
 
-    def test_final(self):
+    def validate_final_state(self, measurement=None):
         """Verify conservation and finite states without requiring a fixed drain time."""
         # Rebuild failures accumulate until reset; inspect once after all frames.
         self.solver.check_sparse_grid_rebuild_status()
         positions = require_array(self.state_0.particle_q).numpy()
         velocities = require_array(self.state_0.particle_qd).numpy()
-        assert np.isfinite(positions).all() and np.isfinite(velocities).all()
-        np.testing.assert_allclose(
-            require_array(self.model.particle_mass).numpy().sum(), self.mass, rtol=1e-5
-        )
+        if not (np.isfinite(positions).all() and np.isfinite(velocities).all()):
+            raise ValueError("Non-finite particle state")
+        if not np.allclose(
+            require_array(self.model.particle_mass).numpy().sum(),
+            self.mass,
+            rtol=1e-05,
+            atol=0,
+        ):
+            raise ValueError("Mass or volume conservation failed")
         represented_volume = np.sum(
             (2 * require_array(self.model.particle_radius).numpy()) ** 3
         )
-        np.testing.assert_allclose(represented_volume, self.volume, rtol=1e-5)
-        assert positions[:, 2].min() > -self.voxel_size
+        if not np.allclose(represented_volume, self.volume, rtol=1e-05, atol=0):
+            raise ValueError("Mass or volume conservation failed")
+        if not (positions[:, 2].min() > -self.voxel_size):
+            raise ValueError("Sand penetrated the floor")
