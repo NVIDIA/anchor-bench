@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
 from copy import deepcopy
 
 import pytest
@@ -197,9 +198,58 @@ def test_model_rejects_non_finite_numbers(valid_config_data):
 
 def test_solver_settings_default_to_empty(valid_config_data):
     valid_config_data["simulation"]["solver"] = {"type": "vbd"}
-    config = ActuatorSysIdConfig.model_validate(valid_config_data)
+    with pytest.warns(UserWarning, match="VBD native PD ignores"):
+        config = ActuatorSysIdConfig.model_validate(valid_config_data)
     assert config.simulation.solver.type == "vbd"
     assert config.simulation.solver.settings == {}
+
+
+@pytest.mark.parametrize(
+    ("solver", "implementation"),
+    [
+        ("warp_mujoco", "native"),
+        ("warp_mujoco", "external_implicit"),
+        ("vbd", "external_implicit"),
+    ],
+)
+def test_supported_controller_combinations_do_not_warn(
+    valid_config_data, solver, implementation
+):
+    valid_config_data["simulation"]["solver"] = {"type": solver}
+    valid_config_data["joint_parameters"][0]["controller"]["implementation"] = (
+        implementation
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ActuatorSysIdConfig.model_validate(valid_config_data)
+
+    assert caught == []
+
+
+def test_vbd_warns_for_each_native_controller_group(valid_config_data):
+    valid_config_data["simulation"]["solver"] = {"type": "vbd"}
+    template = valid_config_data["joint_parameters"][0]
+    valid_config_data["joint_parameters"] = []
+    for joint, implementation in [
+        ("hip", "native"),
+        ("knee", "external_implicit"),
+        ("ankle", "native"),
+    ]:
+        group = deepcopy(template)
+        group["names"] = [joint]
+        group["controller"]["implementation"] = implementation
+        valid_config_data["joint_parameters"].append(group)
+
+    with pytest.warns(UserWarning, match="VBD native PD ignores") as caught:
+        ActuatorSysIdConfig.model_validate(valid_config_data)
+
+    assert len(caught) == 2
+    for warning, joint in zip(caught, ["hip", "ankle"], strict=True):
+        message = str(warning.message)
+        assert f"joints {joint}" in message
+        assert "controller.clamps.effort_limit" in message
+        assert "controller.clamps.velocity_limit" in message
 
 
 @pytest.mark.parametrize(
