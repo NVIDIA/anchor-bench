@@ -369,7 +369,7 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path):
         summary_fields={
             "solver": {
                 "type": "warp_mujoco",
-                "settings": {"itertions": "NOT SET: not a SolverMuJoCo parameter"},
+                "settings": {"model": "NOT SET: set by the simulation context"},
             }
         },
     )
@@ -380,5 +380,5 @@ def test_writes_fitted_parameters_and_generation_history(tmp_path):
     assert "0,0.125,0.5" in result.optimization_log_path.read_text()
     assert result.run_summary_path.is_file()
     summary = yaml.safe_load(result.run_summary_path.read_text())
-    assert summary["solver"]["settings"]["itertions"].startswith("NOT SET: ")
+    assert summary["solver"]["settings"]["model"].startswith("NOT SET: ")
     assert result.identified_usd_path == identified_usd_path

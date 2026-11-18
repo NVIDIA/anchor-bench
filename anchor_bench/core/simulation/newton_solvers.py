@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any, ClassVar
 
 import newton
@@ -53,7 +54,7 @@ class NewtonSolverAdapter:
     def match_settings(
         self, settings: Mapping[str, JsonValue]
     ) -> tuple[dict[str, Any], dict[str, JsonValue]]:
-        """Split settings into constructor arguments and a provenance record."""
+        """Reject unknown keys and record any context-owned arguments as unset."""
         parameters = inspect.signature(self.solver_class).parameters
         accepted = {
             name
@@ -64,13 +65,16 @@ class NewtonSolverAdapter:
         recorded: dict[str, JsonValue] = {}
         for name, value in settings.items():
             if name in accepted:
-                kwargs[name] = value
-                recorded[name] = value
+                kwargs[name] = deepcopy(value)
+                recorded[name] = deepcopy(value)
                 continue
             if name in self.managed_arguments:
                 reason = "set by the simulation context"
             else:
-                reason = f"not a {self.solver_class.__name__} parameter"
+                raise ValueError(
+                    f"simulation.solver.settings.{name}: "
+                    f"not a {self.solver_class.__name__} parameter"
+                )
             warnings.warn(
                 f"simulation.solver.settings.{name}: {reason}; it was not set",
                 UserWarning,
@@ -82,6 +86,14 @@ class NewtonSolverAdapter:
 
 class MuJoCoAdapter(NewtonSolverAdapter):
     solver_class = newton.solvers.SolverMuJoCo
+
+    def create_solver(
+        self, model: newton.Model, settings: Mapping[str, JsonValue]
+    ) -> tuple[newton.solvers.SolverBase, dict[str, JsonValue]]:
+        """Preserve the established sysID physics unless explicitly overridden."""
+        return super().create_solver(
+            model, {"integrator": "implicitfast", "solver": "newton", **settings}
+        )
 
 
 class VBDAdapter(NewtonSolverAdapter):

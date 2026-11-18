@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 
 import newton
 import pytest
+from pydantic import JsonValue
 
 from anchor_bench.core.simulation import newton_solvers
 from anchor_bench.core.simulation.newton_solvers import (
@@ -54,18 +55,18 @@ def test_matching_settings_reach_the_constructor():
     assert recorded == {"iterations": 7, "integrator": "implicitfast"}
 
 
-def test_unknown_setting_warns_and_is_recorded_as_not_set():
-    with pytest.warns(UserWarning, match="simulation.solver.settings.itertions"):
-        solver, recorded = FakeAdapter().create_solver(
-            MODEL, {"itertions": 20, "iterations": 3}
-        )
+def test_unknown_setting_is_an_error():
+    with pytest.raises(ValueError, match="simulation.solver.settings.itertions"):
+        FakeAdapter().create_solver(MODEL, {"itertions": 20, "iterations": 3})
 
-    assert isinstance(solver, FakeSolver)
-    assert solver.iterations == 3
-    assert recorded == {
-        "itertions": "NOT SET: not a FakeSolver parameter",
-        "iterations": 3,
-    }
+
+def test_nested_settings_and_recorded_values_are_independent():
+    wind: list[JsonValue] = [1.0, 2.0, 3.0]
+    kwargs, recorded = MuJoCoAdapter().match_settings({"wind": wind})
+    wind[0] = 9.0
+    assert kwargs["wind"] == [1.0, 2.0, 3.0]
+    kwargs["wind"][1] = 8.0
+    assert recorded == {"wind": [1.0, 2.0, 3.0]}
 
 
 def test_managed_arguments_are_never_taken_from_settings():
@@ -107,6 +108,40 @@ def test_mujoco_is_the_registered_default_solver():
 def test_unknown_solver_type_lists_available_solvers():
     with pytest.raises(ValueError, match=r"'featherstone'.*warp_mujoco"):
         get_solver_adapter("featherstone")
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, {"integrator": "implicitfast", "solver": "newton"}),
+        ({"integrator": "euler"}, {"integrator": "euler", "solver": "newton"}),
+        ({"solver": "cg"}, {"integrator": "implicitfast", "solver": "cg"}),
+        ({"integrator": None}, {"integrator": None, "solver": "newton"}),
+        ({"solver": None}, {"integrator": "implicitfast", "solver": None}),
+        (
+            {"integrator": None, "solver": None},
+            {"integrator": None, "solver": None},
+        ),
+    ],
+)
+def test_mujoco_defaults_are_merged_below_explicit_settings(
+    monkeypatch, settings, expected
+):
+    class FakeMuJoCoSolver:
+        def __init__(self, model, *, integrator=None, solver=None):
+            self.model = model
+            self.options = {"integrator": integrator, "solver": solver}
+
+    monkeypatch.setattr(MuJoCoAdapter, "solver_class", FakeMuJoCoSolver)
+    original_settings = dict(settings)
+
+    solver, recorded = MuJoCoAdapter().create_solver(MODEL, settings)
+
+    assert isinstance(solver, FakeMuJoCoSolver)
+    assert solver.model == MODEL
+    assert solver.options == expected
+    assert recorded == expected
+    assert settings == original_settings
 
 
 def test_vbd_is_registered():
