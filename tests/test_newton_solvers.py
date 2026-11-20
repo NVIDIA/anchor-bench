@@ -109,6 +109,23 @@ def test_unknown_solver_type_lists_available_solvers():
         get_solver_adapter("featherstone")
 
 
+@pytest.mark.parametrize("use_mujoco_contacts", [False, None, 0])
+def test_external_mujoco_collision_mode_is_rejected(monkeypatch, use_mujoco_contacts):
+    def constructor(model, *, integrator=None, solver=None, use_mujoco_contacts=True):
+        return model
+
+    monkeypatch.setattr(MuJoCoAdapter, "solver_class", staticmethod(constructor))
+    with pytest.raises(
+        ValueError, match=r"simulation\.solver\.settings\.use_mujoco_contacts"
+    ):
+        MuJoCoAdapter().create_solver(
+            MODEL, {"use_mujoco_contacts": use_mujoco_contacts}
+        )
+
+    solver, _ = MuJoCoAdapter().create_solver(MODEL, {"use_mujoco_contacts": True})
+    assert solver is MODEL
+
+
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
