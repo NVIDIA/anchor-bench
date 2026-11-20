@@ -91,6 +91,11 @@ class MuJoCoAdapter(NewtonSolverAdapter):
         self, model: newton.Model, settings: Mapping[str, JsonValue]
     ) -> tuple[newton.solvers.SolverBase, dict[str, JsonValue]]:
         """Preserve the established sysID physics unless explicitly overridden."""
+        if not settings.get("use_mujoco_contacts", True):
+            raise ValueError(
+                "simulation.solver.settings.use_mujoco_contacts must be true: "
+                "the Newton simulation context does not populate external contacts"
+            )
         return super().create_solver(
             model, {"integrator": "implicitfast", "solver": "newton", **settings}
         )

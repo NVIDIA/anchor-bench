@@ -20,6 +20,8 @@ from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.tasks.actuator_sys_id.model import Candidate, Trajectory
 from anchor_bench.tasks.actuator_sys_id.parameter_space import create_parameter_space
 from anchor_bench.tasks.actuator_sys_id.simulation import NewtonPopulationEvaluator
+from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer
+from tests.integration.usd_trajectory import _NewtonTrajectoryRunner
 
 pytestmark = pytest.mark.integration
 
@@ -616,3 +618,56 @@ def Xform "Slider"''',
         assert isinstance(solver, newton.solvers.SolverMuJoCo)
         assert solver.mj_model.opt.integrator == 0  # Euler from USD
         assert solver.mj_model.opt.solver == 1  # CG from USD
+
+
+@pytest.mark.parametrize("explicit_null", [False, True], ids=["omitted", "null"])
+def test_exported_usd_replay_preserves_mujoco_solver_options(
+    scalar_asset: Path, explicit_null: bool
+) -> None:
+    # Bypassing adapter defaults changes exported replay physics; treating an
+    # explicit null as omitted instead discards the authored scene options.
+    scalar_asset.write_text(
+        scalar_asset.read_text().replace(
+            'def Xform "Slider"',
+            '''def PhysicsScene "scene" {
+    custom token mjc:option:integrator = "euler"
+    custom token mjc:option:solver = "cg"
+}
+def Xform "Slider"''',
+            1,
+        )
+    )
+    config = _config(scalar_asset, settings={"iterations": 10, "ls_iterations": 4})
+    if explicit_null:
+        config.simulation.solver.settings.update({"integrator": None, "solver": None})
+    candidate = _candidate()
+    identified = write_identified_usd_layer(
+        scalar_asset,
+        scalar_asset.parent / "identified.usda",
+        candidate,
+        {"slide": config.joint_parameters[0].controller.clamps},
+        config.model_dump_json(),
+    )
+    replay_config = config.model_copy(
+        update={
+            "simulation": config.simulation.model_copy(
+                update={"usd_path": str(identified)}
+            )
+        }
+    )
+    episode = _trajectory(0.6, 0.15)
+    with wp.ScopedDevice("cpu"):
+        evaluator = _evaluator(config)
+        scores = evaluator.evaluate([candidate, candidate], [episode]).copy()
+        runner = _NewtonTrajectoryRunner(replay_config)
+        positions = runner.simulate(episode)
+        score_start = runner.score_start_index
+        replay_mse = np.mean(
+            np.square(positions[score_start:] - episode.measured_position[score_start:])
+        )
+        replay_solver = runner._solver
+        assert isinstance(replay_solver, newton.solvers.SolverMuJoCo)
+
+    np.testing.assert_allclose(replay_mse, scores, rtol=1.0e-5, atol=1.0e-8)
+    assert replay_solver.mj_model.opt.integrator == (0 if explicit_null else 3)
+    assert replay_solver.mj_model.opt.solver == (1 if explicit_null else 2)

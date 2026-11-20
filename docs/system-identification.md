@@ -114,6 +114,10 @@ that sublayers it. To support another Newton solver, subclass
 override only the lifecycle steps that differ from the defaults, and add the
 class to `NEWTON_SOLVERS`.
 
+MuJoCo requires `use_mujoco_contacts: true` (the default). External collision
+mode is rejected because the simulation context does not populate its contacts
+before each physics substep.
+
 `controller.implementation` selects how candidate gains are applied:
 
 - `native` (default): the solver's joint position drive. Clamp support depends
