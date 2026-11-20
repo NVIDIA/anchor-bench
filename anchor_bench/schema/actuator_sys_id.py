@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import warnings
 from math import isclose
 from typing import Annotated, Dict, List, Literal, Optional, Union
 
@@ -180,4 +181,15 @@ class ActuatorSysIdConfig(BaseConfig):
                 "dataset resampling dt must match the simulation control timestep: "
                 f"{dataset_dt} != {control_dt}"
             )
+        if self.simulation.solver.type == "vbd":
+            for group in self.joint_parameters:
+                if group.controller.implementation == "native":
+                    warnings.warn(
+                        "VBD native PD ignores controller.clamps.effort_limit and "
+                        "controller.clamps.velocity_limit for joints "
+                        f"{', '.join(group.names)}; use external_implicit for effort "
+                        "clamping. Velocity limits are not applied.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
         return self
