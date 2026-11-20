@@ -26,9 +26,11 @@ simulation:
   render_freq: 25
   solver:
     type: warp_mujoco
-    integrator: implicitfast
-    solver_iterations: 5
-    line_search_iterations: 2
+    settings:
+      solver: newton
+      integrator: implicitfast
+      iterations: 5
+      ls_iterations: 2
 num_envs: 64
 buffer_time: 0.2
 seed: 42

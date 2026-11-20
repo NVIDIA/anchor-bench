@@ -12,6 +12,7 @@ from typing import Any, Dict, Union
 import newton
 import numpy as np
 
+from anchor_bench.core.simulation.newton_solvers import get_solver_adapter
 from anchor_bench.core.simulation.newton_stepper import NewtonStepExecutor
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
 from anchor_bench.schema.dataset import HuggingFaceDatasetSource
@@ -107,12 +108,8 @@ class _NewtonTrajectoryRunner:
         self._collision_pipeline = newton.CollisionPipeline(
             self._model, broad_phase="explicit"
         )
-        self._solver = newton.solvers.SolverMuJoCo(
-            self._model,
-            solver="newton",
-            iterations=config.simulation.solver.solver_iterations,
-            ls_iterations=config.simulation.solver.line_search_iterations,
-            integrator=config.simulation.solver.integrator,
+        self._solver, _ = get_solver_adapter("warp_mujoco").create_solver(
+            self._model, config.simulation.solver.settings
         )
         self._newton = newton
         self._contacts = self._collision_pipeline.contacts()

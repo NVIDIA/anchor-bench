@@ -67,8 +67,12 @@ def _config(tmp_path, *, dataset_dt=0.005):
                 "render_freq": 60,
                 "solver": {
                     "type": "warp_mujoco",
-                    "solver_iterations": 10,
-                    "line_search_iterations": 4,
+                    "settings": {
+                        "solver": "newton",
+                        "integrator": "implicitfast",
+                        "iterations": 10,
+                        "ls_iterations": 4,
+                    },
                 },
             },
             "num_envs": 2,
@@ -170,7 +174,8 @@ def test_newton_evaluator_uses_shared_simulation_context(
     class FakeContext:
         def __init__(self):
             self.created_world_count = None
-            self.solver_options = None
+            self.solver_type = "warp_mujoco"
+            self.solver_settings = {}
             self.captured_step = None
             self.template = SimpleNamespace(
                 joint_target_mode=[0],
@@ -202,11 +207,13 @@ def test_newton_evaluator_uses_shared_simulation_context(
             world_count,
             configure_builder,
             configuration_key,
-            solver_options,
+            solver_type,
+            solver_settings,
         ):
             self.created_world_count = world_count
             self.configuration_key = configuration_key
-            self.solver_options = solver_options
+            self.solver_type = solver_type
+            self.solver_settings = solver_settings
             configure_builder(self.template)
 
         def capture_step_graph(self, *, dt, substeps):
@@ -241,11 +248,15 @@ def test_newton_evaluator_uses_shared_simulation_context(
     assert context.created_world_count == config.num_envs
     assert context.template.joint_target_ke == [15.0]
     assert context.captured_step == (pytest.approx(0.005), 5)
-    assert context.solver_options == {
+    assert context.solver_type == "warp_mujoco"
+    assert context.solver_settings == {
         "solver": "newton",
         "integrator": "implicitfast",
         "iterations": 10,
         "ls_iterations": 4,
+    }
+    assert evaluator.run_summary() == {
+        "solver": {"type": "warp_mujoco", "settings": context.solver_settings}
     }
     assert (
         "Initialized device score accumulation device=cpu worlds=2 joints=1"

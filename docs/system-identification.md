@@ -66,8 +66,11 @@ simulation:
   render_freq: 60
   solver:
     type: warp_mujoco
-    solver_iterations: 10
-    line_search_iterations: 4
+    settings:
+      solver: newton
+      integrator: implicitfast
+      iterations: 10
+      ls_iterations: 4
 
 dataset:
   type: parquet
@@ -93,6 +96,28 @@ population contains at least two environments; `num_envs` defaults to 64.
 objective while still replaying its commands, allowing the simulated state to
 settle without advancing it ahead of the measurements.
 
+`simulation.solver.type` selects the Newton solver (`warp_mujoco`).
+`simulation.solver.settings` is passed to that solver's constructor. For
+`warp_mujoco`, omitted `integrator` and `solver` settings use `implicitfast`
+and `newton`, preserving the previous sysID behavior even when the USD authors
+different options. Explicit settings override these defaults; YAML `null`
+delegates that option to Newton, which uses the USD/model value when available.
+Other omitted settings use Newton's defaults and USD/model values. Unknown
+constructor parameters are errors, so typos or options missing from the installed
+Newton version stop the run before fitting. Arguments supplied by the simulation
+context, such as `model`, are skipped with a warning and recorded in
+`run_summary.yaml` as `"NOT SET: <reason>"`. Solver-specific joint, body, and
+shape attributes are read from the USD (for example
+`newton:mujoco:solreflimit`); author them in the asset or in an override layer
+that sublayers it. To support another Newton solver, subclass
+`NewtonSolverAdapter` (in `anchor_bench/core/simulation/newton_solvers.py`),
+override only the lifecycle steps that differ from the defaults, and add the
+class to `NEWTON_SOLVERS`.
+
+MuJoCo requires `use_mujoco_contacts: true` (the default). External collision
+mode is rejected because the simulation context does not populate its contacts
+before each physics substep.
+
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 
 ## Run a custom task
@@ -117,7 +142,9 @@ and asks it for an evaluator. To support another simulator:
    return a `PopulationEvaluator` that scores candidates in that simulator.
 2. Optionally override `PopulationEvaluator.export_model()` to write the fitted
    model; the default writes nothing.
-3. Add the context class to `SIMULATION_CONTEXTS` and its configuration to the
+3. Optionally override `PopulationEvaluator.run_summary()` to add fields to
+   `run_summary.yaml`; the default adds nothing.
+4. Add the context class to `SIMULATION_CONTEXTS` and its configuration to the
    `simulation` field of `ActuatorSysIdConfig`.
 
 ## Artifacts
@@ -130,6 +157,7 @@ run writes:
 | `best_params.yaml` | Best candidate, position MSE, and result schema metadata. |
 | `optimization_log.csv` | Best and population-mean MSE for each generation. |
 | `run_summary.yaml` | Timestamp, best MSE, metric name, and generation count. |
+| `run_summary.yaml` `solver` | Solver type and the settings applied. |
 | `identified.usda` | USD layer containing the fitted actuator opinions (Newton). |
 
 When MLOps tracking is enabled, the task also reports per-generation metrics

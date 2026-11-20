@@ -13,6 +13,7 @@ from typing import ClassVar, Dict, List, Sequence, Tuple
 import newton
 import numpy as np
 import warp as wp
+from pydantic import JsonValue
 
 from anchor_bench.core.simulation.newton import NewtonSimulationContext
 from anchor_bench.schema.actuator_sys_id import ActuatorSysIdConfig
@@ -109,17 +110,13 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
             template_indices = _builder_joint_indices(template, self.joint_names)
             self._configure_template(template, template_indices, initial)
 
-        solver_config = self.config.simulation.solver
+        solver = self.config.simulation.solver
         context.initialize(
             world_count=self.num_envs,
             configure_builder=configure_template,
             configuration_key=self._builder_configuration_key(initial),
-            solver_options={
-                "solver": "newton",
-                "integrator": solver_config.integrator,
-                "iterations": solver_config.solver_iterations,
-                "ls_iterations": solver_config.line_search_iterations,
-            },
+            solver_type=solver.type,
+            solver_settings=solver.settings,
         )
         model = context.model
         (
@@ -244,6 +241,15 @@ class NewtonPopulationEvaluator(PopulationEvaluator):
         if not np.isfinite(scores).all():
             raise RuntimeError("Newton produced non-finite position error")
         return scores
+
+    def run_summary(self) -> Dict[str, JsonValue]:
+        context = self._simulation_context
+        return {
+            "solver": {
+                "type": context.solver_type,
+                "settings": dict(context.solver_settings),
+            }
+        }
 
     def export_model(self, best: Candidate, output_dir: Path) -> Path:
         from anchor_bench.tasks.actuator_sys_id.usd import write_identified_usd_layer

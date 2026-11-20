@@ -8,9 +8,10 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 import yaml
+from pydantic import JsonValue
 
 from anchor_bench.tasks.actuator_sys_id.model import (
     Candidate,
@@ -26,6 +27,7 @@ def write_artifacts(
     best_mse: float,
     history: Sequence[GenerationRecord],
     identified_usd_path: Optional[Path] = None,
+    summary_fields: Optional[Mapping[str, JsonValue]] = None,
 ) -> SysIdResult:
     """Write the fitted parameters, log, and resolved run summary."""
 
@@ -63,6 +65,7 @@ def write_artifacts(
         "best_mse": best_mse,
         "generations": len(history),
     }
+    summary.update(summary_fields or {})
     run_summary_path.write_text(
         yaml.safe_dump(summary, sort_keys=False),
         encoding="utf-8",
