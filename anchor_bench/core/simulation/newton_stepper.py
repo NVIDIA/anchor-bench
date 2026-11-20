@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from math import isfinite
 
 import newton
 import warp as wp
 
 logger = logging.getLogger(__name__)
+
+BeforeSubstep = Callable[[newton.State, "newton.Control | None", float], None]
 
 
 class NewtonStepExecutor:
@@ -42,6 +45,7 @@ class NewtonStepExecutor:
         self._clear_forces = clear_forces
         self._graph: wp.Graph | None = None
         self._graph_key: tuple[float, int] | None = None
+        self._before_substep: BeforeSubstep | None = None
 
     @property
     def state(self) -> newton.State:
@@ -54,6 +58,16 @@ class NewtonStepExecutor:
         """Return the buffer for the next state."""
 
         return self._state_next
+
+    def set_before_substep(self, callback: BeforeSubstep | None) -> None:
+        """Run ``callback(state, control, dt)`` before every solver substep.
+
+        Any captured graph is dropped so the next capture includes the callback.
+        """
+
+        self._before_substep = callback
+        self._graph = None
+        self._graph_key = None
 
     def capture_graph(self, *, dt: float, substeps: int = 1) -> None:
         """Capture one reusable interval graph when supported."""
@@ -133,6 +147,8 @@ class NewtonStepExecutor:
     ) -> None:
         if self._clear_forces:
             state.clear_forces()
+        if self._before_substep is not None:
+            self._before_substep(state, self._control, dt)
         self._solver.step(
             state_in=state,
             state_out=state_next,

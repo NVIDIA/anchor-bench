@@ -118,6 +118,25 @@ MuJoCo requires `use_mujoco_contacts: true` (the default). External collision
 mode is rejected because the simulation context does not populate its contacts
 before each physics substep.
 
+`controller.implementation` selects how candidate gains are applied:
+
+- `native` (default): the solver's joint position drive. Clamp support depends
+  on the selected solver.
+- `external_implicit`: Newton's implicit external PD actuator. The PD law is
+  solved against the coupled joint-space response with the gravity and
+  Coriolis bias at the current state, and effort is clamped to
+  `clamps.effort_limit`. `clamps.velocity_limit` is not applied. Fitted gains
+  are exported to the same USD drive attributes; consumers that use a native
+  drive may behave slightly differently.
+
+The external actuator predicts motion using inertia and armature with
+gravity/Coriolis bias feedback. Joint damping, dry friction, and joint limits
+remain active in the physics solver, but their effects are not included in
+that prediction. The implicit effort calculation is therefore approximate
+when those effects are significant. On the pinned MuJoCo implementation,
+`mujoco_warp.solve_m` also inverts the bare mass matrix; using it as the response
+would not remove this approximation.
+
 See [Dataset loading](datasets.md) for the Parquet contract and alias behavior.
 
 ## Run a custom task
